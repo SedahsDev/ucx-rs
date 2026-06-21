@@ -6,6 +6,7 @@
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Request;
 use crate::RequestParam;
 
 /// Re-export the remote key handle type for external callers.
@@ -40,6 +41,276 @@ impl Drop for RemoteKey {
         if !self.handle.is_null() {
             unsafe { ucp_rkey_destroy(self.handle) };
         }
+    }
+}
+
+/// Safe RMA and AMO methods on endpoints.
+///
+/// All methods take `&self` and safe types (`&[u8]`, `&mut [u8]`, `u64`, `&RemoteKey`),
+/// hiding the `unsafe` FFI calls internally. Follows the same pattern as `Ep::tag_send`.
+impl Ep {
+    // ── Put / Get ──
+
+    /// Put data to a remote memory location.
+    pub fn rma_put(
+        &self,
+        buffer: &[u8],
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_put_nbx(
+                self.handle,
+                buffer.as_ptr() as _,
+                buffer.len(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Get data from a remote memory location.
+    pub fn rma_get(
+        &self,
+        buffer: &mut [u8],
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_get_nbx(
+                self.handle,
+                buffer.as_ptr() as _,
+                buffer.len(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    // ── AMO — no-fetch variants ──
+
+    /// Atomic add 64-bit on remote memory (no fetch of old value).
+    pub fn amo_add64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic XOR 64-bit on remote memory (no fetch of old value).
+    pub fn amo_xor64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic swap 64-bit on remote memory (no fetch of old value).
+    pub fn amo_swap64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic AND 64-bit on remote memory (no fetch of old value).
+    pub fn amo_and64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_AND,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic OR 64-bit on remote memory (no fetch of old value).
+    pub fn amo_or64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_OR,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic compare-and-swap 64-bit (no fetch — use fetch variant if you need the old value).
+    pub fn amo_cswap64(
+        &self,
+        expected: u64,
+        replacement: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        let operand = [expected, replacement];
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+                operand.as_ptr() as *const _,
+                std::mem::size_of::<[u64; 2]>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    // ── AMO — fetch variants (reply written via RequestParamBuilder::reply_buffer) ──
+
+    /// Atomic fetch-and-add 64-bit.
+    /// Caller MUST set `reply_buffer` on the `RequestParam` via `RequestParamBuilder::reply_buffer(reply as *mut _ as *mut _, std::mem::size_of::<u64>())`.
+    pub fn amo_fadd64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic fetch-and-xor 64-bit.
+    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    pub fn amo_fxor64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic fetch-and-swap 64-bit.
+    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    pub fn amo_fswap64(
+        &self,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u64>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic fetch compare-and-swap 64-bit.
+    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    pub fn amo_fcswap64(
+        &self,
+        expected: u64,
+        replacement: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        let operand = [expected, replacement];
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+                operand.as_ptr() as *const _,
+                std::mem::size_of::<[u64; 2]>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
     }
 }
 
