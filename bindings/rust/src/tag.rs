@@ -8,6 +8,7 @@ use crate::RequestParam;
 use bitflags::bitflags;
 
 impl Ep {
+    /// Send tagged message.
     pub fn tag_send(
         &self,
         data: &[u8],
@@ -23,6 +24,16 @@ impl Ep {
                 &param.handle,
             )
         })
+    }
+
+    /// Tag send with synchronous completion (safe wrapper).
+    ///
+    /// Guarantees remote delivery before the request completes.
+    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Request {
+        unsafe {
+            let ptr = ucp_tag_send_sync_nbx(self.handle, data.as_ptr() as _, data.len(), tag, std::ptr::null());
+            Request::from_raw(ptr)
+        }
     }
 }
 
@@ -134,6 +145,7 @@ impl Request {
 ///
 /// # Safety
 /// Caller must ensure `buffer` is valid for `count` bytes.
+#[deprecated(since = "0.1.0", note = "Use Ep::tag_send_sync() instead")]
 pub unsafe fn tag_send_sync_nbx(
     ep: ucp_ep_h,
     buffer: *const std::os::raw::c_void,

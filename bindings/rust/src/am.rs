@@ -123,6 +123,7 @@ pub struct HandlerParams {
 ///
 /// # Safety
 /// Caller must ensure `data_desc` is a valid data descriptor from the AM handler.
+#[deprecated(since = "0.1.0", note = "Use a safe wrapper around AM receive data instead")]
 pub unsafe fn am_recv_data_nbx(
     worker: ucp_worker_h,
     data_desc: *mut std::os::raw::c_void,
@@ -137,6 +138,7 @@ pub unsafe fn am_recv_data_nbx(
 ///
 /// # Safety
 /// Caller must ensure `data` was obtained from an AM receive handler.
+#[deprecated(since = "0.1.0", note = "Use Worker::am_data_release() instead")]
 pub unsafe fn am_data_release(
     worker: ucp_worker_h,
     data: *mut std::os::raw::c_void,

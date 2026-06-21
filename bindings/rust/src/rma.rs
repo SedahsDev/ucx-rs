@@ -221,6 +221,136 @@ impl Ep {
         })
     }
 
+    // ── AMO — 32-bit no-fetch variants ──
+
+    /// Atomic add 32-bit on remote memory (no fetch of old value).
+    pub fn amo_add32(
+        &self,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u32>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic XOR 32-bit on remote memory (no fetch of old value).
+    pub fn amo_xor32(
+        &self,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u32>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic swap 32-bit on remote memory (no fetch of old value).
+    pub fn amo_swap32(
+        &self,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u32>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic AND 32-bit on remote memory (no fetch of old value).
+    pub fn amo_and32(
+        &self,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_AND,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u32>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic OR 32-bit on remote memory (no fetch of old value).
+    pub fn amo_or32(
+        &self,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_OR,
+                &operand as *const _ as *const _,
+                std::mem::size_of::<u32>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Atomic compare-and-swap 32-bit (no fetch — use fetch variant if you need the old value).
+    pub fn amo_cswap32(
+        &self,
+        expected: u32,
+        replacement: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        let operand = [expected, replacement];
+        status_ptr_to_result(unsafe {
+            ucp_atomic_op_nbx(
+                self.handle,
+                ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+                operand.as_ptr() as *const _,
+                std::mem::size_of::<[u32; 2]>(),
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
     // ── AMO — fetch variants (reply written via RequestParamBuilder::reply_buffer) ──
 
     /// Atomic fetch-and-add 64-bit.
@@ -314,6 +444,7 @@ impl Ep {
     }
 }
 
+#[deprecated = "Use Ep::rma_put() instead"]
 /// Put data to a remote memory location.
 ///
 /// # Safety
@@ -336,6 +467,7 @@ pub unsafe fn put_nbx(
     ))
 }
 
+#[deprecated = "Use Ep::rma_get() instead"]
 /// Get data from a remote memory location.
 ///
 /// # Safety
@@ -358,6 +490,7 @@ pub unsafe fn get_nbx(
     ))
 }
 
+#[deprecated = "Use Ep::amo_add64/amo_xor64/amo_swap64/amo_and64/amo_or64/amo_cswap64 instead"]
 /// Atomic operation on remote memory.
 ///
 /// # Safety
@@ -382,6 +515,7 @@ pub unsafe fn atomic_op_nbx(
     ))
 }
 
+#[deprecated = "Use Ep::amo_fadd64/amo_fxor64/amo_fswap64/amo_fcswap64 instead"]
 /// Atomic fetch-and-operate on remote memory.
 ///
 /// Performs an atomic operation and stores the OLD value in `reply_buffer`.
@@ -424,6 +558,7 @@ pub unsafe fn atomic_fetch_nbx(
     ))
 }
 
+#[deprecated = "Use RemoteKey::unpack() instead"]
 /// Unpack a remote key from a packed buffer.
 ///
 /// Returns the unpacked rkey handle.
@@ -438,6 +573,7 @@ pub unsafe fn ep_rkey_unpack(
     status_to_result(ucp_ep_rkey_unpack(ep, rkey_buffer, &mut rkey)).map(|()| rkey)
 }
 
+#[deprecated = "No safe replacement — use with caution"]
 /// Get a local pointer to a remote memory region.
 ///
 /// Returns a local pointer that can be used to access remote memory directly.
@@ -452,6 +588,7 @@ pub unsafe fn rkey_ptr(
     status_to_result(ucp_rkey_ptr(rkey, raddr, &mut addr)).map(|()| addr)
 }
 
+#[deprecated = "Use RemoteKey RAII wrapper instead (auto-destroy on drop)"]
 /// Destroy a remote key.
 ///
 /// # Safety
@@ -464,6 +601,7 @@ pub unsafe fn rkey_destroy(rkey: ucp_rkey_h) {
 // Typed convenience wrappers for atomic operations (GUPS-style)
 // ---------------------------------------------------------------------------
 
+#[deprecated = "Use Ep safe AMO methods instead (e.g., amo_fadd64 with reply_buffer on RequestParam)"]
 /// Atomic fetch-and-add 32-bit.
 ///
 /// # Safety
@@ -488,6 +626,7 @@ pub unsafe fn atomic_fadd32(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic fetch-and-add 64-bit.
 ///
 /// # Safety
@@ -512,6 +651,7 @@ pub unsafe fn atomic_fadd64(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic fetch-and-swap 32-bit.
 ///
 /// # Safety
@@ -536,6 +676,7 @@ pub unsafe fn atomic_fswap32(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic fetch-and-swap 64-bit.
 ///
 /// # Safety
@@ -560,6 +701,7 @@ pub unsafe fn atomic_fswap64(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic compare-and-swap 32-bit.
 ///
 /// Operand layout: `[expected, replacement]` as two consecutive u32 values.
@@ -587,6 +729,7 @@ pub unsafe fn atomic_fcswap32(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic compare-and-swap 64-bit.
 ///
 /// Operand layout: `[expected, replacement]` as two consecutive u64 values.
@@ -614,6 +757,7 @@ pub unsafe fn atomic_fcswap64(
     )
 }
 
+#[deprecated = "Use Ep::amo_add32 instead"]
 /// Atomic add 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -636,6 +780,7 @@ pub unsafe fn atomic_add32(
     )
 }
 
+#[deprecated = "Use Ep::amo_add64 instead"]
 /// Atomic add 64-bit (no fetch of old value).
 ///
 /// # Safety
@@ -658,6 +803,7 @@ pub unsafe fn atomic_add64(
     )
 }
 
+#[deprecated = "Use Ep::amo_swap32 instead"]
 /// Atomic swap 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -680,6 +826,7 @@ pub unsafe fn atomic_swap32(
     )
 }
 
+#[deprecated = "Use Ep::amo_swap64 instead"]
 /// Atomic swap 64-bit (no fetch of old value).
 ///
 /// # Safety
@@ -702,6 +849,7 @@ pub unsafe fn atomic_swap64(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic fetch-and-xor 32-bit.
 ///
 /// # Safety
@@ -726,6 +874,7 @@ pub unsafe fn atomic_fxor32(
     )
 }
 
+#[deprecated = "Use Ep safe AMO methods instead"]
 /// Atomic fetch-and-xor 64-bit.
 ///
 /// # Safety
@@ -750,6 +899,7 @@ pub unsafe fn atomic_fxor64(
     )
 }
 
+#[deprecated = "Use Ep::amo_xor32 instead"]
 /// Atomic xor 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -772,6 +922,7 @@ pub unsafe fn atomic_xor32(
     )
 }
 
+#[deprecated = "Use Ep::amo_xor64 instead"]
 /// Atomic xor 64-bit (no fetch of old value).
 ///
 /// # Safety
