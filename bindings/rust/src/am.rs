@@ -118,3 +118,28 @@ impl HandlerParamsBuilder {
 pub struct HandlerParams {
     pub(crate) handle: ucp_am_handler_param_t,
 }
+
+/// Receive active message data.
+///
+/// # Safety
+/// Caller must ensure `data_desc` is a valid data descriptor from the AM handler.
+pub unsafe fn am_recv_data_nbx(
+    worker: ucp_worker_h,
+    data_desc: *mut std::os::raw::c_void,
+    buffer: *mut std::os::raw::c_void,
+    count: usize,
+) -> crate::Request {
+    let ptr = ucp_am_recv_data_nbx(worker, data_desc, buffer, count, std::ptr::null());
+    crate::Request::from_raw(ptr)
+}
+
+/// Release active message data.
+///
+/// # Safety
+/// Caller must ensure `data` was obtained from an AM receive handler.
+pub unsafe fn am_data_release(
+    worker: ucp_worker_h,
+    data: *mut std::os::raw::c_void,
+) {
+    ucp_am_data_release(worker, data);
+}

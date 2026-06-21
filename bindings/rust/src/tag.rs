@@ -130,6 +130,35 @@ impl Request {
     }
 }
 
+/// Tag send with synchronous completion.
+///
+/// # Safety
+/// Caller must ensure `buffer` is valid for `count` bytes.
+pub unsafe fn tag_send_sync_nbx(
+    ep: ucp_ep_h,
+    buffer: *const std::os::raw::c_void,
+    count: usize,
+    tag: ucp_tag_t,
+) -> crate::Request {
+    let ptr = ucp_tag_send_sync_nbx(ep, buffer, count, tag, std::ptr::null());
+    crate::Request::from_raw(ptr)
+}
+
+/// Legacy tag message receive (non-nbx variant).
+///
+/// # Safety
+/// Caller must ensure `buffer` has space for `count` elements of `datatype`.
+pub unsafe fn tag_msg_recv_nb(
+    worker: ucp_worker_h,
+    buffer: *mut std::os::raw::c_void,
+    count: usize,
+    datatype: ucp_datatype_t,
+    message: ucp_tag_message_h,
+) -> crate::Request {
+    let ptr = ucp_tag_msg_recv_nb(worker, buffer, count, datatype, message, None);
+    crate::Request::from_raw(ptr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

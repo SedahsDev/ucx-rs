@@ -4,10 +4,16 @@ mod ffi;
 use crate::ffi::*;
 
 pub mod am;
+pub mod config;
 pub mod context;
+pub mod dt;
 pub mod ep;
+pub mod listener;
 pub mod memh;
+pub mod rma;
+pub mod stream;
 pub mod tag;
+pub mod version;
 pub mod worker;
 
 use std::ffi::CString;
@@ -32,6 +38,17 @@ impl Request {
         match request {
             None => None,
             Some(x) => Some(Request { handle: x }),
+        }
+    }
+
+    /// Create a Request from a raw pointer, assuming the pointer is valid and non-null.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is a valid, non-null request pointer obtained from a UCX API.
+    #[inline]
+    pub unsafe fn from_raw(ptr: *mut std::os::raw::c_void) -> Request {
+        Request {
+            handle: NonNull::new_unchecked(ptr),
         }
     }
 
@@ -118,6 +135,38 @@ impl RequestParamBuilder {
     }
 
     #[inline]
+    pub fn reply_buffer(&mut self, buf: *mut std::os::raw::c_void) -> &mut Self {
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.reply_buffer = buf;
+        self
+    }
+
+    #[inline]
+    pub fn datatype(&mut self, dt: ucp_datatype_t) -> &mut Self {
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.datatype = dt;
+        self
+    }
+
+    #[inline]
+    pub fn send_callback(&mut self, cb: ucp_send_nbx_callback_t) -> &mut Self {
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.cb.send = cb;
+        self
+    }
+
+    #[inline]
+    pub fn memory_type(&mut self, mt: ucs_memory_type_t) -> &mut Self {
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.memory_type = mt;
+        self
+    }
+
+    #[inline]
     pub fn build(&mut self) -> RequestParam {
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.op_attr_mask = self.field_mask;
@@ -128,6 +177,44 @@ impl RequestParamBuilder {
 
         ucp_param
     }
+}
+
+/// Allocate a request object from the worker.
+///
+/// # Safety
+/// The returned request must be freed with `Request::from_raw().free()` or similar.
+pub unsafe fn request_alloc(worker: ucp_worker_h) -> Request {
+    let ptr = ucp_request_alloc(worker);
+    Request::from_raw(ptr)
+}
+
+/// Field masks for ucp_request_attr_t.
+/// - UCP_REQUEST_ATTR_FIELD_INFO_STRING = 1
+/// - UCP_REQUEST_ATTR_FIELD_INFO_STRING_SIZE = 2
+/// - UCP_REQUEST_ATTR_FIELD_STATUS = 4
+/// - UCP_REQUEST_ATTR_FIELD_MEM_TYPE = 8
+
+/// Query request attributes.
+///
+/// # Safety
+/// Caller must ensure `request` is a valid request pointer.
+pub unsafe fn request_query(
+    request: *mut std::os::raw::c_void,
+    mask: u64,
+) -> Result<RequestAttr, ucs_status_t> {
+    let mut attr: ucp_request_attr_t = std::mem::zeroed();
+    attr.field_mask = mask;
+    status_to_result(ucp_request_query(request, &mut attr)).map(|()| {
+        RequestAttr {
+            status: if mask & 4 != 0 { attr.status } else { ucs_status_t::UCS_OK },
+        }
+    })
+}
+
+/// Request attribute result.
+#[derive(Debug, Clone)]
+pub struct RequestAttr {
+    pub status: ucs_status_t,
 }
 
 #[cfg(test)]

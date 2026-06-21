@@ -2,12 +2,12 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    // Tell cargo to look for shared libraries in the specified directory
-    println!("cargo:rustc-link-search=../../src/ucp/.libs/");
-
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
+    // Link against system-installed UCX libraries (libucx-dev 1.18.1)
+    // Order matters: ucp depends on uct, ucm, ucs
     println!("cargo:rustc-link-lib=ucp");
+    println!("cargo:rustc-link-lib=uct");
+    println!("cargo:rustc-link-lib=ucm");
+    println!("cargo:rustc-link-lib=ucs");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -20,9 +20,9 @@ fn main() {
         // badness without the flag which tells bindgen to repeat that
         // trick with the rust enums
         .rustified_enum(".*")
-        .clang_arg("-I../../src/ucp/api/")
-        .clang_arg("-I../../")
-        .clang_arg("-I../../src/")
+        // Use system-installed headers via libucx-dev
+        .clang_arg("-I/usr/include/ucp/api/")
+        .clang_arg("-I/usr/include/")
         // Annotate ucs_status_t and ucs_status_ptr_t as #[must_use]
         .must_use_type("ucs_status_t")
         .must_use_type("ucs_status_ptr_t")

@@ -14,6 +14,11 @@ pub struct Ep {
 }
 
 impl Ep {
+    /// Expose the raw UCP endpoint handle for FFI callers.
+    pub fn handle(&self) -> ucp_ep_h {
+        self.handle
+    }
+
     pub fn new(ep_params: &Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
@@ -23,6 +28,45 @@ impl Ep {
             Err(ucs_status_t) => Err(ucs_status_t),
         }
     }
+
+    /// Flush the endpoint.
+    pub fn flush_nbx(&self) -> crate::Request {
+        unsafe {
+            let ptr = ucp_ep_flush_nbx(self.handle, std::ptr::null());
+            crate::Request::from_raw(ptr)
+        }
+    }
+
+    /// Query endpoint attributes.
+    ///
+    /// Field masks:
+    /// - UCP_EP_ATTR_FIELD_NAME = 1
+    /// - UCP_EP_ATTR_FIELD_LOCAL_SOCKADDR = 2
+    /// - UCP_EP_ATTR_FIELD_REMOTE_SOCKADDR = 4
+    /// - UCP_EP_ATTR_FIELD_TRANSPORTS = 8
+    /// - UCP_EP_ATTR_FIELD_USER_DATA = 16
+    pub fn query(&self, mask: u64) -> Result<EpAttr, ucs_status_t> {
+        let mut attr: ucp_ep_attr = unsafe { std::mem::zeroed() };
+        attr.field_mask = mask;
+        crate::status_to_result(unsafe { ucp_ep_query(self.handle, &mut attr) }).map(|()| {
+            let name = if mask & 1 != 0 {
+                unsafe { std::ffi::CStr::from_ptr(attr.name.as_ptr()).to_string_lossy().into_owned() }
+            } else {
+                String::new()
+            };
+            EpAttr {
+                name,
+                user_data: attr.user_data,
+            }
+        })
+    }
+}
+
+/// Endpoint attribute result.
+#[derive(Debug, Clone)]
+pub struct EpAttr {
+    pub name: String,
+    pub user_data: *mut std::os::raw::c_void,
 }
 
 impl Drop for Ep {

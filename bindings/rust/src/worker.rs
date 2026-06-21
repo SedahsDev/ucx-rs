@@ -77,6 +77,93 @@ impl Worker {
     pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
+
+    /// Flush the worker (legacy variant).
+    pub fn flush_nb(&self, flags: u32) -> crate::Request {
+        unsafe {
+            let ptr = ucp_worker_flush_nb(self.handle, flags, None);
+            crate::Request::from_raw(ptr)
+        }
+    }
+
+    /// Worker fence — ensures ordering of operations.
+    pub fn fence(&self) -> Result<(), ucs_status_t> {
+        crate::status_to_result(unsafe { ucp_worker_fence(self.handle) })
+    }
+
+    /// Arm the worker for asynchronous completion.
+    pub fn arm(&self) -> Result<(), ucs_status_t> {
+        crate::status_to_result(unsafe { ucp_worker_arm(self.handle) })
+    }
+
+    /// Wait for an asynchronous event on the worker.
+    pub fn wait(&self) -> Result<(), ucs_status_t> {
+        crate::status_to_result(unsafe { ucp_worker_wait(self.handle) })
+    }
+
+    /// Wait for an asynchronous event with memory hint.
+    ///
+    /// # Safety
+    /// The `address` pointer is used as a memory hint by the runtime.
+    pub unsafe fn wait_mem(&self, address: *mut std::os::raw::c_void) {
+        ucp_worker_wait_mem(self.handle, address);
+    }
+
+    /// Signal the worker to wake up from wait.
+    pub fn signal(&self) {
+        unsafe { ucp_worker_signal(self.handle); }
+    }
+
+    /// Get the event file descriptor for the worker.
+    pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
+        let mut fd: std::os::raw::c_int = -1;
+        crate::status_to_result(unsafe { ucp_worker_get_efd(self.handle, &mut fd) }).map(|()| fd)
+    }
+
+    /// Query worker attributes.
+    ///
+    /// Field masks:
+    /// - UCP_WORKER_ATTR_FIELD_THREAD_MODE = 1
+    /// - UCP_WORKER_ATTR_FIELD_ADDRESS = 2
+    /// - UCP_WORKER_ATTR_FIELD_ADDRESS_FLAGS = 4
+    /// - UCP_WORKER_ATTR_FIELD_MAX_AM_HEADER = 8
+    /// - UCP_WORKER_ATTR_FIELD_NAME = 16
+    /// - UCP_WORKER_ATTR_FIELD_MAX_INFO_STRING = 32
+    pub fn query(&self, mask: u64) -> Result<WorkerAttr, ucs_status_t> {
+        let mut attr: ucp_worker_attr = unsafe { std::mem::zeroed() };
+        attr.field_mask = mask;
+        crate::status_to_result(unsafe { ucp_worker_query(self.handle, &mut attr) }).map(|()| {
+            let name = if mask & (1u64 << 4) != 0 {
+                unsafe { std::ffi::CStr::from_ptr(attr.name.as_ptr()).to_string_lossy().into_owned() }
+            } else {
+                String::new()
+            };
+            WorkerAttr {
+                thread_mode: attr.thread_mode,
+                max_am_header: attr.max_am_header,
+                name,
+            }
+        })
+    }
+}
+
+/// Worker query attribute result.
+#[derive(Debug, Clone)]
+pub struct WorkerAttr {
+    pub thread_mode: ucs_thread_mode_t,
+    pub max_am_header: usize,
+    pub name: String,
+}
+
+/// Query worker address attributes.
+///
+/// Field mask: UCP_WORKER_ADDRESS_ATTR_FIELD_UID = 1
+pub fn address_query(address: *const ucp_address_t) -> Result<u64, ucs_status_t> {
+    let mut attr: ucp_worker_address_attr = unsafe { std::mem::zeroed() };
+    attr.field_mask = 1; // UCP_WORKER_ADDRESS_ATTR_FIELD_UID
+    crate::status_to_result(unsafe { ucp_worker_address_query(address as *mut _, &mut attr) }).map(|()| {
+        attr.worker_uid
+    })
 }
 
 pub struct RemoteWorkerAddress {
@@ -124,6 +211,19 @@ bitflags! {
     pub struct UcpWorkerFlags: u64 {
         const IgnoreRequestLeak = ucp_worker_flags_t::UCP_WORKER_FLAG_IGNORE_REQUEST_LEAK as u64;
     }
+}
+
+/// Set active message receive handler on a worker (nbx variant).
+///
+/// This is a thin unsafe wrapper around `ucp_worker_set_am_recv_handler`.
+///
+/// # Safety
+/// Caller must ensure `worker` is valid and the handler param is properly constructed.
+pub unsafe fn worker_set_am_recv_handler_nbx(
+    worker: ucp_worker_h,
+    param: &ucp_am_handler_param_t,
+) -> Result<(), ucs_status_t> {
+    status_to_result(ucp_worker_set_am_recv_handler(worker, param))
 }
 
 impl ParamsBuilder {
