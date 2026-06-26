@@ -10,6 +10,7 @@ use crate::Request;
 use crate::RequestParam;
 
 /// Re-export the remote key handle type for external callers.
+#[allow(non_camel_case_types)]
 pub type ucp_rkey_h = crate::ffi::ucp_rkey_h;
 
 use crate::ep::Ep;
@@ -26,7 +27,8 @@ impl RemoteKey {
         let mut rkey: ucp_rkey_h = std::ptr::null_mut();
         status_to_result(unsafe {
             ucp_ep_rkey_unpack(ep.handle, rkey_buffer.as_ptr() as *const _, &mut rkey)
-        }).map(|()| RemoteKey { handle: rkey })
+        })
+        .map(|()| RemoteKey { handle: rkey })
     }
 
     /// Get the raw rkey handle.
@@ -491,10 +493,11 @@ pub unsafe fn get_nbx(
 }
 
 #[deprecated = "Use Ep::amo_add64/amo_xor64/amo_swap64/amo_and64/amo_or64/amo_cswap64 instead"]
-/// Atomic operation on remote memory.
+/// Atomic fetch-and-add/subtract operation (nbx variant).
 ///
 /// # Safety
-/// Caller must ensure `buffer` points to valid operand data and `rkey` is valid.
+/// Caller must ensure `ep` is a valid endpoint and `operand` points to valid memory.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_op_nbx(
     ep: ucp_ep_h,
     opcode: ucp_atomic_op_t,
@@ -537,6 +540,7 @@ pub unsafe fn atomic_op_nbx(
 /// # Safety
 /// Caller must ensure `operand` points to valid operand data, `reply_buffer`
 /// has space for the result, and `rkey` is valid.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_fetch_nbx(
     ep: ucp_ep_h,
     opcode: ucp_atomic_op_t,
@@ -602,6 +606,7 @@ pub unsafe fn rkey_destroy(rkey: ucp_rkey_h) {
 // ---------------------------------------------------------------------------
 
 #[deprecated = "Use Ep safe AMO methods instead (e.g., amo_fadd64 with reply_buffer on RequestParam)"]
+#[allow(deprecated)]
 /// Atomic fetch-and-add 32-bit.
 ///
 /// # Safety
@@ -627,6 +632,7 @@ pub unsafe fn atomic_fadd32(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic fetch-and-add 64-bit.
 ///
 /// # Safety
@@ -652,6 +658,7 @@ pub unsafe fn atomic_fadd64(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic fetch-and-swap 32-bit.
 ///
 /// # Safety
@@ -677,6 +684,7 @@ pub unsafe fn atomic_fswap32(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic fetch-and-swap 64-bit.
 ///
 /// # Safety
@@ -702,6 +710,7 @@ pub unsafe fn atomic_fswap64(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic compare-and-swap 32-bit.
 ///
 /// Operand layout: `[expected, replacement]` as two consecutive u32 values.
@@ -730,6 +739,7 @@ pub unsafe fn atomic_fcswap32(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic compare-and-swap 64-bit.
 ///
 /// Operand layout: `[expected, replacement]` as two consecutive u64 values.
@@ -758,6 +768,7 @@ pub unsafe fn atomic_fcswap64(
 }
 
 #[deprecated = "Use Ep::amo_add32 instead"]
+#[allow(deprecated)]
 /// Atomic add 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -781,6 +792,7 @@ pub unsafe fn atomic_add32(
 }
 
 #[deprecated = "Use Ep::amo_add64 instead"]
+#[allow(deprecated)]
 /// Atomic add 64-bit (no fetch of old value).
 ///
 /// # Safety
@@ -804,6 +816,7 @@ pub unsafe fn atomic_add64(
 }
 
 #[deprecated = "Use Ep::amo_swap32 instead"]
+#[allow(deprecated)]
 /// Atomic swap 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -827,6 +840,7 @@ pub unsafe fn atomic_swap32(
 }
 
 #[deprecated = "Use Ep::amo_swap64 instead"]
+#[allow(deprecated)]
 /// Atomic swap 64-bit (no fetch of old value).
 ///
 /// # Safety
@@ -850,6 +864,7 @@ pub unsafe fn atomic_swap64(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic fetch-and-xor 32-bit.
 ///
 /// # Safety
@@ -875,6 +890,7 @@ pub unsafe fn atomic_fxor32(
 }
 
 #[deprecated = "Use Ep safe AMO methods instead"]
+#[allow(deprecated)]
 /// Atomic fetch-and-xor 64-bit.
 ///
 /// # Safety
@@ -900,6 +916,7 @@ pub unsafe fn atomic_fxor64(
 }
 
 #[deprecated = "Use Ep::amo_xor32 instead"]
+#[allow(deprecated)]
 /// Atomic xor 32-bit (no fetch of old value).
 ///
 /// # Safety
@@ -923,6 +940,7 @@ pub unsafe fn atomic_xor32(
 }
 
 #[deprecated = "Use Ep::amo_xor64 instead"]
+#[allow(deprecated)]
 /// Atomic xor 64-bit (no fetch of old value).
 ///
 /// # Safety

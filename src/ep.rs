@@ -19,7 +19,7 @@ impl Ep {
         self.handle
     }
 
-    pub fn new(ep_params: &Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
+    pub fn new(ep_params: Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
             status_to_result(unsafe { ucp_ep_create(worker.handle, &ep_params.handle, &mut ep) });
@@ -50,7 +50,11 @@ impl Ep {
         attr.field_mask = mask;
         crate::status_to_result(unsafe { ucp_ep_query(self.handle, &mut attr) }).map(|()| {
             let name = if mask & 1 != 0 {
-                unsafe { std::ffi::CStr::from_ptr(attr.name.as_ptr()).to_string_lossy().into_owned() }
+                unsafe {
+                    std::ffi::CStr::from_ptr(attr.name.as_ptr())
+                        .to_string_lossy()
+                        .into_owned()
+                }
             } else {
                 String::new()
             };
@@ -74,8 +78,8 @@ impl Drop for Ep {
         let param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         let result =
             status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }).unwrap();
-        if result.is_some() {
-            unsafe { ucp_request_free(result.unwrap().handle.as_mut()) };
+        if let Some(mut req) = result {
+            unsafe { ucp_request_free(req.handle.as_mut()) };
         }
     }
 }
@@ -108,6 +112,12 @@ pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_ep_params_t>,
     field_mask: u64,
     name: Option<CString>,
+}
+
+impl Default for ParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ParamsBuilder {

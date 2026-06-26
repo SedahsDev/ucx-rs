@@ -35,10 +35,7 @@ impl Request {
     #[inline]
     pub fn new(request_handle: *mut std::os::raw::c_void) -> Option<Request> {
         let request = NonNull::<::std::os::raw::c_void>::new(request_handle);
-        match request {
-            None => None,
-            Some(x) => Some(Request { handle: x }),
-        }
+        request.map(|x| Request { handle: x })
     }
 
     /// Create a Request from a raw pointer, assuming the pointer is valid and non-null.
@@ -57,7 +54,7 @@ impl Request {
     pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
         let status = unsafe { ucp_request_check_status(self.handle.as_ptr()) };
         if status as usize >= ucs_status_t::UCS_ERR_LAST as usize {
-            return Err(unsafe { std::mem::transmute(status as i8) });
+            return Err(unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(status as i8) });
         }
         Ok(status == ucs_status_t::UCS_OK)
     }
@@ -83,7 +80,7 @@ pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, uc
         // The transmute() function is how you access C style memory magic. This function will
         // take the intput pointer and then translate it into i8 and then rust will turn the i8
         // into the proper ucs_status_t.
-        return Err(unsafe { std::mem::transmute(ptr as i8) });
+        return Err(unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(ptr as i8) });
     }
     Ok(Request::new(ptr))
 }
@@ -104,6 +101,12 @@ pub struct RequestParam {
 pub struct RequestParamBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_request_param_t>,
     field_mask: u32,
+}
+
+impl Default for RequestParamBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestParamBuilder {
@@ -171,11 +174,9 @@ impl RequestParamBuilder {
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.op_attr_mask = self.field_mask;
 
-        let ucp_param = RequestParam {
+        RequestParam {
             handle: unsafe { self.uninit_handle.assume_init() },
-        };
-
-        ucp_param
+        }
     }
 }
 
@@ -188,13 +189,13 @@ pub unsafe fn request_alloc(worker: ucp_worker_h) -> Request {
     Request::from_raw(ptr)
 }
 
-/// Field masks for ucp_request_attr_t.
+/// Query request attributes.
+///
+/// Field masks for ucp_request_attr_t:
 /// - UCP_REQUEST_ATTR_FIELD_INFO_STRING = 1
 /// - UCP_REQUEST_ATTR_FIELD_INFO_STRING_SIZE = 2
 /// - UCP_REQUEST_ATTR_FIELD_STATUS = 4
 /// - UCP_REQUEST_ATTR_FIELD_MEM_TYPE = 8
-
-/// Query request attributes.
 ///
 /// # Safety
 /// Caller must ensure `request` is a valid request pointer.
@@ -204,10 +205,12 @@ pub unsafe fn request_query(
 ) -> Result<RequestAttr, ucs_status_t> {
     let mut attr: ucp_request_attr_t = std::mem::zeroed();
     attr.field_mask = mask;
-    status_to_result(ucp_request_query(request, &mut attr)).map(|()| {
-        RequestAttr {
-            status: if mask & 4 != 0 { attr.status } else { ucs_status_t::UCS_OK },
-        }
+    status_to_result(ucp_request_query(request, &mut attr)).map(|()| RequestAttr {
+        status: if mask & 4 != 0 {
+            attr.status
+        } else {
+            ucs_status_t::UCS_OK
+        },
     })
 }
 
@@ -323,8 +326,7 @@ mod tests {
             .ep
             .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
             .unwrap();
-        if req.is_some() {
-            let req = req.unwrap();
+        if let Some(req) = req {
             while !req.check_finished().unwrap() {
                 comms.worker.progress();
             }

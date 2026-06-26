@@ -34,7 +34,7 @@ impl Config {
         let c_file = CString::new(file).unwrap();
         status_to_result(unsafe { ucp_config_read(c_name.as_ptr(), c_file.as_ptr(), &mut config) })
             .unwrap();
-        return Ok(config);
+        Ok(config)
     }
 }
 
@@ -70,6 +70,12 @@ pub struct Params {
 // it will fill in the final value of the features field_mask and proclame the rest of the struct
 // as initialized. This is Rust safe because all of the other fields are guaranteed to not be used
 // by the library since the proper feature flag is not set.
+
+impl Default for ParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ParamsBuilder {
     pub fn new() -> ParamsBuilder {

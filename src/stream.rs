@@ -13,7 +13,11 @@ use crate::RequestParam;
 
 impl Ep {
     /// Send data on a stream (safe wrapper).
-    pub fn stream_send(&self, data: &[u8], param: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+    pub fn stream_send(
+        &self,
+        data: &[u8],
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
         status_ptr_to_result(unsafe {
             ucp_stream_send_nbx(self.handle, data.as_ptr() as _, data.len(), &param.handle)
         })
@@ -22,10 +26,20 @@ impl Ep {
     /// Receive data on a stream (safe wrapper).
     ///
     /// Returns the actual number of bytes received.
-    pub fn stream_recv(&self, buf: &mut [u8], param: &RequestParam) -> Result<(Option<Request>, usize), ucs_status_t> {
+    pub fn stream_recv(
+        &self,
+        buf: &mut [u8],
+        param: &RequestParam,
+    ) -> Result<(Option<Request>, usize), ucs_status_t> {
         let mut length: usize = 0;
         let res = status_ptr_to_result(unsafe {
-            ucp_stream_recv_nbx(self.handle, buf.as_mut_ptr() as _, buf.len(), &mut length, &param.handle)
+            ucp_stream_recv_nbx(
+                self.handle,
+                buf.as_mut_ptr() as _,
+                buf.len(),
+                &mut length,
+                &param.handle,
+            )
         });
         res.map(|r| (r, length))
     }
@@ -38,7 +52,12 @@ impl Worker {
     ///
     /// # Safety
     /// Caller must ensure `poll_eps` is valid for `max_eps` elements.
-    pub unsafe fn stream_poll(&self, poll_eps: *mut ucp_stream_poll_ep_t, max_eps: usize, flags: u32) -> isize {
+    pub unsafe fn stream_poll(
+        &self,
+        poll_eps: *mut ucp_stream_poll_ep_t,
+        max_eps: usize,
+        flags: u32,
+    ) -> isize {
         ucp_stream_worker_poll(self.handle, poll_eps, max_eps, flags)
     }
 }

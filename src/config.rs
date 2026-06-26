@@ -8,6 +8,9 @@ use crate::status_to_result;
 use std::ffi::CStr;
 
 /// Modify a configuration value.
+///
+/// # Safety
+/// Caller must ensure `config` is a valid configuration pointer obtained from `ucp_config_read`.
 pub unsafe fn config_modify(
     config: *mut ucp_config_t,
     name: &str,
@@ -34,6 +37,9 @@ pub struct ContextAttr {
 }
 
 /// Query context attributes.
+///
+/// # Safety
+/// Caller must ensure `context` is a valid UCP context handle.
 pub unsafe fn context_query(
     context: ucp_context_h,
     mask: u64,
@@ -58,6 +64,9 @@ pub unsafe fn context_query(
 }
 
 /// Print context info to a file descriptor.
+///
+/// # Safety
+/// Caller must ensure `context` is a valid UCP context handle and `fd` is a valid file descriptor.
 pub unsafe fn context_print_info(context: ucp_context_h, fd: std::os::fd::RawFd) {
     ucp_context_print_info(context, fd as *mut _);
 }
@@ -65,14 +74,12 @@ pub unsafe fn context_print_info(context: ucp_context_h, fd: std::os::fd::RawFd)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::{Config, ParamsBuilder, Context};
+    use crate::context::{Config, Context, ParamsBuilder};
 
     #[test]
     fn test_config_modify() {
         let config_ptr = Config::read("", "").expect("config read");
-        let result = unsafe {
-            config_modify(config_ptr, "invalid_key_xyz", "value")
-        };
+        let result = unsafe { config_modify(config_ptr, "invalid_key_xyz", "value") };
         assert!(result.is_err());
     }
 

@@ -46,13 +46,14 @@ pub unsafe fn dt_create_generic(
     context: *mut std::os::raw::c_void,
 ) -> Result<ucp_datatype_t, ucs_status_t> {
     let mut datatype: ucp_datatype_t = 0;
-    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype))
-        .map(|()| datatype)
+    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype)).map(|()| datatype)
 }
 
 /// Destroy a user-defined data type.
 pub fn dt_destroy(datatype: ucp_datatype_t) {
-    unsafe { ucp_dt_destroy(datatype); }
+    unsafe {
+        ucp_dt_destroy(datatype);
+    }
 }
 
 /// Field masks for `ucp_datatype_attr`.

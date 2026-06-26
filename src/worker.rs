@@ -20,8 +20,7 @@ impl Drop for Worker {
     fn drop(&mut self) {
         let params = RequestParamBuilder::new().build();
         let request = self.flush(&params).unwrap();
-        if request.is_some() {
-            let request = request.unwrap();
+        if let Some(request) = request {
             while !request.check_finished().unwrap() {
                 self.progress();
             }
@@ -43,7 +42,7 @@ impl Worker {
         }
     }
 
-    pub fn pack_address(&self) -> Result<WorkerAddress, ucs_status_t> {
+    pub fn pack_address(&self) -> Result<WorkerAddress<'_>, ucs_status_t> {
         let mut address: *mut ucp_address_t = std::ptr::null_mut();
         let mut size: usize = 0;
 
@@ -54,7 +53,7 @@ impl Worker {
             Ok(()) => Ok(WorkerAddress {
                 handle: address,
                 parent: self,
-                size: size,
+                size,
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
         }
@@ -66,8 +65,8 @@ impl Worker {
         progress > 0
     }
 
-    pub fn create_ep(&self, ep_params: &ep::Params) -> Result<Ep, ucs_status_t> {
-        return Ep::new(&ep_params, &self);
+    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, ucs_status_t> {
+        Ep::new(ep_params, self)
     }
 
     pub fn cancel_request(&self, request: &mut Request) {
@@ -111,7 +110,9 @@ impl Worker {
 
     /// Signal the worker to wake up from wait.
     pub fn signal(&self) {
-        unsafe { ucp_worker_signal(self.handle); }
+        unsafe {
+            let _ = ucp_worker_signal(self.handle);
+        }
     }
 
     /// Get the event file descriptor for the worker.
@@ -134,7 +135,11 @@ impl Worker {
         attr.field_mask = mask;
         crate::status_to_result(unsafe { ucp_worker_query(self.handle, &mut attr) }).map(|()| {
             let name = if mask & (1u64 << 4) != 0 {
-                unsafe { std::ffi::CStr::from_ptr(attr.name.as_ptr()).to_string_lossy().into_owned() }
+                unsafe {
+                    std::ffi::CStr::from_ptr(attr.name.as_ptr())
+                        .to_string_lossy()
+                        .into_owned()
+                }
             } else {
                 String::new()
             };
@@ -161,9 +166,8 @@ pub struct WorkerAttr {
 pub fn address_query(address: *const ucp_address_t) -> Result<u64, ucs_status_t> {
     let mut attr: ucp_worker_address_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = 1; // UCP_WORKER_ADDRESS_ATTR_FIELD_UID
-    crate::status_to_result(unsafe { ucp_worker_address_query(address as *mut _, &mut attr) }).map(|()| {
-        attr.worker_uid
-    })
+    crate::status_to_result(unsafe { ucp_worker_address_query(address as *mut _, &mut attr) })
+        .map(|()| attr.worker_uid)
 }
 
 pub struct RemoteWorkerAddress {
@@ -172,7 +176,7 @@ pub struct RemoteWorkerAddress {
 
 impl RemoteWorkerAddress {
     pub fn new(address: Vec<u8>) -> RemoteWorkerAddress {
-        RemoteWorkerAddress { address: address }
+        RemoteWorkerAddress { address }
     }
 
     pub fn get_handle(&self) -> (*const ucp_address_t, usize) {
@@ -323,6 +327,12 @@ pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_worker_params_t>,
     field_mask: u64,
     name: Option<CString>,
+}
+
+impl Default for ParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone)]

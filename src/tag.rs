@@ -31,7 +31,13 @@ impl Ep {
     /// Guarantees remote delivery before the request completes.
     pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Request {
         unsafe {
-            let ptr = ucp_tag_send_sync_nbx(self.handle, data.as_ptr() as _, data.len(), tag, std::ptr::null());
+            let ptr = ucp_tag_send_sync_nbx(
+                self.handle,
+                data.as_ptr() as _,
+                data.len(),
+                tag,
+                std::ptr::null(),
+            );
             Request::from_raw(ptr)
         }
     }
@@ -48,6 +54,10 @@ impl MessageHandle {
         self.info.length
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.info.length == 0
+    }
+
     pub fn sender_tag(&self) -> u64 {
         self.info.sender_tag
     }
@@ -60,6 +70,10 @@ pub struct TagInfo {
 impl TagInfo {
     pub fn len(&self) -> usize {
         self.handle.length
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.handle.length == 0
     }
 
     pub fn sender_tag(&self) -> u64 {
@@ -95,7 +109,7 @@ impl Worker {
 
         if !handle.is_null() {
             Some(MessageHandle {
-                handle: handle,
+                handle,
                 info: unsafe { info.assume_init() },
                 removed: remove,
             })

@@ -32,28 +32,37 @@ impl Listener {
         let mut params: ucp_listener_params = unsafe { std::mem::zeroed() };
         params.field_mask = UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
         params.sockaddr = *sockaddr;
-        status_to_result(ucp_listener_create(worker, &params, &mut listener)).map(|()| Self { handle: listener })
+        status_to_result(ucp_listener_create(worker, &params, &mut listener))
+            .map(|()| Self { handle: listener })
     }
 
     /// Query listener attributes.
     pub fn query(&self) -> Result<ListenerAttr, ucs_status_t> {
         let mut attr: ucp_listener_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = 1; // UCP_LISTENER_ATTR_FIELD_SOCKADDR
-        status_to_result(unsafe { ucp_listener_query(self.handle, &mut attr) }).map(|()| ListenerAttr {
-            sockaddr: attr.sockaddr,
+        status_to_result(unsafe { ucp_listener_query(self.handle, &mut attr) }).map(|()| {
+            ListenerAttr {
+                sockaddr: attr.sockaddr,
+            }
         })
     }
 
     /// Reject a connection request.
-    pub fn reject(&self, conn_request: ucp_conn_request_h) -> Result<(), ucs_status_t> {
-        status_to_result(unsafe { ucp_listener_reject(self.handle, conn_request) })
+    ///
+    /// # Safety
+    /// Caller must ensure `conn_request` is a valid connection request handle
+    /// obtained from the listener's accept handler.
+    pub unsafe fn reject(&self, conn_request: ucp_conn_request_h) -> Result<(), ucs_status_t> {
+        status_to_result(ucp_listener_reject(self.handle, conn_request))
     }
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            unsafe { ucp_listener_destroy(self.handle); }
+            unsafe {
+                ucp_listener_destroy(self.handle);
+            }
         }
     }
 }
@@ -69,14 +78,23 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR: u64 = 1;
 pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = 2;
 
 /// Query connection request attributes.
-pub fn conn_request_query(
+///
+/// # Safety
+/// Caller must ensure `conn_request` is a valid connection request handle.
+pub unsafe fn conn_request_query(
     conn_request: ucp_conn_request_h,
     mask: u64,
 ) -> Result<ConnRequestAttr, ucs_status_t> {
     let mut attr: ucp_conn_request_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
-    status_to_result(unsafe { ucp_conn_request_query(conn_request, &mut attr) }).map(|()| ConnRequestAttr {
-        client_id: if mask & UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID != 0 { attr.client_id } else { 0 },
+    status_to_result(unsafe { ucp_conn_request_query(conn_request, &mut attr) }).map(|()| {
+        ConnRequestAttr {
+            client_id: if mask & UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID != 0 {
+                attr.client_id
+            } else {
+                0
+            },
+        }
     })
 }
 

@@ -72,6 +72,12 @@ pub struct MemMapParamsBuilder {
     field_mask: u64,
 }
 
+impl Default for MemMapParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemMapParamsBuilder {
     pub fn new() -> Self {
         Self {
@@ -151,6 +157,12 @@ pub struct MemAdviseParamsBuilder {
     field_mask: u64,
 }
 
+impl Default for MemAdviseParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemAdviseParamsBuilder {
     pub fn new() -> Self {
         Self {
@@ -200,6 +212,12 @@ pub struct MemAdviseParams {
 pub struct MemhPackParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_memh_pack_params_t>,
     field_mask: u64,
+}
+
+impl Default for MemhPackParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemhPackParamsBuilder {
@@ -305,8 +323,9 @@ impl Drop for PackedMemhBuffer {
 pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedRkeyBuffer, ucs_status_t> {
     let mut buffer: *mut std::os::raw::c_void = std::ptr::null_mut();
     let mut size: usize = 0;
-    let result =
-        status_to_result(unsafe { ucp_rkey_pack(context.handle, memh.handle, &mut buffer, &mut size) });
+    let result = status_to_result(unsafe {
+        ucp_rkey_pack(context.handle, memh.handle, &mut buffer, &mut size)
+    });
     match result {
         Ok(()) => Ok(PackedRkeyBuffer { buffer, size }),
         Err(e) => Err(e),
