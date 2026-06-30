@@ -2,44 +2,52 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    // Link against system-installed UCX libraries (libucx-dev 1.18.1)
-    // Order matters: ucp depends on uct, ucm, ucs
+    let bindings_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("bindings.rs");
+    let src_bindings = PathBuf::from("src").join("bindings.rs");
+
+    // Try to generate bindings from system UCX headers; fall back to pre-generated src/bindings.rs
+    let has_headers = std::path::Path::new("/usr/include/ucp/api/ucp.h").exists()
+        || std::path::Path::new("/usr/include/ucp.h").exists();
+
+    if has_headers {
+        let bindings = bindgen::Builder::default()
+            .generate_comments(false)
+            .rustified_enum(".*")
+            .clang_arg("-I/usr/include/ucp/api/")
+            .clang_arg("-I/usr/include/")
+            .must_use_type("ucs_status_t")
+            .must_use_type("ucs_status_ptr_t")
+            .header("wrapper.h")
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+            .generate()
+            .expect("Unable to generate bindings");
+
+        bindings
+            .write_to_file(&bindings_path)
+            .expect("Couldn't write bindings!");
+
+        // Update src/bindings.rs with fresh bindings
+        std::fs::copy(&bindings_path, &src_bindings).expect("Failed to copy bindings to src/");
+        println!("cargo:rerun-if-changed={}", src_bindings.display());
+    } else {
+        // No system headers — use pre-generated src/bindings.rs as offline fallback
+        if src_bindings.exists() {
+            println!(
+                "cargo:warning=UCX system headers not found, using pre-generated offline bindings"
+            );
+            std::fs::copy(&src_bindings, &bindings_path)
+                .expect("Failed to copy pre-generated bindings to OUT_DIR");
+        } else {
+            panic!(
+                "UCX headers not found and no pre-generated src/bindings.rs. \
+                Install libucx-dev or provide offline bindings."
+            );
+        }
+    }
+
+    // Link against system UCX libraries
     println!("cargo:rustc-link-lib=ucp");
     println!("cargo:rustc-link-lib=uct");
     println!("cargo:rustc-link-lib=ucm");
     println!("cargo:rustc-link-lib=ucs");
-
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        // Some of the UCX detailed examples in comments can confuse the
-        // bindgen parser and it will make bad code instead of comments
-        .generate_comments(false)
-        // ucs_status_t is defined as a packed enum and that will lead to
-        // badness without the flag which tells bindgen to repeat that
-        // trick with the rust enums
-        .rustified_enum(".*")
-        // Use system-installed headers via libucx-dev
-        .clang_arg("-I/usr/include/ucp/api/")
-        .clang_arg("-I/usr/include/")
-        // Annotate ucs_status_t and ucs_status_ptr_t as #[must_use]
-        .must_use_type("ucs_status_t")
-        .must_use_type("ucs_status_ptr_t")
-        // The input header we would like to generate
-        // bindings for.
-        .header("wrapper.h")
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings");
-
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
 }

@@ -286,7 +286,7 @@ mod tests {
         let addr = RemoteWorkerAddress::new(packed_addr.to_vec());
 
         let ep_param = ep::ParamsBuilder::new().address(&addr).build();
-        let ep = worker.create_ep(&ep_param).unwrap();
+        let ep = worker.create_ep(ep_param).unwrap();
         // If we don't drop this than the compiler complains about how the
         // worker is borrowed in the packed_addr.
         drop(packed_addr);
