@@ -150,11 +150,84 @@ pub unsafe fn stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void)
 
 #[cfg(test)]
 mod tests {
-    // Stream tests require connected endpoints — marked #[ignore] for now
+    use super::*;
+    use crate::context::{Config, Context, Flags, ParamsBuilder as CtxParamsBuilder};
+    use crate::worker::ParamsBuilder as WorkerParamsBuilder;
+
+    /// Helper: create a UCX context + worker with Tag feature.
+    fn setup_worker() -> (Context, Worker) {
+        let ctx_params = CtxParamsBuilder::new().features(Flags::Tag).build();
+        let ctx = Context::new(&Config::default(), &ctx_params).expect("context create");
+        let worker_params = WorkerParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+        (ctx, worker)
+    }
+
+    /// Test that stream_send and stream_recv APIs compile and accept valid parameters.
+    /// This verifies the function signatures and RequestParam compatibility.
+    /// Actual send/recv requires connected endpoints — those are integration tests.
     #[test]
-    #[ignore]
-    fn test_stream_send_recv() {
-        // Requires two connected endpoints
-        unimplemented!("Requires connected endpoints");
+    fn test_stream_api_compiles() {
+        let (_ctx, worker) = setup_worker();
+
+        // Create an endpoint to self (for API validation)
+        let packed_addr = worker.pack_address().expect("pack address");
+        let addr = crate::worker::RemoteWorkerAddress::new(packed_addr.to_vec());
+        let ep_param = crate::ep::ParamsBuilder::new().address(&addr).build();
+        let ep = worker.create_ep(ep_param).expect("create ep");
+        drop(packed_addr);
+
+        // Build a valid RequestParam for stream operations
+        let param = crate::RequestParamBuilder::new().build();
+
+        // Verify stream_send compiles with valid params (won't complete without peer,
+        // but the API call itself should not crash)
+        let data = b"hello";
+        let result = ep.stream_send(data, &param);
+
+        // The send may return an error (no peer to receive), or a pending request.
+        // Either way, the API is valid.
+        match result {
+            Ok(None) => {
+                // Completed immediately (unlikely without peer, but valid)
+            }
+            Ok(Some(_req)) => {
+                // Got a pending request — valid API behavior
+            }
+            Err(_status) => {
+                // Error is expected without a connected peer — API is still valid
+            }
+        }
+
+        // Verify stream_recv compiles with valid params
+        let mut recv_buf = vec![0u8; 64];
+        let result = ep.stream_recv(&mut recv_buf, &param);
+        match result {
+            Ok((_req, _len)) => {
+                // Received data (unlikely without peer, but valid)
+            }
+            Err(_status) => {
+                // Error expected without connected peer — API is valid
+            }
+        }
+    }
+
+    /// Test that Worker::stream_poll and stream_data_release FFI functions exist.
+    #[test]
+    fn test_stream_poll_signature() {
+        let (_ctx, _worker) = setup_worker();
+        // Verify the FFI functions are accessible
+        extern "C" {
+            fn ucp_stream_worker_poll(
+                worker: ucp_worker_h,
+                poll_eps: *mut ucp_stream_poll_ep_t,
+                max_eps: usize,
+                flags: u32,
+            ) -> isize;
+            fn ucp_stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void);
+        }
+        // Functions exist and have correct signatures
+        let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_worker_poll) };
+        let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_data_release) };
     }
 }

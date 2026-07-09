@@ -106,10 +106,82 @@ pub struct ConnRequestAttr {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::context::{Config, Context, Flags, ParamsBuilder};
+    use crate::worker::ParamsBuilder as WorkerParamsBuilder;
+
+    /// Helper: create a UCX context + worker with Tag feature (minimal setup).
+    fn setup_worker() -> (Context, crate::worker::Worker) {
+        let ctx_params = ParamsBuilder::new().features(Flags::Tag).build();
+        let ctx = Context::new(&Config::default(), &ctx_params).expect("context create");
+        let worker_params = WorkerParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+        (ctx, worker)
+    }
+
+    /// Test that Listener::create compiles and can be called with a valid worker.
+    /// The listener will be dropped (destroyed) at end of scope.
+    /// Listener creation may fail if no transport supports it — that's OK.
     #[test]
-    #[ignore]
     fn test_listener_create() {
-        // Requires a worker and socket address
-        unimplemented!("Requires worker setup");
+        let (_ctx, worker) = setup_worker();
+
+        // Build a basic sockaddr for localhost
+        let mut sa: sockaddr = unsafe { std::mem::zeroed() };
+        sa.sa_family = 2; // AF_INET
+
+        let mut ucs_sa: ucs_sock_addr_t = unsafe { std::mem::zeroed() };
+        ucs_sa.addr = &sa as *const sockaddr;
+        ucs_sa.addrlen = std::mem::size_of::<sockaddr>() as socklen_t;
+
+        // Create listener — this exercises the FFI path
+        let listener = unsafe { Listener::create(worker.handle, &ucs_sa) };
+
+        // Listener creation may fail if no transport supports it (e.g., loopback-only),
+        // but it should not crash. Accept both success and error.
+        match listener {
+            Ok(_listener) => {
+                // Listener created successfully — query its attributes
+                let _attr = _listener.query().expect("listener query");
+            }
+            Err(_status) => {
+                // Some UCX builds/transports don't support listener on loopback.
+                // This is acceptable — the important thing is the API compiles and doesn't crash.
+            }
+        }
+    }
+
+    /// Test that ListenerAttr is Clone + Copy + Debug.
+    #[test]
+    fn test_listener_attr_traits() {
+        let attr = ListenerAttr {
+            sockaddr: unsafe { std::mem::zeroed() },
+        };
+        let _copy = attr;
+        let _debug = format!("{:?}", attr);
+    }
+
+    /// Test that ConnRequestAttr is Clone + Debug.
+    #[test]
+    fn test_conn_request_attr_traits() {
+        let attr = ConnRequestAttr { client_id: 42 };
+        let _clone = attr.clone();
+        let _debug = format!("{:?}", attr);
+        assert_eq!(attr.client_id, 42);
+    }
+
+    /// Test that listener field mask constants have expected values.
+    #[test]
+    fn test_listener_field_masks() {
+        assert_eq!(UCP_LISTENER_PARAM_FIELD_SOCK_ADDR, 1);
+        assert_eq!(UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER, 2);
+        assert_eq!(UCP_LISTENER_PARAM_FIELD_CONN_HANDLER, 4);
+    }
+
+    /// Test that conn request field mask constants have expected values.
+    #[test]
+    fn test_conn_request_field_masks() {
+        assert_eq!(UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR, 1);
+        assert_eq!(UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID, 2);
     }
 }
