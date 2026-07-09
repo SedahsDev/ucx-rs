@@ -79,12 +79,16 @@ mod tests {
     #[test]
     fn test_config_modify() {
         let config_ptr = Config::read("", "").expect("config read");
-        // UCX 1.18+ silently accepts unknown config keys (returns UCS_OK).
-        // Test that the FFI call itself succeeds — the key/value is a no-op.
-        let result = unsafe { config_modify(config_ptr, "invalid_key_xyz", "value") };
+        assert!(!config_ptr.is_null(), "config pointer is null");
+
+        // UCX 1.20.1 requires uppercase config key names (matching env var names
+        // without the UCX_ prefix). "PROTO_ENABLE" is a boolean-style key that
+        // accepts "y"/"n" across UCX versions.
+        let result = unsafe { config_modify(config_ptr, "PROTO_ENABLE", "y") };
         assert!(
             result.is_ok(),
-            "config_modify FFI call should succeed (UCX 1.18+ ignores unknown keys)"
+            "config_modify should succeed for known key 'PROTO_ENABLE', got {:?}",
+            result
         );
     }
 
