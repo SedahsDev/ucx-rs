@@ -19,44 +19,97 @@ pub mod worker;
 use std::ffi::CString;
 use std::ptr::NonNull;
 
-// UCX request backed by a ucs_status_ptr_t that is non-null and not an error, thus is a request pointer
+/// UCX non-blocking request handle (`ucs_status_ptr_t` that is a real request).
+///
+/// Dropping a live request calls `ucp_request_free`. After cancel/free, the
+/// internal handle is cleared so double-free cannot occur.
+///
+/// # Thread safety
+///
+/// Not `Send`/`Sync`. Pair with a worker in the same thread (see
+/// `docs/FFI-CONVENTIONS.md` in the monorepo docs tree).
 pub struct Request {
-    pub(crate) handle: NonNull<::std::os::raw::c_void>,
+    pub(crate) handle: Option<NonNull<::std::os::raw::c_void>>,
 }
 
 impl Drop for Request {
     fn drop(&mut self) {
-        unsafe { ucp_request_free(self.handle.as_ptr()) };
+        if let Some(h) = self.handle.take() {
+            // SAFETY: handle came from UCX as a request pointer and has not been freed yet.
+            unsafe { ucp_request_free(h.as_ptr()) };
+        }
     }
 }
 
 impl Request {
-    // new assumes that the type has already been error checked.
+    /// Wrap a non-null request pointer. Returns `None` if `request_handle` is null.
     #[inline]
     pub fn new(request_handle: *mut std::os::raw::c_void) -> Option<Request> {
-        let request = NonNull::<::std::os::raw::c_void>::new(request_handle);
-        request.map(|x| Request { handle: x })
+        NonNull::new(request_handle).map(|h| Request { handle: Some(h) })
     }
 
-    /// Create a Request from a raw pointer, assuming the pointer is valid and non-null.
+    /// Create a Request from a raw pointer.
     ///
     /// # Safety
-    /// Caller must ensure `ptr` is a valid, non-null request pointer obtained from a UCX API.
+    /// Caller must ensure `ptr` is a valid UCX request pointer (not a status code,
+    /// not null) obtained from a UCX API that returns `ucs_status_ptr_t` as a request.
     #[inline]
     pub unsafe fn from_raw(ptr: *mut std::os::raw::c_void) -> Request {
+        debug_assert!(!ptr.is_null(), "Request::from_raw with null");
         Request {
-            handle: NonNull::new_unchecked(ptr),
+            handle: NonNull::new(ptr),
         }
     }
 
-    // check an outstanding request. Returns an error if the request had an error, returns false if the request is not completed, returns true if the request is completed
+    /// Raw pointer for FFI, or null if already freed/cancelled.
+    #[inline]
+    pub fn as_ptr(&self) -> *mut std::os::raw::c_void {
+        self.handle
+            .map(|h| h.as_ptr())
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    /// True if this still owns a live UCX request.
+    #[inline]
+    pub fn is_live(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    /// Check an outstanding request.
+    ///
+    /// Returns `Ok(true)` completed, `Ok(false)` in progress, `Err` on failure.
+    /// Returns `Ok(true)` if the request was already freed/cancelled.
     #[inline]
     pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
-        let status = unsafe { ucp_request_check_status(self.handle.as_ptr()) };
+        let Some(h) = self.handle else {
+            return Ok(true);
+        };
+        let status = unsafe { ucp_request_check_status(h.as_ptr()) };
         if status as usize >= ucs_status_t::UCS_ERR_LAST as usize {
             return Err(unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(status as i8) });
         }
         Ok(status == ucs_status_t::UCS_OK)
+    }
+
+    /// Cancel this request on `worker`, then free it (handle becomes inert).
+    ///
+    /// After cancel, further `check_finished` returns `Ok(true)`.
+    pub fn cancel(&mut self, worker: &worker::Worker) {
+        if let Some(h) = self.handle.take() {
+            // SAFETY: worker and request handles are valid UCX objects.
+            unsafe {
+                ucp_request_cancel(worker.handle, h.as_ptr());
+                ucp_request_free(h.as_ptr());
+            }
+        }
+    }
+
+    /// Explicit free without drop glue (handle becomes inert). Prefer Drop normally.
+    pub fn free(mut self) {
+        let _ = self
+            .handle
+            .take()
+            .map(|h| unsafe { ucp_request_free(h.as_ptr()) });
     }
 }
 
@@ -253,6 +306,7 @@ mod tests {
     pub struct CommsContext {
         pub ep: ep::Ep,
         pub worker: worker::Worker,
+        #[allow(dead_code)]
         pub context: context::Context,
     }
 
@@ -270,7 +324,7 @@ mod tests {
             .request_cleanup(cleanup)
             .request_size(8)
             .name("My Awesome Test")
-            .tag_sender_mask(std::u64::MAX)
+            .tag_sender_mask(u64::MAX)
             .estimated_num_eps(4)
             .estimated_num_ppn(2)
             .build();
@@ -296,9 +350,9 @@ mod tests {
             progressed = worker.progress();
         }
         Rc::new(CommsContext {
-            context: context,
-            worker: worker,
-            ep: ep,
+            context,
+            worker,
+            ep,
         })
     }
 

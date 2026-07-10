@@ -149,6 +149,7 @@ pub unsafe fn stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void)
 }
 
 #[cfg(test)]
+#[allow(clippy::let_unit_value, clippy::missing_transmute_annotations)]
 mod tests {
     use super::*;
     use crate::context::{Config, Context, Flags, ParamsBuilder as CtxParamsBuilder};

@@ -2,8 +2,12 @@
 name = "ucx-sys"
 version = "0.1.0"
 edition = "2021"
-description = "Low level Rust bindings"
-license = "BSD"
+description = "Low-level Rust bindings for UCX (Unified Communication X)"
+license = "BSD-3-Clause"
+readme = "README.md"
+keywords = ["ucx", "hpc", "rdma", "networking"]
+categories = ["api-bindings", "network-programming"]
+repository = "https://github.com/KirgenR/ucx-rs"
 
 [build-dependencies]
 bindgen = "0.70.1"

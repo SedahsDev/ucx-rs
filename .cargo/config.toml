@@ -1,5 +1,7 @@
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "link-args=-L/home/bzf/.local/ucx/lib", "-C", "link-args=-Wl,-rpath,/home/bzf/.local/ucx/lib"]
+# Portable defaults only. Point cargo at your UCX install via env:
+#   export UCX_PREFIX=/path/to/ucx
+#   export LD_LIBRARY_PATH=$UCX_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+# See .cargo/config.toml.example for optional local overrides.
 
-[env]
-LD_LIBRARY_PATH = { value = "/home/bzf/.local/ucx/lib", force = true }
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]

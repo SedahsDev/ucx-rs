@@ -69,8 +69,14 @@ impl Worker {
         Ep::new(ep_params, self)
     }
 
+    /// Cancel a pending request on this worker.
+    ///
+    /// Prefer [`Request::cancel`] which also frees the request handle.
     pub fn cancel_request(&self, request: &mut Request) {
-        unsafe { ucp_request_cancel(self.handle, request.handle.as_mut()) };
+        if let Some(h) = request.handle {
+            // SAFETY: both handles are live UCX objects.
+            unsafe { ucp_request_cancel(self.handle, h.as_ptr()) };
+        }
     }
 
     pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {

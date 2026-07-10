@@ -964,6 +964,11 @@ pub unsafe fn atomic_xor64(
 }
 
 #[cfg(test)]
+#[allow(
+    deprecated,
+    clippy::let_unit_value,
+    clippy::missing_transmute_annotations
+)]
 mod tests {
     use super::*;
 

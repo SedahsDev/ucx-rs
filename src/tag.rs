@@ -141,8 +141,11 @@ impl Worker {
 
 impl Request {
     pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, ucs_status_t> {
+        let Some(h) = self.handle else {
+            return Ok(None);
+        };
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::uninit();
-        let status = unsafe { ucp_tag_recv_request_test(self.handle.as_mut(), info.as_mut_ptr()) };
+        let status = unsafe { ucp_tag_recv_request_test(h.as_ptr(), info.as_mut_ptr()) };
         match status {
             ucs_status_t::UCS_OK => Ok(None),
             ucs_status_t::UCS_INPROGRESS => Ok(Some(unsafe {

@@ -76,10 +76,12 @@ pub struct EpAttr {
 impl Drop for Ep {
     fn drop(&mut self) {
         let param: ucp_request_param_t = unsafe { std::mem::zeroed() };
-        let result =
-            status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }).unwrap();
-        if let Some(mut req) = result {
-            unsafe { ucp_request_free(req.handle.as_mut()) };
+        // Close returns Ok(None) if complete, Ok(Some(req)) if in progress.
+        // Request::Drop frees the request; do not free manually (would double-free).
+        match status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }) {
+            Ok(Some(req)) => drop(req),
+            Ok(None) => {}
+            Err(_) => {}
         }
     }
 }
