@@ -581,13 +581,20 @@ pub unsafe fn ep_rkey_unpack(
 /// Get a local pointer to a remote memory region.
 ///
 /// Returns a local pointer that can be used to access remote memory directly.
-///
 /// # Safety
-/// Caller must ensure `rkey` is a valid remote key handle.
+/// Caller must ensure `rkey` is a valid, non-null remote key handle and `raddr`
+/// points to valid remote memory.
+///
+/// **IMPORTANT:** The underlying UCX C function `ucp_rkey_ptr` does not validate
+/// null rkey handles — it will segfault instead of returning an error. Always
+/// use [`RemoteKey::remote_ptr`] for safe access.
 pub unsafe fn rkey_ptr(
     rkey: ucp_rkey_h,
     raddr: u64,
 ) -> Result<*mut std::os::raw::c_void, ucs_status_t> {
+    if rkey.is_null() {
+        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+    }
     let mut addr: *mut std::os::raw::c_void = std::ptr::null_mut();
     status_to_result(ucp_rkey_ptr(rkey, raddr, &mut addr)).map(|()| addr)
 }
@@ -974,16 +981,25 @@ mod tests {
 
     /// Test with invalid rkey — this segfaults on some UCX versions instead of
     /// returning an error. The UCX library calls into the rkey internals without
-    /// checking for null, so we keep this ignored.
+    /// Regression test: calling rkey_ptr with null rkey now returns an error
+    /// instead of segfaulting. The Rust wrapper guards against null rkeys
+    /// before calling the C library.
     ///
     /// Root cause: `ucp_rkey_ptr` dereferences the rkey handle before validating it.
-    /// A fix would require patching UCX itself or using a valid (but unused) rkey.
+    /// The Rust wrapper now checks `rkey.is_null()` and returns `UCS_ERR_INVALID_PARAM`.
     #[test]
-    #[ignore = "ucp_rkey_ptr with null rkey segfaults instead of returning error — requires real rkey"]
     fn test_rkey_ptr_invalid() {
-        // Testing with an invalid rkey should return an error
         let result = unsafe { rkey_ptr(std::ptr::null_mut(), 0) };
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "Expected error for null rkey, got {:?}",
+            result
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ucs_status_t::UCS_ERR_INVALID_PARAM,
+            "Expected UCS_ERR_INVALID_PARAM for null rkey"
+        );
     }
 
     /// Structural test: verify rkey_ptr function exists in FFI.
