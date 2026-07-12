@@ -150,7 +150,6 @@ pub unsafe fn am_data_release(worker: ucp_worker_h, data: *mut std::os::raw::c_v
     ucp_am_data_release(worker, data);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +275,14 @@ mod tests {
     #[test]
     fn test_amrecvcb_signature_ok() {
         let result = unsafe {
-            dummy_am_cb(std::ptr::null_mut(), std::ptr::null(), 0, std::ptr::null_mut(), 0, std::ptr::null())
+            dummy_am_cb(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
         };
         assert_eq!(result, ucs_status_t::UCS_OK);
     }
@@ -284,7 +290,14 @@ mod tests {
     #[test]
     fn test_amrecvcb_signature_error() {
         let result = unsafe {
-            am_cb_return_error(std::ptr::null_mut(), std::ptr::null(), 0, std::ptr::null_mut(), 0, std::ptr::null())
+            am_cb_return_error(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
         };
         assert_eq!(result, ucs_status_t::UCS_ERR_INVALID_PARAM);
     }
@@ -293,7 +306,14 @@ mod tests {
     fn test_amrecvcb_callback_type_alias() {
         let cb: AmRecvCb = dummy_am_cb;
         let result = unsafe {
-            cb(std::ptr::null_mut(), std::ptr::null(), 0, std::ptr::null_mut(), 0, std::ptr::null())
+            cb(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
         };
         assert_eq!(result, ucs_status_t::UCS_OK);
     }
@@ -322,7 +342,11 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.id(42);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64)
+                != 0
+        );
         assert_eq!(params.handle.id, 42);
     }
 
@@ -340,7 +364,11 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.flags(CbFlags::WholeMsg);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
         assert_eq!(params.handle.flags, CbFlags::WholeMsg.bits());
     }
 
@@ -357,7 +385,11 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.cb(dummy_am_cb);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64)
+                != 0
+        );
     }
 
     #[test]
@@ -365,7 +397,11 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.cb(am_cb_return_error);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64)
+                != 0
+        );
     }
 
     #[test]
@@ -374,7 +410,11 @@ mod tests {
         let test_data: i32 = 42;
         builder.arg(&test_data as *const i32 as *mut c_void);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64)
+                != 0
+        );
         assert_eq!(params.handle.arg, &test_data as *const i32 as *mut c_void);
     }
 
@@ -383,7 +423,11 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.arg(std::ptr::null_mut());
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64)
+                != 0
+        );
         assert!(params.handle.arg.is_null());
     }
 
@@ -397,12 +441,31 @@ mod tests {
             .cb(dummy_am_cb)
             .arg(&test_data as *const i32 as *mut c_void);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64) != 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64) != 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64) != 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64)
+                != 0
+        );
         assert_eq!(params.handle.id, 7);
-        assert_eq!(params.handle.flags, (CbFlags::WholeMsg | CbFlags::PersistentData).bits());
+        assert_eq!(
+            params.handle.flags,
+            (CbFlags::WholeMsg | CbFlags::PersistentData).bits()
+        );
         assert_eq!(params.handle.arg, &test_data as *const i32 as *mut c_void);
     }
 
@@ -411,10 +474,26 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.id(100);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64) != 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64) == 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64) == 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64) == 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64)
+                == 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64)
+                == 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64)
+                == 0
+        );
     }
 
     #[test]
@@ -422,8 +501,16 @@ mod tests {
         let mut builder = HandlerParamsBuilder::new();
         builder.flags(CbFlags::PersistentData);
         let params = builder.build();
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64) != 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64) == 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64)
+                == 0
+        );
     }
 
     #[test]
@@ -434,7 +521,11 @@ mod tests {
         result.cb(dummy_am_cb);
         let params = builder.build();
         assert_eq!(params.handle.id, 1);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64)
+                != 0
+        );
     }
 
     #[test]
@@ -453,22 +544,34 @@ mod tests {
 
     #[test]
     fn test_field_mask_id_is_bit_0() {
-        assert_eq!(ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64, 1);
+        assert_eq!(
+            ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64,
+            1
+        );
     }
 
     #[test]
     fn test_field_mask_flags_is_bit_1() {
-        assert_eq!(ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64, 2);
+        assert_eq!(
+            ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS as u64,
+            2
+        );
     }
 
     #[test]
     fn test_field_mask_cb_is_bit_2() {
-        assert_eq!(ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64, 4);
+        assert_eq!(
+            ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64,
+            4
+        );
     }
 
     #[test]
     fn test_field_mask_arg_is_bit_3() {
-        assert_eq!(ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64, 8);
+        assert_eq!(
+            ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG as u64,
+            8
+        );
     }
 
     #[test]
@@ -491,7 +594,11 @@ mod tests {
         builder.id(0);
         let params = builder.build();
         assert_eq!(params.handle.id, 0);
-        assert!(params.handle.field_mask & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64) != 0);
+        assert!(
+            params.handle.field_mask
+                & (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64)
+                != 0
+        );
     }
 
     #[test]

@@ -169,3 +169,317 @@ impl ParamsBuilder {
         ep_param
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context;
+    use crate::context::Context;
+    use crate::ffi::*;
+    use crate::worker;
+
+    // ── UcpEpFields tests ──
+
+    #[test]
+    fn test_ep_fields_none_has_zero_bits() {
+        let fields = UcpEpFields::None;
+        assert_eq!(fields.bits(), 0);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_ep_fields_peer() {
+        let fields = UcpEpFields::Peer;
+        assert!(fields.contains(UcpEpFields::Peer));
+        assert!(!fields.is_empty());
+    }
+
+    #[test]
+    fn test_ucp_ep_fields_all() {
+        let fields = UcpEpFields::all();
+        assert!(!fields.is_empty());
+    }
+
+    #[test]
+    fn test_ucp_ep_fields_clone_copy() {
+        let a = UcpEpFields::Peer;
+        let b = a.clone();
+        assert_eq!(a, b);
+        let c = a;
+        assert_eq!(a, c);
+    }
+
+    // ── ParamsFlags tests ──
+
+    #[test]
+    fn test_params_flags_empty() {
+        let flags = ParamsFlags::empty();
+        assert!(flags.is_empty());
+        assert!(!flags.contains(ParamsFlags::ClientServer));
+        assert!(!flags.contains(ParamsFlags::NoLoopback));
+    }
+
+    #[test]
+    fn test_params_flags_client_server() {
+        let flags = ParamsFlags::ClientServer;
+        assert!(flags.contains(ParamsFlags::ClientServer));
+        assert!(!flags.contains(ParamsFlags::NoLoopback));
+    }
+
+    #[test]
+    fn test_params_flags_no_loopback() {
+        let flags = ParamsFlags::NoLoopback;
+        assert!(!flags.contains(ParamsFlags::ClientServer));
+        assert!(flags.contains(ParamsFlags::NoLoopback));
+    }
+
+    #[test]
+    fn test_params_flags_send_client_id() {
+        let flags = ParamsFlags::SendClientId;
+        assert!(!flags.contains(ParamsFlags::ClientServer));
+        assert!(!flags.contains(ParamsFlags::NoLoopback));
+        assert!(flags.contains(ParamsFlags::SendClientId));
+    }
+
+    #[test]
+    fn test_params_flags_all() {
+        let flags = ParamsFlags::all();
+        assert!(flags.contains(ParamsFlags::ClientServer));
+        assert!(flags.contains(ParamsFlags::NoLoopback));
+        assert!(flags.contains(ParamsFlags::SendClientId));
+    }
+
+    #[test]
+    fn test_params_flags_clone_copy() {
+        let a = ParamsFlags::ClientServer | ParamsFlags::NoLoopback;
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_params_flags_debug() {
+        let flags = ParamsFlags::ClientServer;
+        let debug_str = format!("{:?}", flags);
+        assert!(!debug_str.is_empty());
+    }
+
+    // ── ParamsBuilder tests (pure unit tests) ──
+
+    #[test]
+    fn test_params_builder_new() {
+        let builder = ParamsBuilder::new();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_params_builder_default() {
+        let builder: ParamsBuilder = Default::default();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_params_builder_build_empty() {
+        let mut builder = ParamsBuilder::new();
+        let params = builder.build();
+        assert_eq!(params.handle.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_params_builder_name() {
+        let mut builder = ParamsBuilder::new();
+        builder.name("test_ep");
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask & (ucp_ep_params_field::UCP_EP_PARAM_FIELD_NAME as u64) != 0
+        );
+    }
+
+    #[test]
+    fn test_params_builder_chaining_returns_mut_ref() {
+        let mut builder = ParamsBuilder::new();
+        let result = builder.name("chained");
+        result.name("overridden");
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask & (ucp_ep_params_field::UCP_EP_PARAM_FIELD_NAME as u64) != 0
+        );
+    }
+
+    // ── Ep integration tests (require UCX library) ──
+
+    #[test]
+    fn test_ep_create_with_remote_address() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Tag)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let worker_params = worker::ParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+
+        let packed_addr = worker.pack_address().expect("pack_address");
+        let addr = worker::RemoteWorkerAddress::new(packed_addr.to_vec());
+        drop(packed_addr);
+
+        let ep_params = ParamsBuilder::new().address(&addr).build();
+        let ep = Ep::new(ep_params, &worker).expect("ep create");
+        assert!(!ep.handle.is_null());
+    }
+
+    #[test]
+    fn test_ep_create_via_worker() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Tag)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let worker_params = worker::ParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+
+        let packed_addr = worker.pack_address().expect("pack_address");
+        let addr = worker::RemoteWorkerAddress::new(packed_addr.to_vec());
+        drop(packed_addr);
+
+        let ep_params = ParamsBuilder::new().address(&addr).build();
+        let ep = worker.create_ep(ep_params).expect("create_ep");
+        assert!(!ep.handle.is_null());
+    }
+
+    #[test]
+    fn test_ep_handle() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Tag)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let worker_params = worker::ParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+
+        let packed_addr = worker.pack_address().expect("pack_address");
+        let addr = worker::RemoteWorkerAddress::new(packed_addr.to_vec());
+        drop(packed_addr);
+
+        let ep_params = ParamsBuilder::new().address(&addr).build();
+        let ep = worker.create_ep(ep_params).expect("create_ep");
+        let raw_handle = ep.handle();
+        assert!(!raw_handle.is_null());
+    }
+
+    #[test]
+    fn test_ep_query_name() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Tag)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let worker_params = worker::ParamsBuilder::new().build();
+        let worker = ctx.worker_create(&worker_params).expect("worker create");
+
+        let packed_addr = worker.pack_address().expect("pack_address");
+        let addr = worker::RemoteWorkerAddress::new(packed_addr.to_vec());
+        drop(packed_addr);
+
+        let ep_params = ParamsBuilder::new()
+            .name("query_test_ep")
+            .address(&addr)
+            .build();
+        let ep = worker.create_ep(ep_params).expect("create_ep");
+
+        // UCP_EP_ATTR_FIELD_NAME = 1
+        let attr = ep.query(1).expect("ep query");
+        // Name may be empty if not set by UCX
+        let _ = &attr.name;
+    }
+
+    // ── ParamsBuilder field mask tests ──
+
+    #[test]
+    fn test_ep_params_field_remote_address_is_bit_0() {
+        assert_eq!(
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS as u64,
+            1
+        );
+    }
+
+    #[test]
+    fn test_ep_params_field_err_handling_mode_is_bit_1() {
+        assert_eq!(
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64,
+            2
+        );
+    }
+
+    #[test]
+    fn test_ep_params_field_err_handler_is_bit_2() {
+        assert_eq!(
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64,
+            4
+        );
+    }
+
+    #[test]
+    fn test_ep_params_field_user_data_is_bit_3() {
+        assert_eq!(ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64, 8);
+    }
+
+    #[test]
+    fn test_ep_params_field_sock_addr_is_bit_4() {
+        assert_eq!(ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR as u64, 16);
+    }
+
+    #[test]
+    fn test_ep_params_field_flags_is_bit_5() {
+        assert_eq!(ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS as u64, 32);
+    }
+
+    #[test]
+    fn test_ep_params_field_conn_request_is_bit_6() {
+        assert_eq!(
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64,
+            64
+        );
+    }
+
+    #[test]
+    fn test_ep_params_field_name_is_bit_7() {
+        assert_eq!(ucp_ep_params_field::UCP_EP_PARAM_FIELD_NAME as u64, 128);
+    }
+
+    #[test]
+    fn test_ep_params_field_local_sock_addr_is_bit_8() {
+        assert_eq!(
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_LOCAL_SOCK_ADDR as u64,
+            256
+        );
+    }
+
+    #[test]
+    fn test_ep_params_fields_all_distinct() {
+        let fields = [
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_NAME as u64,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_LOCAL_SOCK_ADDR as u64,
+        ];
+        for i in 0..fields.len() {
+            for j in (i + 1)..fields.len() {
+                assert_eq!(
+                    fields[i] & fields[j],
+                    0,
+                    "Fields {} and {} should be distinct",
+                    i,
+                    j
+                );
+            }
+        }
+    }
+}

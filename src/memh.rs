@@ -396,3 +396,485 @@ impl MemAttr {
         self.handle.mem_type
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context;
+    use crate::context::Context;
+    use crate::ffi::*;
+
+    // ── MemMapParamsBuilder tests (pure unit tests) ──
+
+    #[test]
+    fn test_mem_map_params_builder_new() {
+        let builder = MemMapParamsBuilder::new();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_default() {
+        let builder: MemMapParamsBuilder = Default::default();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_build_empty() {
+        let mut builder = MemMapParamsBuilder::new();
+        let params = builder.build();
+        assert_eq!(params.handle.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_address() {
+        let mut builder = MemMapParamsBuilder::new();
+        let data: [u8; 64] = [0; 64];
+        builder.address(data.as_ptr() as *mut std::os::raw::c_void);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_length() {
+        let mut builder = MemMapParamsBuilder::new();
+        builder.length(4096);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH as u64)
+                != 0
+        );
+        assert_eq!(params.handle.length, 4096);
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_flags() {
+        let mut builder = MemMapParamsBuilder::new();
+        builder.flags(0);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_prot() {
+        let mut builder = MemMapParamsBuilder::new();
+        builder.prot(0x3); // PROT_READ | PROT_WRITE
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_PROT as u64)
+                != 0
+        );
+        assert_eq!(params.handle.prot, 0x3);
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_memory_type() {
+        let mut builder = MemMapParamsBuilder::new();
+        builder.memory_type(ucs_memory_type_t::UCS_MEMORY_TYPE_HOST);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_full_chain() {
+        let mut builder = MemMapParamsBuilder::new();
+        let data: [u8; 4096] = [0; 4096];
+        builder
+            .address(data.as_ptr() as *mut std::os::raw::c_void)
+            .length(4096)
+            .flags(0)
+            .prot(0x3)
+            .memory_type(ucs_memory_type_t::UCS_MEMORY_TYPE_HOST);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_PROT as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_map_params_builder_chaining_returns_mut_ref() {
+        let mut builder = MemMapParamsBuilder::new();
+        let data: [u8; 128] = [0; 128];
+        let result = builder.address(data.as_ptr() as *mut std::os::raw::c_void);
+        result.length(128);
+        let params = builder.build();
+        assert_eq!(params.handle.length, 128);
+    }
+
+    // ── MemAdviseParamsBuilder tests (pure unit tests) ──
+
+    #[test]
+    fn test_mem_advise_params_builder_new() {
+        let builder = MemAdviseParamsBuilder::new();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_default() {
+        let builder: MemAdviseParamsBuilder = Default::default();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_build_empty() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        let params = builder.build();
+        assert_eq!(params.handle.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_address() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        let data: [u8; 64] = [0; 64];
+        builder.address(data.as_ptr() as *mut std::os::raw::c_void);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADDRESS as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_length() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        builder.length(2048);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_LENGTH as u64)
+                != 0
+        );
+        assert_eq!(params.handle.length, 2048);
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_advice_normal() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        builder.advice(ucp_mem_advice_t::UCP_MADV_NORMAL);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_advice_dont_need() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        builder.advice(ucp_mem_advice_t::UCP_MADV_WILLNEED);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64)
+                != 0
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_params_builder_full_chain() {
+        let mut builder = MemAdviseParamsBuilder::new();
+        let data: [u8; 1024] = [0; 1024];
+        builder
+            .address(data.as_ptr() as *mut std::os::raw::c_void)
+            .length(1024)
+            .advice(ucp_mem_advice_t::UCP_MADV_NORMAL);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADDRESS as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_LENGTH as u64)
+                != 0
+        );
+        assert!(
+            params.handle.field_mask
+                & (ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64)
+                != 0
+        );
+    }
+
+    // ── MemhPackParamsBuilder tests (pure unit tests) ──
+
+    #[test]
+    fn test_memh_pack_params_builder_new() {
+        let builder = MemhPackParamsBuilder::new();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_memh_pack_params_builder_default() {
+        let builder: MemhPackParamsBuilder = Default::default();
+        assert_eq!(builder.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_memh_pack_params_builder_build_empty() {
+        let mut builder = MemhPackParamsBuilder::new();
+        let params = builder.build();
+        assert_eq!(params.handle.field_mask, 0u64);
+    }
+
+    #[test]
+    fn test_memh_pack_params_builder_flags() {
+        let mut builder = MemhPackParamsBuilder::new();
+        builder.flags(0);
+        let params = builder.build();
+        assert!(
+            params.handle.field_mask
+                & (ucp_memh_pack_params_field::UCP_MEMH_PACK_PARAM_FIELD_FLAGS as u64)
+                != 0
+        );
+    }
+
+    // ── PackedMemhBuffer tests (pure unit tests on empty buffer) ──
+
+    #[test]
+    fn test_packed_memh_buffer_empty_constructor() {
+        // Create a buffer with null pointer to test empty methods
+        let buf = PackedMemhBuffer {
+            buffer: std::ptr::null_mut(),
+            length: 0,
+        };
+        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
+        assert!(buf.as_bytes().is_empty());
+        assert!(buf.as_ptr().is_null());
+    }
+
+    // ── PackedRkeyBuffer tests (pure unit tests on empty buffer) ──
+
+    #[test]
+    fn test_packed_rkey_buffer_empty_constructor() {
+        let buf = PackedRkeyBuffer {
+            buffer: std::ptr::null_mut(),
+            size: 0,
+        };
+        assert_eq!(buf.size(), 0);
+        assert!(buf.as_bytes().is_empty());
+        assert!(buf.as_ptr().is_null());
+    }
+
+    // ── MemHandle integration tests (require UCX library) ──
+
+    #[test]
+    fn test_mem_handle_map_and_query() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Rma)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let data: Vec<u8> = vec![0xAB; 4096];
+        let mut builder = MemMapParamsBuilder::new();
+        builder
+            .address(data.as_ptr() as *mut std::os::raw::c_void)
+            .length(4096);
+
+        let memh = MemHandle::map(&ctx, &mut builder).expect("mem_map");
+        assert!(!memh.as_raw().is_null());
+
+        // Query just needs to succeed — ucp_mem_query returns basic attrs
+        // Note: length/mem_type may be 0 if field_mask wasn't set by caller
+        let _attr = memh.query().expect("mem_query");
+    }
+
+    #[test]
+    fn test_mem_handle_map_and_pack_rkey() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Rma)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let data: Vec<u8> = vec![0xCD; 4096];
+        let mut builder = MemMapParamsBuilder::new();
+        builder
+            .address(data.as_ptr() as *mut std::os::raw::c_void)
+            .length(4096);
+
+        let memh = MemHandle::map(&ctx, &mut builder).expect("mem_map");
+
+        let rkey = pack_rkey(&ctx, &memh).expect("pack_rkey");
+        assert!(!rkey.as_ptr().is_null());
+        assert!(rkey.size() > 0);
+        assert!(!rkey.as_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_mem_handle_as_raw() {
+        let config = context::Config::default();
+        let ctx_params = context::ParamsBuilder::new()
+            .features(context::Flags::Rma)
+            .build();
+        let ctx = Context::new(&config, &ctx_params).expect("context init");
+
+        let data: Vec<u8> = vec![0; 1024];
+        let mut builder = MemMapParamsBuilder::new();
+        builder
+            .address(data.as_ptr() as *mut std::os::raw::c_void)
+            .length(1024);
+
+        let memh = MemHandle::map(&ctx, &mut builder).expect("mem_map");
+        let raw = memh.as_raw();
+        assert!(!raw.is_null());
+    }
+
+    // ── MemMapParamsBuilder field mask tests ──
+
+    #[test]
+    fn test_mem_map_field_address_is_bit_0() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS as u64,
+            1
+        );
+    }
+
+    #[test]
+    fn test_mem_map_field_length_is_bit_1() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH as u64,
+            2
+        );
+    }
+
+    #[test]
+    fn test_mem_map_field_flags_is_bit_2() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_FLAGS as u64,
+            4
+        );
+    }
+
+    #[test]
+    fn test_mem_map_field_prot_is_bit_3() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_PROT as u64,
+            8
+        );
+    }
+
+    #[test]
+    fn test_mem_map_field_memory_type_is_bit_4() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64,
+            16
+        );
+    }
+
+    #[test]
+    fn test_mem_map_field_exported_memh_buffer_is_bit_5() {
+        assert_eq!(
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_EXPORTED_MEMH_BUFFER as u64,
+            32
+        );
+    }
+
+    #[test]
+    fn test_mem_map_fields_all_distinct() {
+        let fields = [
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS as u64,
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH as u64,
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_FLAGS as u64,
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_PROT as u64,
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64,
+            ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_EXPORTED_MEMH_BUFFER as u64,
+        ];
+        for i in 0..fields.len() {
+            for j in (i + 1)..fields.len() {
+                assert_eq!(
+                    fields[i] & fields[j],
+                    0,
+                    "Fields {} and {} should be distinct",
+                    i,
+                    j
+                );
+            }
+        }
+    }
+
+    // ── MemAdviseParamsBuilder field mask tests ──
+
+    #[test]
+    fn test_mem_advise_field_address_is_bit_0() {
+        assert_eq!(
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADDRESS as u64,
+            1
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_field_length_is_bit_1() {
+        assert_eq!(
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_LENGTH as u64,
+            2
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_field_advice_is_bit_2() {
+        assert_eq!(
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64,
+            4
+        );
+    }
+
+    #[test]
+    fn test_mem_advise_fields_all_distinct() {
+        let fields = [
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADDRESS as u64,
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_LENGTH as u64,
+            ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64,
+        ];
+        for i in 0..fields.len() {
+            for j in (i + 1)..fields.len() {
+                assert_eq!(
+                    fields[i] & fields[j],
+                    0,
+                    "Fields {} and {} should be distinct",
+                    i,
+                    j
+                );
+            }
+        }
+    }
+}
