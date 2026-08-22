@@ -3,7 +3,9 @@
 //! Wraps `ucp_put_nbx`, `ucp_get_nbx`, `ucp_atomic_op_nbx`,
 //! `ucp_ep_rkey_unpack`, `ucp_rkey_ptr`, and `ucp_rkey_destroy`.
 
+use crate::context::Context;
 use crate::ffi::*;
+use crate::memh::MemHandle;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::Request;
@@ -21,12 +23,49 @@ pub struct RemoteKey {
     handle: ucp_rkey_h,
 }
 
+fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| ucs_status_t::UCS_ERR_OUT_OF_RANGE)?;
+    let mut framed = Vec::with_capacity(4 + payload.len());
+    framed.extend_from_slice(&payload_len.to_le_bytes());
+    framed.extend_from_slice(payload);
+    Ok(framed)
+}
+
+fn unframe_rkey_payload(buffer: &[u8]) -> Result<&[u8], ucs_status_t> {
+    if buffer.len() < 4 {
+        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+    }
+    let payload_len = u32::from_le_bytes(buffer[..4].try_into().unwrap()) as usize;
+    if payload_len != buffer.len() - 4 {
+        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+    }
+    Ok(&buffer[4..])
+}
+
 impl RemoteKey {
-    /// Unpack a remote key from a packed buffer on this endpoint.
+    /// Pack a memory handle using the framed format consumed by [`Self::unpack`].
+    ///
+    /// The wire format is exactly `[4-byte little-endian payload length][payload]`.
+    /// The payload is the opaque byte sequence returned by UCX's `ucp_rkey_pack`.
+    pub fn pack(context: &Context, memh: &MemHandle) -> Result<Vec<u8>, ucs_status_t> {
+        let mut buffer = std::ptr::null_mut();
+        let mut size = 0usize;
+        status_to_result(unsafe {
+            ucp_rkey_pack(context.handle, memh.as_raw(), &mut buffer, &mut size)
+        })?;
+        let result =
+            frame_rkey_payload(unsafe { std::slice::from_raw_parts(buffer as *const u8, size) });
+        unsafe { ucp_rkey_buffer_release(buffer) };
+        result
+    }
+
+    /// Unpack `[4-byte little-endian payload length][opaque UCX payload]`.
     pub fn unpack(ep: &Ep, rkey_buffer: &[u8]) -> Result<RemoteKey, ucs_status_t> {
+        let payload = unframe_rkey_payload(rkey_buffer)?;
         let mut rkey: ucp_rkey_h = std::ptr::null_mut();
         status_to_result(unsafe {
-            ucp_ep_rkey_unpack(ep.handle, rkey_buffer.as_ptr() as *const _, &mut rkey)
+            ucp_ep_rkey_unpack(ep.handle, payload.as_ptr() as *const _, &mut rkey)
         })
         .map(|()| RemoteKey { handle: rkey })
     }
@@ -51,6 +90,27 @@ impl Drop for RemoteKey {
 /// All methods take `&self` and safe types (`&[u8]`, `&mut [u8]`, `u64`, `&RemoteKey`),
 /// hiding the `unsafe` FFI calls internally. Follows the same pattern as `Ep::tag_send`.
 impl Ep {
+    /// Get a local pointer to remote memory for intra-node one-sided access.
+    ///
+    /// UCX returns only a pointer, so `len` must be the caller's independently
+    /// known valid length. The slice is valid only while `rkey` and its remote
+    /// allocation remain valid. The key must come from a real pack/unpack
+    /// operation; a null or fabricated key may segfault inside libucp before
+    /// returning an error.
+    #[allow(clippy::mut_from_ref)]
+    pub fn rkey_ptr<'a>(
+        &self,
+        rkey: &'a RemoteKey,
+        remote_addr: u64,
+        len: usize,
+    ) -> Result<&'a mut [u8], ucs_status_t> {
+        let mut addr = std::ptr::null_mut();
+        status_to_result(unsafe { ucp_rkey_ptr(rkey.handle, remote_addr, &mut addr) })?;
+        if addr.is_null() {
+            return Err(ucs_status_t::UCS_ERR_INVALID_ADDR);
+        }
+        Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
+    }
     // ── Put / Get ──
 
     /// Put data to a remote memory location.
@@ -977,6 +1037,14 @@ pub unsafe fn atomic_xor64(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rkey_framing_round_trip_preserves_payload() {
+        let payload = [0x12, 0x34, 0xab, 0xcd];
+        let framed = frame_rkey_payload(&payload).unwrap();
+        assert_eq!(&framed[..4], &(payload.len() as u32).to_le_bytes());
+        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
+    }
 
     #[test]
     #[allow(clippy::type_complexity)]
