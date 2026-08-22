@@ -37,6 +37,18 @@ impl Ep {
         }
     }
 
+    /// Flush all outstanding AMO and RMA operations on this endpoint.
+    ///
+    /// Completion guarantees that operations issued before the flush have
+    /// completed at both the origin and target. Unlike [`Self::flush_nbx`],
+    /// this wrapper preserves immediate completion and UCX error statuses.
+    pub fn flush(
+        &self,
+        params: &crate::RequestParam,
+    ) -> Result<Option<crate::Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
+    }
+
     /// Query endpoint attributes.
     ///
     /// Field masks:
@@ -63,6 +75,17 @@ impl Ep {
                 user_data: attr.user_data,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_endpoint_flush_api_signature() {
+        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, ucs_status_t> =
+            Ep::flush;
     }
 }
 
