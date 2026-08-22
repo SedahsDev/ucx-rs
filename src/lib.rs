@@ -85,8 +85,9 @@ impl Request {
             return Ok(true);
         };
         let status = unsafe { ucp_request_check_status(h.as_ptr()) };
-        if status as usize >= ucs_status_t::UCS_ERR_LAST as usize {
-            return Err(unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(status as i8) });
+        let status_ptr = status as isize as usize as ucs_status_ptr_t;
+        if status_ptr_is_err(status_ptr) {
+            return Err(status_from_ptr(status_ptr));
         }
         Ok(status == ucs_status_t::UCS_OK)
     }
@@ -128,22 +129,101 @@ impl Request {
 
 #[inline]
 pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, ucs_status_t> {
-    // This is equivlent to the UCS_PTR_IS_ERR() macro.
-    if ptr as usize >= ucs_status_t::UCS_ERR_LAST as usize {
-        // The transmute() function is how you access C style memory magic. This function will
-        // take the intput pointer and then translate it into i8 and then rust will turn the i8
-        // into the proper ucs_status_t.
-        return Err(unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(ptr as i8) });
+    if status_ptr_is_err(ptr) {
+        return Err(status_from_ptr(ptr));
     }
     Ok(Request::new(ptr))
 }
 
 #[inline]
 pub fn status_to_result(status: ucs_status_t) -> Result<(), ucs_status_t> {
-    if (status as i8) < 0 {
+    // Per ucs/type/status.h, UCS_ERR_* values are negative and success values are non-negative.
+    if status_value_is_err(status) {
         return Err(status);
     }
     Ok(())
+}
+
+/// Classify and decode UCX's tagged status pointer representation.
+///
+/// SAFETY/correctness: ucs/type/status.h defines `UCS_PTR_IS_ERR(ptr)` as
+/// `((uintptr_t)ptr >= (uintptr_t)UCS_ERR_LAST)` and `UCS_PTR_STATUS(ptr)` as
+/// `(ucs_status_t)(intptr_t)ptr`. Casting through `isize` preserves the signed
+/// status value and avoids truncating an arbitrary pointer to `i8`.
+#[inline]
+fn status_ptr_is_err(ptr: ucs_status_ptr_t) -> bool {
+    ptr as usize >= (ucs_status_t::UCS_ERR_LAST as isize) as usize
+}
+
+#[inline]
+fn status_value_is_err(status: ucs_status_t) -> bool {
+    (status as i8) < 0
+}
+
+#[inline]
+fn status_from_ptr(ptr: ucs_status_ptr_t) -> ucs_status_t {
+    let status = ptr as isize as i32;
+    match status {
+        -1 => ucs_status_t::UCS_ERR_NO_MESSAGE,
+        -2 => ucs_status_t::UCS_ERR_NO_RESOURCE,
+        -3 => ucs_status_t::UCS_ERR_IO_ERROR,
+        -4 => ucs_status_t::UCS_ERR_NO_MEMORY,
+        -5 => ucs_status_t::UCS_ERR_INVALID_PARAM,
+        -6 => ucs_status_t::UCS_ERR_UNREACHABLE,
+        -7 => ucs_status_t::UCS_ERR_INVALID_ADDR,
+        -8 => ucs_status_t::UCS_ERR_NOT_IMPLEMENTED,
+        -9 => ucs_status_t::UCS_ERR_MESSAGE_TRUNCATED,
+        -10 => ucs_status_t::UCS_ERR_NO_PROGRESS,
+        -11 => ucs_status_t::UCS_ERR_BUFFER_TOO_SMALL,
+        -12 => ucs_status_t::UCS_ERR_NO_ELEM,
+        -13 => ucs_status_t::UCS_ERR_SOME_CONNECTS_FAILED,
+        -14 => ucs_status_t::UCS_ERR_NO_DEVICE,
+        -15 => ucs_status_t::UCS_ERR_BUSY,
+        -16 => ucs_status_t::UCS_ERR_CANCELED,
+        -17 => ucs_status_t::UCS_ERR_SHMEM_SEGMENT,
+        -18 => ucs_status_t::UCS_ERR_ALREADY_EXISTS,
+        -19 => ucs_status_t::UCS_ERR_OUT_OF_RANGE,
+        -20 => ucs_status_t::UCS_ERR_TIMED_OUT,
+        -21 => ucs_status_t::UCS_ERR_EXCEEDS_LIMIT,
+        -22 => ucs_status_t::UCS_ERR_UNSUPPORTED,
+        -23 => ucs_status_t::UCS_ERR_REJECTED,
+        -24 => ucs_status_t::UCS_ERR_NOT_CONNECTED,
+        -25 => ucs_status_t::UCS_ERR_CONNECTION_RESET,
+        -40 => ucs_status_t::UCS_ERR_FIRST_LINK_FAILURE,
+        -59 => ucs_status_t::UCS_ERR_LAST_LINK_FAILURE,
+        -60 => ucs_status_t::UCS_ERR_FIRST_ENDPOINT_FAILURE,
+        -80 => ucs_status_t::UCS_ERR_ENDPOINT_TIMEOUT,
+        -89 => ucs_status_t::UCS_ERR_LAST_ENDPOINT_FAILURE,
+        -100 => ucs_status_t::UCS_ERR_LAST,
+        _ => panic!("UCX returned an invalid error status pointer"),
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn status_ptr_to_result_immediate_completion() {
+        assert!(matches!(
+            status_ptr_to_result(ucs_status_t::UCS_OK as usize as ucs_status_ptr_t),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn status_ptr_to_result_decodes_error() {
+        assert!(matches!(
+            status_ptr_to_result(ucs_status_t::UCS_ERR_NO_MEMORY as usize as ucs_status_ptr_t),
+            Err(ucs_status_t::UCS_ERR_NO_MEMORY)
+        ));
+    }
+
+    #[test]
+    fn request_check_finished_on_freed_handle_is_complete() {
+        let request = Request { handle: None };
+        assert_eq!(request.check_finished(), Ok(true));
+    }
 }
 
 pub struct RequestParam {
