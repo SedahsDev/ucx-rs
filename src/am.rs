@@ -127,10 +127,7 @@ pub struct HandlerParams {
 ///
 /// # Safety
 /// Caller must ensure `data_desc` is a valid data descriptor from the AM handler.
-#[deprecated(
-    since = "0.1.0",
-    note = "Use a safe wrapper around AM receive data instead"
-)]
+#[deprecated(since = "0.1.0", note = "Use Worker::am_recv_data instead")]
 pub unsafe fn am_recv_data_nbx(
     worker: ucp_worker_h,
     data_desc: *mut std::os::raw::c_void,
@@ -148,4 +145,22 @@ pub unsafe fn am_recv_data_nbx(
 #[deprecated(since = "0.1.0", note = "Use Worker::am_data_release() instead")]
 pub unsafe fn am_data_release(worker: ucp_worker_h, data: *mut std::os::raw::c_void) {
     ucp_am_data_release(worker, data);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type AmRecvDataFn = fn(
+        &Worker,
+        std::ptr::NonNull<std::ffi::c_void>,
+        &mut [u8],
+        &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t>;
+
+    #[test]
+    fn test_worker_am_receive_api_signatures() {
+        let _recv: AmRecvDataFn = Worker::am_recv_data;
+        let _release: fn(&Worker, std::ptr::NonNull<std::ffi::c_void>) = Worker::am_data_release;
+    }
 }

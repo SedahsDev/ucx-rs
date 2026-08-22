@@ -83,6 +83,33 @@ impl Worker {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
 
+    /// Receive the data described by an active-message callback descriptor.
+    ///
+    /// UCX takes ownership of `data_desc` after this call, including when the
+    /// operation fails. The returned request, when present, owns its UCX
+    /// request handle and can be polled with [`Request::check_finished`].
+    pub fn am_recv_data(
+        &self,
+        data_desc: NonNull<std::ffi::c_void>,
+        buffer: &mut [u8],
+        params: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_am_recv_data_nbx(
+                self.handle,
+                data_desc.as_ptr(),
+                buffer.as_mut_ptr() as _,
+                buffer.len(),
+                &params.handle,
+            )
+        })
+    }
+
+    /// Release active-message data retained after an AM callback.
+    pub fn am_data_release(&self, data: NonNull<std::ffi::c_void>) {
+        unsafe { ucp_am_data_release(self.handle, data.as_ptr()) }
+    }
+
     /// Flush the worker (legacy variant).
     pub fn flush_nb(&self, flags: u32) -> crate::Request {
         unsafe {
