@@ -1,3 +1,13 @@
+//! Rust bindings for UCX's UCP API.
+//!
+//! The default threading model is a single-threaded progress loop. `Context`,
+//! `Worker`, `Ep`, `MemHandle`, and `RemoteKey` are intentionally neither
+//! `Send` nor `Sync`: UCX objects are not thread-safe unless the relevant
+//! objects are created with `UCS_THREAD_MODE_MULTI`.
+//!
+//! Multi-threaded applications must provide their own synchronization and
+//! ensure it matches UCX's threading contract. An `MtWorker` abstraction may be
+//! added in a future release; it is not provided by this crate currently.
 #![allow(unused_imports)]
 
 mod ffi;
