@@ -195,9 +195,48 @@ fn status_from_ptr(ptr: ucs_status_ptr_t) -> ucs_status_t {
         -80 => ucs_status_t::UCS_ERR_ENDPOINT_TIMEOUT,
         -89 => ucs_status_t::UCS_ERR_LAST_ENDPOINT_FAILURE,
         -100 => ucs_status_t::UCS_ERR_LAST,
+        // The committed bindgen enum contains every status value UCX can return;
+        // reaching this arm indicates an invalid or unsupported status pointer.
         _ => panic!("UCX returned an invalid error status pointer"),
     }
 }
+
+// Keep the decoder's literal status table synchronized with the bindgen output.
+// These assertions are evaluated while compiling, so regenerated bindings that
+// change a status discriminant fail immediately instead of silently misdecoding.
+const _: () = {
+    assert!(ucs_status_t::UCS_ERR_NO_MESSAGE as i32 == -1);
+    assert!(ucs_status_t::UCS_ERR_NO_RESOURCE as i32 == -2);
+    assert!(ucs_status_t::UCS_ERR_IO_ERROR as i32 == -3);
+    assert!(ucs_status_t::UCS_ERR_NO_MEMORY as i32 == -4);
+    assert!(ucs_status_t::UCS_ERR_INVALID_PARAM as i32 == -5);
+    assert!(ucs_status_t::UCS_ERR_UNREACHABLE as i32 == -6);
+    assert!(ucs_status_t::UCS_ERR_INVALID_ADDR as i32 == -7);
+    assert!(ucs_status_t::UCS_ERR_NOT_IMPLEMENTED as i32 == -8);
+    assert!(ucs_status_t::UCS_ERR_MESSAGE_TRUNCATED as i32 == -9);
+    assert!(ucs_status_t::UCS_ERR_NO_PROGRESS as i32 == -10);
+    assert!(ucs_status_t::UCS_ERR_BUFFER_TOO_SMALL as i32 == -11);
+    assert!(ucs_status_t::UCS_ERR_NO_ELEM as i32 == -12);
+    assert!(ucs_status_t::UCS_ERR_SOME_CONNECTS_FAILED as i32 == -13);
+    assert!(ucs_status_t::UCS_ERR_NO_DEVICE as i32 == -14);
+    assert!(ucs_status_t::UCS_ERR_BUSY as i32 == -15);
+    assert!(ucs_status_t::UCS_ERR_CANCELED as i32 == -16);
+    assert!(ucs_status_t::UCS_ERR_SHMEM_SEGMENT as i32 == -17);
+    assert!(ucs_status_t::UCS_ERR_ALREADY_EXISTS as i32 == -18);
+    assert!(ucs_status_t::UCS_ERR_OUT_OF_RANGE as i32 == -19);
+    assert!(ucs_status_t::UCS_ERR_TIMED_OUT as i32 == -20);
+    assert!(ucs_status_t::UCS_ERR_EXCEEDS_LIMIT as i32 == -21);
+    assert!(ucs_status_t::UCS_ERR_UNSUPPORTED as i32 == -22);
+    assert!(ucs_status_t::UCS_ERR_REJECTED as i32 == -23);
+    assert!(ucs_status_t::UCS_ERR_NOT_CONNECTED as i32 == -24);
+    assert!(ucs_status_t::UCS_ERR_CONNECTION_RESET as i32 == -25);
+    assert!(ucs_status_t::UCS_ERR_FIRST_LINK_FAILURE as i32 == -40);
+    assert!(ucs_status_t::UCS_ERR_LAST_LINK_FAILURE as i32 == -59);
+    assert!(ucs_status_t::UCS_ERR_FIRST_ENDPOINT_FAILURE as i32 == -60);
+    assert!(ucs_status_t::UCS_ERR_ENDPOINT_TIMEOUT as i32 == -80);
+    assert!(ucs_status_t::UCS_ERR_LAST_ENDPOINT_FAILURE as i32 == -89);
+    assert!(ucs_status_t::UCS_ERR_LAST as i32 == -100);
+};
 
 #[cfg(test)]
 mod status_tests {

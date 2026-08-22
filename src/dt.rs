@@ -112,6 +112,8 @@ mod tests {
         // Just verify the contig type creation works.
         let dt = dt_make_contig(4);
         assert_ne!(dt, dt_make_contig(8));
-        assert_eq!(dt_make_contig(1), super::UCP_DATATYPE_CONTIG);
+        assert_eq!(dt_make_contig(1), 8);
+        assert_eq!(dt_make_contig(4), 32);
+        assert_eq!(dt_make_contig(8), 64);
     }
 }
