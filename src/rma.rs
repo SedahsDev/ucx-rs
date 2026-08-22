@@ -70,6 +70,26 @@ impl RemoteKey {
         .map(|()| RemoteKey { handle: rkey })
     }
 
+    /// Get a local pointer to remote memory for intra-node one-sided access.
+    ///
+    /// UCX returns only a pointer, so `len` must be the caller's independently
+    /// known valid length. The slice is valid only while this key and its remote
+    /// allocation remain valid. The returned slice must not overlap any other
+    /// live reference to that memory; the caller must ensure no other
+    /// `rkey_ptr` slice or local reference aliases it. Remote writes through
+    /// UCX RMA/AMO while the slice is borrowed are outside Rust's aliasing model;
+    /// synchronize externally and do not hold overlapping `&mut` references
+    /// across such operations.
+    #[allow(clippy::mut_from_ref)]
+    pub fn rkey_ptr(&self, remote_addr: u64, len: usize) -> Result<&mut [u8], ucs_status_t> {
+        let mut addr = std::ptr::null_mut();
+        status_to_result(unsafe { ucp_rkey_ptr(self.handle, remote_addr, &mut addr) })?;
+        if addr.is_null() {
+            return Err(ucs_status_t::UCS_ERR_INVALID_ADDR);
+        }
+        Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
+    }
+
     /// Get the raw rkey handle.
     #[inline]
     pub fn as_raw(&self) -> ucp_rkey_h {
@@ -1044,6 +1064,15 @@ mod tests {
         let framed = frame_rkey_payload(&payload).unwrap();
         assert_eq!(&framed[..4], &(payload.len() as u32).to_le_bytes());
         assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
+    }
+
+    #[test]
+    fn rkey_unpack_accepts_public_framed_bytes() {
+        let payload = [0x12, 0x34, 0xab, 0xcd];
+        let framed = frame_rkey_payload(&payload).unwrap();
+        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
+        let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, ucs_status_t> = RemoteKey::unpack;
+        let _ = unpack;
     }
 
     #[test]

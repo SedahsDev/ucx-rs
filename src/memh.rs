@@ -369,37 +369,64 @@ pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedRkeyBuffer
         ucp_rkey_pack(context.handle, memh.handle, &mut buffer, &mut size)
     });
     match result {
-        Ok(()) => Ok(PackedRkeyBuffer { buffer, size }),
+        Ok(()) => match PackedRkeyBuffer::from_raw_parts(buffer, size) {
+            Ok(packed) => Ok(packed),
+            Err(error) => {
+                unsafe { ucp_rkey_buffer_release(buffer) };
+                Err(error)
+            }
+        },
         Err(e) => Err(e),
     }
 }
 
 /// RAII wrapper for a packed rkey buffer from `ucp_rkey_pack`.
+///
+/// `as_bytes()` exposes the canonical framed wire representation
+/// `[4-byte little-endian payload length][opaque UCX payload]`, which can be
+/// passed directly to `RemoteKey::unpack`.
 pub struct PackedRkeyBuffer {
     buffer: *mut std::os::raw::c_void,
     size: usize,
+    framed: Vec<u8>,
 }
 
 impl PackedRkeyBuffer {
-    /// Get a pointer to the buffer data.
+    fn from_raw_parts(
+        buffer: *mut std::os::raw::c_void,
+        size: usize,
+    ) -> Result<Self, ucs_status_t> {
+        let payload = unsafe { std::slice::from_raw_parts(buffer as *const u8, size) };
+        let payload_len = u32::try_from(size).map_err(|_| ucs_status_t::UCS_ERR_OUT_OF_RANGE)?;
+        let mut framed = Vec::with_capacity(4 + size);
+        framed.extend_from_slice(&payload_len.to_le_bytes());
+        framed.extend_from_slice(payload);
+        Ok(Self {
+            buffer,
+            size,
+            framed,
+        })
+    }
+
+    /// Get a pointer to the raw UCX payload.
     #[inline]
     pub fn as_ptr(&self) -> *const std::os::raw::c_void {
         self.buffer as *const _
     }
 
-    /// Get the buffer size in bytes.
+    /// Get the raw UCX payload size in bytes.
     #[inline]
     pub fn size(&self) -> usize {
         self.size
     }
 
-    /// Get the buffer contents as a safe byte slice.
+    /// Get the canonical wire bytes as `[4-byte little-endian payload length][payload]`.
+    /// These are the bytes accepted by `RemoteKey::unpack`; use this accessor for
+    /// sending a packed key to a peer. The raw UCX payload remains available via
+    /// `as_ptr` and `size` for direct FFI use.
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        if self.buffer.is_null() || self.size == 0 {
-            return &[];
-        }
-        unsafe { std::slice::from_raw_parts(self.buffer as *const u8, self.size) }
+        &self.framed
     }
 }
 
@@ -442,6 +469,17 @@ impl MemAttr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_rkey_as_bytes_is_framed_wire_data() {
+        let packed = PackedRkeyBuffer {
+            buffer: std::ptr::null_mut(),
+            size: 3,
+            framed: vec![3, 0, 0, 0, 0xaa, 0xbb, 0xcc],
+        };
+        assert_eq!(packed.as_bytes(), &[3, 0, 0, 0, 0xaa, 0xbb, 0xcc]);
+        assert_eq!(&packed.as_bytes()[4..], &[0xaa, 0xbb, 0xcc]);
+    }
 
     #[test]
     fn map_slice_signature_keeps_guard_borrowed() {
