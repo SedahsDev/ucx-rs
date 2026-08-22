@@ -139,22 +139,37 @@ impl Worker {
     }
 }
 
+fn map_tag_recv_test_status(
+    status: ucs_status_t,
+    info: std::mem::MaybeUninit<ucp_tag_recv_info_t>,
+) -> Result<Option<TagInfo>, ucs_status_t> {
+    match status {
+        ucs_status_t::UCS_OK => Ok(Some(TagInfo {
+            // UCX initializes `info` only for a completed request.
+            handle: unsafe { info.assume_init() },
+        })),
+        ucs_status_t::UCS_INPROGRESS => Ok(None),
+        _ => Err(status),
+    }
+}
+
 impl Request {
+    /// Test a tagged receive request and return its receive information when complete.
+    ///
+    /// `Ok(Some(info))` means the receive completed and `info` contains the sender tag
+    /// and length reported by UCX. `Ok(None)` means the request is still in progress.
+    /// A request that was already freed or cancelled also returns `Ok(None)`: it can
+    /// no longer complete, but there is no receive information to report.
+    ///
+    /// Callers should not use this method after the request has completed and the
+    /// request has been freed.
     pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, ucs_status_t> {
         let Some(h) = self.handle else {
             return Ok(None);
         };
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::uninit();
         let status = unsafe { ucp_tag_recv_request_test(h.as_ptr(), info.as_mut_ptr()) };
-        match status {
-            ucs_status_t::UCS_OK => Ok(None),
-            ucs_status_t::UCS_INPROGRESS => Ok(Some(unsafe {
-                TagInfo {
-                    handle: info.assume_init(),
-                }
-            })),
-            _ => Err(status),
-        }
+        map_tag_recv_test_status(status, info)
     }
 }
 
@@ -202,6 +217,74 @@ mod tests {
     use std::rc::Rc;
 
     const TAG_FULL: u64 = u64::MAX;
+
+    #[test]
+    fn tag_recv_test_maps_completed_status_to_info() {
+        let info = ucp_tag_recv_info_t {
+            sender_tag: 0xfeed,
+            length: 37,
+        };
+
+        let result =
+            map_tag_recv_test_status(ucs_status_t::UCS_OK, std::mem::MaybeUninit::new(info));
+
+        let info = result
+            .expect("completed status should succeed")
+            .expect("completed status should include info");
+        assert_eq!(info.sender_tag(), 0xfeed);
+        assert_eq!(info.len(), 37);
+    }
+
+    #[test]
+    fn tag_recv_test_maps_inprogress_status_to_none() {
+        let result = map_tag_recv_test_status(
+            ucs_status_t::UCS_INPROGRESS,
+            std::mem::MaybeUninit::uninit(),
+        );
+
+        assert!(result.expect("in-progress status should succeed").is_none());
+    }
+
+    #[test]
+    fn tag_recv_test_maps_error_status_to_error() {
+        let result = map_tag_recv_test_status(
+            ucs_status_t::UCS_ERR_IO_ERROR,
+            std::mem::MaybeUninit::uninit(),
+        );
+
+        assert!(matches!(result, Err(ucs_status_t::UCS_ERR_IO_ERROR)));
+    }
+
+    /// Exercises the real UCX completion path with a self-endpoint tag exchange.
+    #[test]
+    fn tag_recv_test_real_completed_request() {
+        let comms = setup_default();
+        let mut recv_buffer = [0u8; 5];
+        let tag = 0x1234;
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut recv_request = comms
+            .worker
+            .tag_recv(&mut recv_buffer, tag, u64::MAX, &param)
+            .expect("post tag receive")
+            .expect("receive should remain outstanding");
+        let send_buffer = *b"hello";
+        let send_request = comms
+            .ep
+            .tag_send(&send_buffer, tag, &param)
+            .expect("post tag send");
+
+        let info = loop {
+            if let Some(info) = recv_request.tag_recv_test().expect("test tag receive") {
+                break info;
+            }
+            comms.worker.progress();
+        };
+
+        assert_eq!(info.sender_tag(), tag);
+        assert_eq!(info.len(), send_buffer.len());
+        assert_eq!(recv_buffer, send_buffer);
+        drop(send_request);
+    }
 
     #[test]
     fn tag_send() {
