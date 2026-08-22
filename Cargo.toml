@@ -10,7 +10,7 @@ categories = ["api-bindings", "network-programming"]
 repository = "https://github.com/KirgenR/ucx-rs"
 
 [build-dependencies]
-bindgen = "0.70.1"
+bindgen = "0.72"
 
 [dependencies.bitflags]
 version = "2.6.0"
