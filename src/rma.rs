@@ -353,17 +353,23 @@ impl Ep {
         })
     }
 
-    // ── AMO — fetch variants (reply written via RequestParamBuilder::reply_buffer) ──
+    // ── AMO — fetch variants ──
 
-    /// Atomic fetch-and-add 64-bit.
-    /// Caller MUST set `reply_buffer` on the `RequestParam` via `RequestParamBuilder::reply_buffer(reply as *mut _ as *mut _, std::mem::size_of::<u64>())`.
+    fn fetch_param<T>(reply: &mut T) -> RequestParam {
+        crate::RequestParamBuilder::new()
+            .reply_buffer(reply as *mut T as *mut std::os::raw::c_void)
+            .build()
+    }
+
+    /// Atomic fetch-and-add 64-bit; writes the previous value to `reply`.
     pub fn amo_fadd64(
         &self,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        param: &RequestParam,
+        reply: &mut u64,
     ) -> Result<Option<Request>, ucs_status_t> {
+        let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -377,15 +383,15 @@ impl Ep {
         })
     }
 
-    /// Atomic fetch-and-xor 64-bit.
-    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    /// Atomic fetch-and-xor 64-bit; writes the previous value to `reply`.
     pub fn amo_fxor64(
         &self,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        param: &RequestParam,
+        reply: &mut u64,
     ) -> Result<Option<Request>, ucs_status_t> {
+        let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -399,15 +405,15 @@ impl Ep {
         })
     }
 
-    /// Atomic fetch-and-swap 64-bit.
-    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    /// Atomic fetch-and-swap 64-bit; writes the previous value to `reply`.
     pub fn amo_fswap64(
         &self,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        param: &RequestParam,
+        reply: &mut u64,
     ) -> Result<Option<Request>, ucs_status_t> {
+        let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -421,17 +427,17 @@ impl Ep {
         })
     }
 
-    /// Atomic fetch compare-and-swap 64-bit.
-    /// Caller MUST set `reply_buffer` on the `RequestParam`.
+    /// Atomic fetch compare-and-swap 64-bit; writes the previous value to `reply`.
     pub fn amo_fcswap64(
         &self,
-        expected: u64,
-        replacement: u64,
+        compare: u64,
+        swap: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        param: &RequestParam,
+        reply: &mut u64,
     ) -> Result<Option<Request>, ucs_status_t> {
-        let operand = [expected, replacement];
+        let operand = [compare, swap];
+        let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -971,6 +977,25 @@ pub unsafe fn atomic_xor64(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn fetch_amo_signatures_require_reply_output() {
+        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
+            Ep::amo_fadd64;
+        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
+            Ep::amo_fxor64;
+        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
+            Ep::amo_fswap64;
+        let _: fn(
+            &Ep,
+            u64,
+            u64,
+            u64,
+            &RemoteKey,
+            &mut u64,
+        ) -> Result<Option<Request>, ucs_status_t> = Ep::amo_fcswap64;
+    }
 
     /// Test with invalid rkey — this segfaults on some UCX versions instead of
     /// returning an error. The UCX library calls into the rkey internals without

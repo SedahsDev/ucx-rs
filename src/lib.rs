@@ -321,8 +321,10 @@ impl RequestParamBuilder {
 
     #[inline]
     pub fn reply_buffer(&mut self, buf: *mut std::os::raw::c_void) -> &mut Self {
-        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32;
+        self.field_mask |= (ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32)
+            | (ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32);
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.flags = 0;
         params.reply_buffer = buf;
         self
     }
@@ -453,6 +455,7 @@ mod tests {
             .request_cleanup(cleanup)
             .request_size(8)
             .name("My Awesome Test")
+            .expect("context name")
             .tag_sender_mask(u64::MAX)
             .estimated_num_eps(4)
             .estimated_num_ppn(2)
@@ -462,7 +465,11 @@ mod tests {
             .thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_MULTI)
             .build();
 
-        let context = Context::new(&context::Config::default(), &params).unwrap();
+        let context = Context::new(
+            &context::Config::read("", "").expect("config read"),
+            &params,
+        )
+        .unwrap();
 
         let worker = context.worker_create(&worker_features).unwrap();
         let packed_addr = worker.pack_address().unwrap();

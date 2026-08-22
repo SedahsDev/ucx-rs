@@ -330,11 +330,11 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn name(&mut self, name: &str) -> &mut ParamsBuilder {
+    pub fn name(&mut self, name: &str) -> Result<&mut ParamsBuilder, std::ffi::NulError> {
+        let name_cs = CString::new(name)?;
         self.field_mask |= ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_NAME as u64;
-        let name_cs = CString::new(name).unwrap();
         self.name = Some(name_cs);
-        self
+        Ok(self)
     }
 
     pub fn am_alignment(&mut self, am_alignment: usize) -> &mut ParamsBuilder {

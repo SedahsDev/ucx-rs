@@ -114,7 +114,8 @@ mod tests {
     /// Helper: create a UCX context + worker with Tag feature (minimal setup).
     fn setup_worker() -> (Context, crate::worker::Worker) {
         let ctx_params = ParamsBuilder::new().features(Flags::Tag).build();
-        let ctx = Context::new(&Config::default(), &ctx_params).expect("context create");
+        let ctx = Context::new(&Config::read("", "").expect("config read"), &ctx_params)
+            .expect("context create");
         let worker_params = WorkerParamsBuilder::new().build();
         let worker = ctx.worker_create(&worker_params).expect("worker create");
         (ctx, worker)
