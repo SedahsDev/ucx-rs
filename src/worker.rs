@@ -23,11 +23,22 @@ pub struct Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         let params = RequestParamBuilder::new().build();
-        let request = self.flush(&params).unwrap();
-        if let Some(request) = request {
-            while !request.check_finished().unwrap() {
-                self.progress();
+        // Drop is best-effort: never panic during drop glue, and do not wait
+        // indefinitely for a UCX request which cannot make progress.
+        match self.flush(&params) {
+            Ok(Some(request)) => {
+                const MAX_FLUSH_PROGRESS_ROUNDS: usize = 1_000_000;
+                for _ in 0..MAX_FLUSH_PROGRESS_ROUNDS {
+                    match request.check_finished() {
+                        Ok(true) | Err(_) => break,
+                        Ok(false) => {
+                            self.progress();
+                        }
+                    }
+                }
             }
+            Ok(None) => {}
+            Err(error) => eprintln!("ucx-sys: worker flush during Drop failed: {error:?}"),
         }
         unsafe { ucp_worker_destroy(self.handle) };
     }
