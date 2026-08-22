@@ -91,6 +91,61 @@ mod tests {
         let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, ucs_status_t> =
             Ep::flush;
     }
+
+    #[test]
+    fn params_builder_sets_error_handling_mode() {
+        let mut builder = ParamsBuilder::new();
+        let params = builder
+            .err_mode(ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER)
+            .build();
+
+        assert_ne!(
+            params.handle.field_mask
+                & ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64,
+            0
+        );
+        assert_eq!(
+            params.handle.err_mode,
+            ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER
+        );
+    }
+
+    #[test]
+    fn close_api_has_consuming_request_signature() {
+        let _close: fn(Ep, u32) -> Result<Option<crate::Request>, ucs_status_t> = Ep::close;
+    }
+
+    #[test]
+    fn close_self_endpoint_immediately_or_with_request() {
+        let context_params = crate::context::ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .build();
+        let context =
+            crate::context::Context::new(&crate::context::Config::default(), &context_params)
+                .expect("context create");
+        let worker_params = crate::worker::ParamsBuilder::new().build();
+        let worker = context
+            .worker_create(&worker_params)
+            .expect("worker create");
+        let address = worker.pack_address().expect("pack address");
+        let remote = crate::worker::RemoteWorkerAddress::new(address.to_vec());
+        let ep_params = ParamsBuilder::new().address(&remote).build();
+        let ep = worker.create_ep(ep_params).expect("endpoint create");
+        drop(address);
+        let close_request = ep.close(0).expect("endpoint close should start");
+        if let Some(request) = close_request {
+            for _ in 0..1_000_000 {
+                if request.check_finished().expect("close request status") {
+                    break;
+                }
+                worker.progress();
+            }
+            assert!(request.check_finished().expect("close request status"));
+            request.free();
+        }
+        drop(worker);
+        drop(context);
+    }
 }
 
 /// Endpoint attribute result.
@@ -98,6 +153,18 @@ mod tests {
 pub struct EpAttr {
     pub name: String,
     pub user_data: *mut std::os::raw::c_void,
+}
+
+impl Ep {
+    /// Start closing this endpoint and return the completion request, if any.
+    /// The caller owns progress of a returned request and should check it while
+    /// progressing the associated worker.
+    pub fn close(self, flags: u32) -> Result<Option<crate::Request>, ucs_status_t> {
+        let this = std::mem::ManuallyDrop::new(self);
+        let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
+        param.flags = flags;
+        status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })
+    }
 }
 
 impl Drop for Ep {
@@ -108,16 +175,8 @@ impl Drop for Ep {
         match status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }) {
             Ok(Some(req)) => drop(req),
             Ok(None) => {}
-            Err(_) => {}
+            Err(error) => eprintln!("ucx-sys: endpoint close during Drop failed: {error:?}; UCX released endpoint resources"),
         }
-    }
-}
-
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct UcpEpFields: u64 {
-        const None = ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_NONE as u64;
-        const Peer = ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER as u64;
     }
 }
 
@@ -171,6 +230,13 @@ impl ParamsBuilder {
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         let (address, _) = worker_address.get_handle();
         params.address = address;
+        self
+    }
+
+    pub fn err_mode(&mut self, mode: ucp_err_handling_mode_t) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.err_mode = mode;
         self
     }
 
