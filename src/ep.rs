@@ -8,7 +8,11 @@ use bitflags::bitflags;
 use std::ffi::CString;
 use std::ptr::NonNull;
 
-#[derive(Debug, Clone)]
+/// UCX endpoint ownership wrapper.
+///
+/// This type is intentionally not `Clone`: cloning would create two owners of
+/// one endpoint and cause a double close/use-after-free.
+#[derive(Debug)]
 pub struct Ep {
     pub(crate) handle: ucp_ep_h,
 }
@@ -126,13 +130,13 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Params {
     pub(crate) handle: ucp_ep_params_t,
     name: Option<CString>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_ep_params_t>,
     field_mask: u64,
@@ -184,8 +188,7 @@ impl ParamsBuilder {
             handle: unsafe { self.uninit_handle.assume_init() },
             name: None,
         };
-        if self.name.is_some() {
-            let new_name = self.name.clone().unwrap();
+        if let Some(new_name) = self.name.take() {
             ep_param.handle.name = new_name.as_ptr();
             ep_param.name = Some(new_name);
         }

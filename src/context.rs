@@ -22,7 +22,11 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+/// UCX configuration ownership wrapper.
+///
+/// This type is intentionally not `Clone`: cloning would duplicate ownership
+/// of the configuration pointer and cause a double release.
+#[derive(Debug)]
 pub struct Config {
     handle: *mut ucp_config_t,
 }
@@ -51,14 +55,14 @@ impl Drop for Config {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_params_t>,
     field_mask: u64,
     name: Option<CString>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Params {
     handle: ucp_params_t,
     name: Option<CString>,
@@ -160,8 +164,7 @@ impl ParamsBuilder {
             handle: unsafe { self.uninit_handle.assume_init() },
         };
 
-        if self.name.is_some() {
-            let new_name = self.name.clone().unwrap();
+        if let Some(new_name) = self.name.take() {
             ucp_param.handle.name = new_name.as_ptr();
             ucp_param.name = Some(new_name);
         }
@@ -194,7 +197,11 @@ impl Context {
     }
 }
 
-#[derive(Debug, Clone)]
+/// UCX context ownership wrapper.
+///
+/// This type is intentionally not `Clone`: cloning would create two owners of
+/// one context and cause a double cleanup/use-after-free.
+#[derive(Debug)]
 pub struct Context {
     pub(crate) handle: ucp_context_h,
 }

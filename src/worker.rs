@@ -11,7 +11,11 @@ use bitflags::bitflags;
 use std::ffi::CString;
 use std::ptr::NonNull;
 
-#[derive(Debug, Clone)]
+/// UCX worker ownership wrapper.
+///
+/// This type is intentionally not `Clone`: a worker handle has one owner and
+/// is destroyed on drop.
+#[derive(Debug)]
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
 }
@@ -345,8 +349,7 @@ impl ParamsBuilder {
             handle: unsafe { self.uninit_handle.assume_init() },
         };
 
-        if self.name.is_some() {
-            let new_name = self.name.clone().unwrap();
+        if let Some(new_name) = self.name.take() {
             ucp_param.handle.name = new_name.as_ptr();
             ucp_param.name = Some(new_name);
         }
@@ -355,7 +358,7 @@ impl ParamsBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_worker_params_t>,
     field_mask: u64,
@@ -368,7 +371,7 @@ impl Default for ParamsBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Params {
     pub(crate) handle: ucp_worker_params_t,
     name: Option<CString>,

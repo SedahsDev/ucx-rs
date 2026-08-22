@@ -2,6 +2,9 @@
 //!
 //! Wraps `ucp_listener_create`, `ucp_listener_destroy`, `ucp_listener_query`,
 //! `ucp_listener_reject`, and `ucp_conn_request_query`.
+//!
+//! `Listener` follows UCX's single-threaded default and is intentionally not
+//! `Send` or `Sync`. Keep it on its owning progress thread.
 
 use crate::ffi::*;
 use crate::status_to_result;
@@ -16,8 +19,6 @@ pub const UCP_LISTENER_PARAM_FIELD_CONN_HANDLER: u64 = 4;
 pub struct Listener {
     handle: ucp_listener_h,
 }
-
-unsafe impl Send for Listener {}
 
 impl Listener {
     /// Create a listener on the given worker.
