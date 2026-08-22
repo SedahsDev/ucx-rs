@@ -110,27 +110,6 @@ impl Drop for RemoteKey {
 /// All methods take `&self` and safe types (`&[u8]`, `&mut [u8]`, `u64`, `&RemoteKey`),
 /// hiding the `unsafe` FFI calls internally. Follows the same pattern as `Ep::tag_send`.
 impl Ep {
-    /// Get a local pointer to remote memory for intra-node one-sided access.
-    ///
-    /// UCX returns only a pointer, so `len` must be the caller's independently
-    /// known valid length. The slice is valid only while `rkey` and its remote
-    /// allocation remain valid. The key must come from a real pack/unpack
-    /// operation; a null or fabricated key may segfault inside libucp before
-    /// returning an error.
-    #[allow(clippy::mut_from_ref)]
-    pub fn rkey_ptr<'a>(
-        &self,
-        rkey: &'a RemoteKey,
-        remote_addr: u64,
-        len: usize,
-    ) -> Result<&'a mut [u8], ucs_status_t> {
-        let mut addr = std::ptr::null_mut();
-        status_to_result(unsafe { ucp_rkey_ptr(rkey.handle, remote_addr, &mut addr) })?;
-        if addr.is_null() {
-            return Err(ucs_status_t::UCS_ERR_INVALID_ADDR);
-        }
-        Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
-    }
     // ── Put / Get ──
 
     /// Put data to a remote memory location.
