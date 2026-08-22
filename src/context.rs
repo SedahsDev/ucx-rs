@@ -5,6 +5,29 @@ use crate::worker::Worker;
 use bitflags::bitflags;
 use std::ffi::CString;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    Nul(std::ffi::NulError),
+    Ucs(ucs_status_t),
+}
+
+impl From<std::ffi::NulError> for ConfigError {
+    fn from(error: std::ffi::NulError) -> Self {
+        Self::Nul(error)
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nul(error) => error.fmt(f),
+            Self::Ucs(status) => write!(f, "UCX error: {status:?}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
 type RequestInitCb = unsafe extern "C" fn(request: *mut ::std::os::raw::c_void);
 type RequestCleanUpCb = unsafe extern "C" fn(request: *mut ::std::os::raw::c_void);
 
@@ -28,24 +51,17 @@ bitflags! {
 /// of the configuration pointer and cause a double release.
 #[derive(Debug)]
 pub struct Config {
-    handle: *mut ucp_config_t,
+    pub(crate) handle: *mut ucp_config_t,
 }
 
 impl Config {
-    pub fn read(name: &str, file: &str) -> Result<*mut ucp_config_t, ucs_status_t> {
+    pub fn read(name: &str, file: &str) -> Result<Config, ConfigError> {
         let mut config: *mut ucp_config_t = std::ptr::null_mut();
-        let c_name = CString::new(name).unwrap();
-        let c_file = CString::new(file).unwrap();
+        let c_name = CString::new(name)?;
+        let c_file = CString::new(file)?;
         status_to_result(unsafe { ucp_config_read(c_name.as_ptr(), c_file.as_ptr(), &mut config) })
-            .unwrap();
-        Ok(config)
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        let config = Config::read("", "").unwrap();
-        Config { handle: config }
+            .map(|()| Config { handle: config })
+            .map_err(ConfigError::Ucs)
     }
 }
 
@@ -148,11 +164,11 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn name(&mut self, name: &str) -> &mut ParamsBuilder {
+    pub fn name(&mut self, name: &str) -> Result<&mut ParamsBuilder, std::ffi::NulError> {
+        let name_cs = CString::new(name)?;
         self.field_mask |= ucp_params_field::UCP_PARAM_FIELD_NAME as u64;
-        let name_cs = CString::new(name).unwrap();
         self.name = Some(name_cs);
-        self
+        Ok(self)
     }
 
     pub fn build(&mut self) -> Params {

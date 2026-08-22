@@ -3,6 +3,7 @@
 //! Wraps `ucp_config_modify`, `ucp_context_query`,
 //! and `ucp_context_print_info`.
 
+use crate::context::ConfigError;
 use crate::ffi::*;
 use crate::status_to_result;
 use std::ffi::CStr;
@@ -15,10 +16,11 @@ pub unsafe fn config_modify(
     config: *mut ucp_config_t,
     name: &str,
     value: &str,
-) -> Result<(), ucs_status_t> {
-    let cname = std::ffi::CString::new(name).expect("config name");
-    let cvalue = std::ffi::CString::new(value).expect("config value");
+) -> Result<(), ConfigError> {
+    let cname = std::ffi::CString::new(name).map_err(ConfigError::Nul)?;
+    let cvalue = std::ffi::CString::new(value).map_err(ConfigError::Nul)?;
     status_to_result(ucp_config_modify(config, cname.as_ptr(), cvalue.as_ptr()))
+        .map_err(ConfigError::Ucs)
 }
 
 /// Field masks for `ucp_context_attr`.
@@ -78,13 +80,12 @@ mod tests {
 
     #[test]
     fn test_config_modify() {
-        let config_ptr = Config::read("", "").expect("config read");
-        assert!(!config_ptr.is_null(), "config pointer is null");
+        let config = Config::read("", "").expect("config read");
 
         // UCX 1.20.1 requires uppercase config key names (matching env var names
         // without the UCX_ prefix). "PROTO_ENABLE" is a boolean-style key that
         // accepts "y"/"n" across UCX versions.
-        let result = unsafe { config_modify(config_ptr, "PROTO_ENABLE", "y") };
+        let result = unsafe { config_modify(config.handle, "PROTO_ENABLE", "y") };
         assert!(
             result.is_ok(),
             "config_modify should succeed for known key 'PROTO_ENABLE', got {:?}",
@@ -94,11 +95,39 @@ mod tests {
 
     #[test]
     fn test_context_query() {
-        let config = Config::default();
+        let config = Config::read("", "").expect("config read");
         let params = ParamsBuilder::new().build();
         let ctx = Context::new(&config, &params).expect("init");
         let attr = unsafe { context_query(ctx.handle, UCP_CONTEXT_ATTR_FIELD_REQUEST_SIZE) }
             .expect("context_query");
         assert!(attr.request_size > 0);
+    }
+
+    #[test]
+    fn config_read_rejects_interior_nul() {
+        assert!(matches!(
+            Config::read("bad\0name", ""),
+            Err(ConfigError::Nul(_))
+        ));
+    }
+
+    #[test]
+    fn config_modify_rejects_interior_nul() {
+        let config = Config::read("", "").expect("config read");
+        let result = unsafe { config_modify(config.handle, "bad\0name", "y") };
+        assert!(matches!(result, Err(ConfigError::Nul(_))));
+    }
+
+    #[test]
+    fn config_modify_rejects_nul_in_value() {
+        let config = Config::read("", "").expect("config read");
+        let result = unsafe { config_modify(config.handle, "PROTO_ENABLE", "y\0") };
+        assert!(matches!(result, Err(ConfigError::Nul(_))));
+    }
+
+    #[test]
+    fn context_params_name_rejects_interior_nul() {
+        let mut builder = ParamsBuilder::new();
+        assert!(builder.name("bad\0name").is_err());
     }
 }
