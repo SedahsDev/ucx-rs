@@ -7,32 +7,28 @@
 use crate::ffi::*;
 use crate::status_to_result;
 
-/// UCP contiguous data type ID (element size 1).
-pub const UCP_DATATYPE_CONTIG: ucp_datatype_t = 0;
+/// UCP contiguous data type class, sourced from bindgen.
+pub const UCP_DATATYPE_CONTIG: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t;
 
-/// UCP I/O vector data type ID.
-pub const UCP_DATATYPE_IOV: ucp_datatype_t = 2;
+/// UCP I/O vector data type class, sourced from bindgen.
+pub const UCP_DATATYPE_IOV: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_IOV as ucp_datatype_t;
 
 /// Create a contiguous data type with the given element size (in bytes).
 /// Equivalent to the C macro `ucp_dt_make_contig(elem_size)`.
 ///
-/// The encoding packs the element size into the datatype handle.
-/// Element size 0 is treated as 1.
+/// The encoding is `(elem_size << UCP_DATATYPE_SHIFT) | UCP_DATATYPE_CONTIG`.
+/// Element size 0 is preserved, matching the C macro and producing the class-only value.
 #[must_use]
 pub fn dt_make_contig(elem_size: usize) -> ucp_datatype_t {
-    let size = if elem_size == 0 { 1 } else { elem_size };
-    if size == 1 {
-        0 // UCP_DATATYPE_CONTIG for size 1
-    } else {
-        ((size - 1) as u64) | (1u64 << 16)
-    }
+    ((elem_size as ucp_datatype_t) << ucp_dt_type::UCP_DATATYPE_SHIFT as ucp_datatype_t)
+        | UCP_DATATYPE_CONTIG
 }
 
 /// Create an I/O vector data type.
 /// Equivalent to the C macro `ucp_dt_make_iov()`.
 #[must_use]
 pub fn dt_make_iov() -> ucp_datatype_t {
-    2 // UCP_DATATYPE_IOV
+    UCP_DATATYPE_IOV
 }
 
 /// Create a generic data type from user-provided operations.
@@ -86,12 +82,22 @@ mod tests {
 
     #[test]
     fn test_dt_make_contig() {
-        let dt1 = dt_make_contig(1);
-        assert_eq!(dt1, 0); // UCP_DATATYPE_CONTIG
-        let dt4 = dt_make_contig(4);
-        assert_ne!(dt4, 0);
-        let dt0 = dt_make_contig(0);
-        assert_eq!(dt0, 0); // size 0 treated as 1
+        assert_eq!(dt_make_contig(0), 0);
+        assert_eq!(dt_make_contig(1), 8);
+        assert_eq!(dt_make_contig(4), 32);
+        assert_eq!(dt_make_contig(8), 64);
+    }
+
+    #[test]
+    fn test_dt_make_contig_composes_size_shift_and_class() {
+        let shift = ucp_dt_type::UCP_DATATYPE_SHIFT as ucp_datatype_t;
+        let class = ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t;
+        for elem_size in [2, 16] {
+            assert_eq!(
+                dt_make_contig(elem_size),
+                ((elem_size as ucp_datatype_t) << shift) | class
+            );
+        }
     }
 
     #[test]
@@ -106,6 +112,8 @@ mod tests {
         // Just verify the contig type creation works.
         let dt = dt_make_contig(4);
         assert_ne!(dt, dt_make_contig(8));
-        assert_eq!(dt_make_contig(1), super::UCP_DATATYPE_CONTIG);
+        assert_eq!(dt_make_contig(1), 8);
+        assert_eq!(dt_make_contig(4), 32);
+        assert_eq!(dt_make_contig(8), 64);
     }
 }
