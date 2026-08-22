@@ -6,6 +6,7 @@
 use crate::context::Context;
 use crate::ffi::*;
 use crate::status_to_result;
+use std::marker::PhantomData;
 
 /// RAII wrapper around a UCP memory handle (`ucp_mem_h`).
 /// The handle is automatically unmapped when dropped.
@@ -14,7 +15,39 @@ pub struct MemHandle {
     handle: ucp_mem_h,
 }
 
+/// A registered buffer whose borrow lasts until the UCX memory handle is unmapped.
+pub struct MemHandleGuard<'a> {
+    memh: MemHandle,
+    _buffer: PhantomData<&'a mut [u8]>,
+}
+
+impl<'a> MemHandleGuard<'a> {
+    /// Access the underlying registered memory handle.
+    pub fn mem_handle(&self) -> &MemHandle {
+        &self.memh
+    }
+}
+
 impl MemHandle {
+    /// Map a caller-owned buffer and keep it borrowed for the guard's lifetime.
+    ///
+    /// Unlike [`Self::map`] with [`MemMapParamsBuilder::address`], this API makes
+    /// it impossible to drop or mutably reuse the buffer while UCX has it
+    /// registered. The guard unmaps the memory when dropped.
+    pub fn map_slice<'a>(
+        context: &Context,
+        mem: &'a mut [u8],
+        flags: u64,
+    ) -> Result<MemHandleGuard<'a>, ucs_status_t> {
+        let flags = u32::try_from(flags).map_err(|_| ucs_status_t::UCS_ERR_INVALID_PARAM)?;
+        let mut params = MemMapParamsBuilder::new();
+        params.address_slice(mem).flags(flags);
+        Self::map(context, &mut params).map(|memh| MemHandleGuard {
+            memh,
+            _buffer: PhantomData,
+        })
+    }
+
     /// Map or register memory with the given parameters.
     pub fn map(
         context: &Context,
@@ -92,6 +125,15 @@ impl MemMapParamsBuilder {
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.address = addr;
         self
+    }
+
+    /// Set the address and length from a borrowed slice.
+    ///
+    /// The builder itself does not retain the borrow; use [`MemHandle::map_slice`]
+    /// when mapping caller-owned memory so the resulting guard carries it.
+    pub fn address_slice(&mut self, slice: &mut [u8]) -> &mut Self {
+        self.address(slice.as_mut_ptr() as *mut std::os::raw::c_void)
+            .length(slice.len())
     }
 
     /// Set the length in bytes (mandatory).
@@ -394,5 +436,16 @@ impl MemAttr {
     #[inline]
     pub fn mem_type(&self) -> ucs_memory_type_t {
         self.handle.mem_type
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_slice_signature_keeps_guard_borrowed() {
+        let _: for<'a> fn(&Context, &'a mut [u8], u64) -> Result<MemHandleGuard<'a>, ucs_status_t> =
+            MemHandle::map_slice;
     }
 }
