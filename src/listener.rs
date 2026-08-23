@@ -47,7 +47,12 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn accept_handler(
+    /// Set the raw callback and opaque argument supplied directly to UCX.
+    ///
+    /// # Safety
+    /// The callback and argument must remain valid for the listener's entire
+    /// lifetime and for every invocation by UCX.
+    pub unsafe fn accept_handler(
         mut self,
         callback: ucp_listener_accept_callback_t,
         arg: *mut std::ffi::c_void,
@@ -57,7 +62,13 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn conn_handler(
+    /// Set the raw connection callback and opaque argument supplied directly
+    /// to UCX.
+    ///
+    /// # Safety
+    /// The callback and argument must remain valid for the listener's entire
+    /// lifetime and for every invocation by UCX.
+    pub unsafe fn conn_handler(
         mut self,
         callback: ucp_listener_conn_callback_t,
         arg: *mut std::ffi::c_void,
@@ -69,30 +80,6 @@ impl ParamsBuilder {
 
     pub fn build(self) -> ucp_listener_params {
         self.params
-    }
-
-    /// Set a callback and opaque argument supplied directly to UCX.
-    ///
-    /// # Safety
-    /// The callback and argument must remain valid for every invocation by UCX.
-    pub unsafe fn raw_accept_handler(
-        self,
-        callback: ucp_listener_accept_callback_t,
-        arg: *mut std::ffi::c_void,
-    ) -> Self {
-        self.accept_handler(callback, arg)
-    }
-
-    /// Set a connection callback and opaque argument supplied directly to UCX.
-    ///
-    /// # Safety
-    /// The callback and argument must remain valid for every invocation by UCX.
-    pub unsafe fn raw_conn_handler(
-        self,
-        callback: ucp_listener_conn_callback_t,
-        arg: *mut std::ffi::c_void,
-    ) -> Self {
-        self.conn_handler(callback, arg)
     }
 }
 
@@ -148,7 +135,8 @@ impl Listener {
         })
     }
 
-    pub fn reject(&self, request: &ConnRequest) -> Result<(), ucs_status_t> {
+    /// Reject a connection request, consuming its single-use handle.
+    pub fn reject(&self, request: ConnRequest) -> Result<(), ucs_status_t> {
         // SAFETY: request is a live handle delivered by UCX to the callback.
         status_to_result(unsafe { ucp_listener_reject(self.handle, request.handle) })
     }
@@ -188,7 +176,7 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR: u64 = ConnRequestFields::CLIE
 pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = ConnRequestFields::CLIENT_ID.bits();
 
 /// A borrowed UCX connection request handle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct ConnRequest {
     handle: ucp_conn_request_h,
 }
@@ -202,7 +190,8 @@ impl ConnRequest {
     pub fn as_raw(&self) -> ucp_conn_request_h {
         self.handle
     }
-    pub fn reject(&self, listener: &Listener) -> Result<(), ucs_status_t> {
+    /// Reject this connection request, consuming its single-use handle.
+    pub fn reject(self, listener: &Listener) -> Result<(), ucs_status_t> {
         listener.reject(self)
     }
     pub fn query(&self, fields: ConnRequestFields) -> Result<ConnRequestAttr, ucs_status_t> {
@@ -263,7 +252,7 @@ fn socket_address(addr: &SocketAddr) -> (SocketStorage, ucs_sock_addr_t) {
             let sin6 = sockaddr_in6 {
                 sin6_family: libc::AF_INET6 as _,
                 sin6_port: v6.port().to_be(),
-                sin6_flowinfo: v6.flowinfo(),
+                sin6_flowinfo: v6.flowinfo().to_be(),
                 sin6_addr: libc::in6_addr {
                     s6_addr: v6.ip().octets(),
                 },
@@ -325,6 +314,22 @@ mod tests {
         let addr = SocketAddr::from(([127, 0, 0, 1], 42));
         let (_storage, raw) = socket_address(&addr);
         assert_eq!(raw.addrlen as usize, std::mem::size_of::<sockaddr_in>());
+        let mut ss = unsafe { MaybeUninit::<sockaddr_storage>::zeroed().assume_init() };
+        unsafe {
+            ptr::copy_nonoverlapping(
+                raw.addr as *const u8,
+                &mut ss as *mut _ as *mut u8,
+                raw.addrlen as usize,
+            );
+        }
+        assert_eq!(from_storage(&ss), Some(addr));
+    }
+
+    #[test]
+    fn ipv6_conversion_round_trip() {
+        let addr = SocketAddr::from(([0xfe80, 0, 0, 0, 0, 0, 0, 1], 42));
+        let (_storage, raw) = socket_address(&addr);
+        assert_eq!(raw.addrlen as usize, std::mem::size_of::<sockaddr_in6>());
         let mut ss = unsafe { MaybeUninit::<sockaddr_storage>::zeroed().assume_init() };
         unsafe {
             ptr::copy_nonoverlapping(
