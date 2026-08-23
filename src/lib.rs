@@ -682,7 +682,7 @@ mod tests {
             .thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_MULTI)
             .build();
 
-        let context = Context::new(
+        let mut context = Context::new(
             &context::Config::read("", "").expect("config read"),
             &params,
         )

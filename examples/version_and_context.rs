@@ -25,13 +25,14 @@ fn main() {
 
     let mut pb = ParamsBuilder::new();
     pb.features(Flags::Tag | Flags::Rma | Flags::Am)
+        .mt_workers_shared(1)
         .estimated_num_eps(2)
         .name("ucx-rs-example")
         .expect("context name");
     let params = pb.build();
     let config = Config::read("", "").expect("config read");
 
-    let context = Context::new(&config, &params).expect("Context::new failed");
+    let mut context = Context::new(&config, &params).expect("Context::new failed");
     println!("UCP context created");
 
     let worker_params = WorkerParamsBuilder::new().build();

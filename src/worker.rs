@@ -50,7 +50,7 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    pub(crate) fn new(context: &Context, params: &Params) -> Result<Worker, ucs_status_t> {
+    pub(crate) fn new(context: &mut Context, params: &Params) -> Result<Worker, ucs_status_t> {
         let mut worker: ucp_worker_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {

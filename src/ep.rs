@@ -270,8 +270,9 @@ mod tests {
     fn close_self_endpoint_immediately_or_with_request() {
         let context_params = crate::context::ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
             .build();
-        let context = crate::context::Context::new(
+        let mut context = crate::context::Context::new(
             &crate::context::Config::read("", "").expect("config read"),
             &context_params,
         )

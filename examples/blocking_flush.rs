@@ -22,9 +22,11 @@ fn wait_request(worker: &ucx_sys::worker::Worker, request: Request) {
 fn main() {
     let params = ParamsBuilder::new()
         .features(Flags::Am | Flags::Rma | Flags::Amo32 | Flags::Amo64 | Flags::Tag)
+        .mt_workers_shared(1)
         .estimated_num_eps(1)
         .build();
-    let context = Context::new(&Config::read("", "").expect("config"), &params).expect("context");
+    let mut context =
+        Context::new(&Config::read("", "").expect("config"), &params).expect("context");
     let worker = context
         .worker_create(&WorkerParamsBuilder::new().build())
         .expect("worker");

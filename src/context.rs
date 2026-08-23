@@ -92,12 +92,14 @@ pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_params_t>,
     field_mask: u64,
     name: Option<CString>,
+    mt_workers_shared: bool,
 }
 
 #[derive(Debug)]
 pub struct Params {
     handle: ucp_params_t,
     name: Option<CString>,
+    pub(crate) mt_workers_shared: bool,
 }
 
 // This builder wraps up the unsafe parts of building the ucp_param_t struct. On construction
@@ -121,6 +123,7 @@ impl ParamsBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,
             name: None,
+            mt_workers_shared: false,
         }
     }
 
@@ -164,6 +167,7 @@ impl ParamsBuilder {
         self.field_mask |= ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.mt_workers_shared = shared;
+        self.mt_workers_shared = shared != 0;
         self
     }
 
@@ -194,6 +198,7 @@ impl ParamsBuilder {
 
         let mut ucp_param = Params {
             name: None,
+            mt_workers_shared: self.mt_workers_shared,
             handle: unsafe { self.uninit_handle.assume_init() },
         };
 
@@ -214,6 +219,13 @@ impl Context {
         {
             return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
         }
+        if !params.mt_workers_shared
+            || params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED as u64
+                == 0
+            || params.handle.mt_workers_shared == 0
+        {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
         let mut context: ucp_context_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {
@@ -231,7 +243,10 @@ impl Context {
         }
     }
 
-    pub fn worker_create<'a>(&'a self, params: &'a worker::Params) -> Result<Worker, ucs_status_t> {
+    pub fn worker_create<'a>(
+        &'a mut self,
+        params: &'a worker::Params,
+    ) -> Result<Worker, ucs_status_t> {
         Worker::new(self, params)
     }
 
@@ -253,6 +268,17 @@ pub struct Context {
     pub(crate) handle: ucp_context_h,
 }
 
+// SAFETY: Send is sound from exclusive, non-Clone RAII ownership alone: moving
+// the sole owner does not permit concurrent access to the UCX context.
+unsafe impl Send for Context {}
+
+// SAFETY: Context::new enforces mt_workers_shared, so UCX's context mt-lock
+// guards shared mem_map/rkey_pack/print_info operations. Worker creation takes
+// &mut Context, which provides the exclusivity needed to avoid the unprotected
+// tl_bitmap cache read-modify-write in ucp_worker_create. Worker and Ep remain
+// !Send, so per-worker state stays thread-bound.
+unsafe impl Sync for Context {}
+
 impl Drop for Context {
     fn drop(&mut self) {
         // SAFETY: self.handle is the live context handle owned by this wrapper.
@@ -265,9 +291,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_create_requires_exclusive_context_access() {
+        let _: fn(&mut Context, &worker::Params) -> Result<Worker, ucs_status_t> = Worker::new;
+    }
+
+    #[test]
     fn context_rejects_missing_features_before_ffi() {
         let config = Config::read("", "").expect("config read");
-        let params = ParamsBuilder::new().build();
+        let params = ParamsBuilder::new().mt_workers_shared(1).build();
+        assert!(matches!(
+            Context::new(&config, &params),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        ));
+    }
+
+    #[test]
+    fn context_rejects_unshared_mt_context() {
+        let config = Config::read("", "").expect("config read");
+        let params = ParamsBuilder::new().features(Flags::Tag).build();
         assert!(matches!(
             Context::new(&config, &params),
             Err(ucs_status_t::UCS_ERR_INVALID_PARAM)

@@ -129,6 +129,7 @@ mod tests {
         let config = Config::read("", "").expect("config read");
         let params = ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
             .build();
         let ctx = Context::new(&config, &params).expect("init");
         let attr = unsafe { context_query(ctx.handle, UCP_CONTEXT_ATTR_FIELD_REQUEST_SIZE) }
@@ -144,6 +145,7 @@ mod tests {
         let config = Config::read("", "").expect("config read");
         let params = ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
             .build();
         let context = Context::new(&config, &params).expect("init");
         let path = std::env::temp_dir().join(format!("ucx-context-info-{}", std::process::id()));
