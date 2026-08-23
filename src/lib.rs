@@ -20,8 +20,12 @@
 //!   them as thread-safe, but it does not make these Rust wrapper values
 //!   transferable or remove application-level protocol synchronization.
 //!
-//! Regardless of the selected mode, `Worker::progress()` must be externally
-//! serialized per worker: do not call it concurrently on the same worker.
+//! `Worker::progress()` should have one owning progress thread per worker. In
+//! an MT-enabled UCX build with `UCS_THREAD_MODE_MULTI`, concurrent progress is
+//! safe but contended by UCX's internal spinlock; in non-MT builds or
+//! `UCS_THREAD_MODE_SINGLE`, it is undefined behavior. See `THREADING.md` §2.1.
+//! Use `Worker::arm()` and `Worker::get_efd()` to wake the owning loop instead
+//! of polling concurrently from multiple threads.
 //! Operations and their borrowed buffers must also remain valid until UCX says
 //! they have completed. Always drop/close endpoints before their `Worker`.
 //! `Ep::Drop` checks the runtime `worker_alive` guard and skips a late cleanup as

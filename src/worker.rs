@@ -13,6 +13,37 @@ use std::ptr::NonNull;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+struct ProgressGuard<'a> {
+    progressing: &'a AtomicBool,
+}
+
+#[cfg(debug_assertions)]
+impl<'a> ProgressGuard<'a> {
+    fn new(progressing: &'a AtomicBool) -> Self {
+        if progressing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            panic!("concurrent progress() on the same worker");
+        }
+        Self { progressing }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for ProgressGuard<'_> {
+    fn drop(&mut self) {
+        self.progressing
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// UCX worker ownership wrapper.
 ///
 /// This type is intentionally not `Clone`: a worker handle has one owner and
@@ -21,6 +52,35 @@ use std::sync::Arc;
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
     pub(crate) alive: Arc<AtomicBool>,
+    #[cfg(debug_assertions)]
+    pub(crate) progressing: AtomicBool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{Config, Context, Flags, ParamsBuilder as ContextParamsBuilder};
+
+    fn setup_worker() -> (Context, Worker) {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config read"), &context_params)
+                .expect("context create");
+        let worker_params = ParamsBuilder::new().build();
+        let worker = context
+            .worker_create(&worker_params)
+            .expect("worker create");
+        (context, worker)
+    }
+
+    #[test]
+    fn progress_works_with_a_real_worker() {
+        let (_context, worker) = setup_worker();
+        let _ = worker.progress();
+    }
 }
 
 impl Drop for Worker {
@@ -60,6 +120,8 @@ impl Worker {
             Ok(()) => Ok(Worker {
                 handle: worker,
                 alive: Arc::new(AtomicBool::new(true)),
+                #[cfg(debug_assertions)]
+                progressing: AtomicBool::new(false),
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
         }
@@ -83,7 +145,24 @@ impl Worker {
     }
 
     #[inline]
+    /// Make one non-blocking progress attempt on this worker.
+    ///
+    /// In a UCX build with multi-thread support, concurrent calls are
+    /// safe when this worker uses `UCS_THREAD_MODE_MULTI`, but they contend on
+    /// UCX's internal pthread spinlock. Losing callers busy-wait and perform
+    /// atomic read-modify-writes on the shared lock word, causing cache-line
+    /// thrashing. In a non-MT build or with `UCS_THREAD_MODE_SINGLE`, concurrent
+    /// calls are undefined behavior. See [`THREADING.md` section 2.1][threading].
+    ///
+    /// Prefer one thread owning each worker's progress loop. To wake that loop
+    /// from other threads, use [`Self::arm`] and [`Self::get_efd`] rather than
+    /// polling from multiple callers. Debug builds panic if this method is
+    /// re-entered concurrently on the same worker.
+    ///
+    /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
     pub fn progress(&self) -> bool {
+        #[cfg(debug_assertions)]
+        let _progress_guard = ProgressGuard::new(&self.progressing);
         let progress = unsafe { ucp_worker_progress(self.handle) };
         progress > 0
     }
@@ -97,6 +176,13 @@ impl Worker {
     }
 
     /// Block until `request` completes, progressing this worker.
+    ///
+    /// This method repeatedly calls [`Self::progress`], so the same
+    /// safe-but-contended/undefined-behavior distinction applies: it is safe
+    /// but contended under `UCS_THREAD_MODE_MULTI` in an MT-enabled UCX build,
+    /// and undefined otherwise when another caller drives the worker. See
+    /// [`THREADING.md` section 2.1][threading]. Keep one progress owner per
+    /// worker; use [`Self::arm`] and [`Self::get_efd`] for wakeups.
     /// Returns `Ok(false)` after a bounded spin; use the efd/arm/wait APIs for
     /// a real blocking wait.
     ///
@@ -106,6 +192,8 @@ impl Worker {
     /// let completed = worker.wait_request(&request).unwrap();
     /// assert!(completed);
     /// ```
+    ///
+    /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
     pub fn wait_request(&self, request: &Request) -> Result<bool, ucs_status_t> {
         const MAX_ROUNDS: usize = 1_000_000;
         for _ in 0..MAX_ROUNDS {
@@ -134,6 +222,16 @@ impl Worker {
         }
     }
 
+    /// Flush outstanding operations on this worker.
+    ///
+    /// UCX may make progress while servicing this call. Concurrent calls on a
+    /// `UCS_THREAD_MODE_MULTI` worker are safe but contended in an MT-enabled
+    /// UCX build; in a non-MT build or `UCS_THREAD_MODE_SINGLE`, concurrent
+    /// access is undefined behavior. See [`THREADING.md` section 2.1][threading].
+    /// Prefer a single owner for the worker's progress loop and use
+    /// [`Self::arm`] plus [`Self::get_efd`] to wake it from other threads.
+    ///
+    /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
     pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }

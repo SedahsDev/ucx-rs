@@ -1309,6 +1309,8 @@ mod tests {
         let worker = Worker {
             handle: std::ptr::null_mut(),
             alive,
+            #[cfg(debug_assertions)]
+            progressing: std::sync::atomic::AtomicBool::new(false),
         };
 
         assert_eq!(
