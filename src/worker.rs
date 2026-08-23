@@ -10,6 +10,8 @@ use crate::RequestParamBuilder;
 use bitflags::bitflags;
 use std::ffi::CString;
 use std::ptr::NonNull;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// UCX worker ownership wrapper.
 ///
@@ -18,10 +20,13 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
+    pub(crate) alive: Arc<AtomicBool>,
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.alive
+            .store(false, std::sync::atomic::Ordering::Release);
         let params = RequestParamBuilder::new().build();
         // Drop is best-effort: never panic during drop glue, and do not wait
         // indefinitely for a UCX request which cannot make progress.
@@ -52,7 +57,10 @@ impl Worker {
             ucp_worker_create(context.handle, &params.handle, &mut worker)
         });
         match result {
-            Ok(()) => Ok(Worker { handle: worker }),
+            Ok(()) => Ok(Worker {
+                handle: worker,
+                alive: Arc::new(AtomicBool::new(true)),
+            }),
             Err(ucs_status_t) => Err(ucs_status_t),
         }
     }

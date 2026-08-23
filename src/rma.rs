@@ -8,6 +8,7 @@ use crate::ffi::*;
 use crate::memh::MemHandle;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
 
@@ -16,6 +17,101 @@ use crate::RequestParam;
 pub type ucp_rkey_h = crate::ffi::ucp_rkey_h;
 
 use crate::ep::Ep;
+use std::marker::PhantomData;
+
+/// A fetch-AMO completion tied to both its worker and reply buffer.
+///
+/// The reply buffer must remain valid until the request is resolved. Dropping
+/// a pending value progresses its worker to completion before releasing the
+/// reply borrow, unless the bounded progress loop times out; in that
+/// pathological case the request is deliberately leaked and the reply buffer
+/// must not be reused.
+pub struct FetchAmoRequest<'w, 'a> {
+    request: Option<crate::Request>,
+    worker: &'w Worker,
+    _reply: PhantomData<&'a mut u64>,
+}
+
+impl<'w, 'a> FetchAmoRequest<'w, 'a> {
+    /// Extract the underlying UCX request without completing it.
+    ///
+    /// # Safety
+    /// The returned request may be in flight and still own `reply_buffer` for
+    /// the caller-provided reply buffer. The caller must keep the reply buffer
+    /// valid until the returned request reaches completion
+    /// (`check_finished() == Ok(true)`) and must not drop it (which calls
+    /// `ucp_request_free`) while in flight. Prefer `check_finished()` + `free()`
+    /// on the wrapper, or let `Drop` handle it.
+    pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
+        self.request.take()
+    }
+    pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
+        self.request
+            .as_ref()
+            .map_or(Ok(true), crate::Request::check_finished)
+    }
+    /// Progress the request to completion before releasing its reply borrow.
+    ///
+    /// If completion cannot be observed within the bounded progress loop, the
+    /// request is deliberately leaked rather than freed while it may still be
+    /// in flight. This preserves the same safety contract as [`Drop`].
+    pub fn free(mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) | Err(_) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the reply buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
+impl Drop for FetchAmoRequest<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                    Err(_) => {
+                        request.free();
+                        return;
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the reply buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
+fn fetch_amo_result<'w, 'a>(
+    request: Option<crate::Request>,
+    worker: &'w Worker,
+) -> FetchAmoRequest<'w, 'a> {
+    FetchAmoRequest {
+        request,
+        worker,
+        _reply: PhantomData,
+    }
+}
 
 /// RAII wrapper around a UCP remote key handle (`ucp_rkey_h`).
 /// The rkey is automatically destroyed when dropped.
@@ -421,13 +517,15 @@ impl Ep {
     }
 
     /// Atomic fetch-and-add 64-bit; writes the previous value to `reply`.
-    pub fn amo_fadd64(
+    /// The reply buffer must remain valid until the request is resolved.
+    pub fn amo_fadd64<'w, 'a>(
         &self,
+        worker: &'w Worker,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        reply: &mut u64,
-    ) -> Result<Option<Request>, ucs_status_t> {
+        reply: &'a mut u64,
+    ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> {
         let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -440,16 +538,19 @@ impl Ep {
                 &param.handle,
             )
         })
+        .map(|request| fetch_amo_result(request, worker))
     }
 
     /// Atomic fetch-and-xor 64-bit; writes the previous value to `reply`.
-    pub fn amo_fxor64(
+    /// The reply buffer must remain valid until the request is resolved.
+    pub fn amo_fxor64<'w, 'a>(
         &self,
+        worker: &'w Worker,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        reply: &mut u64,
-    ) -> Result<Option<Request>, ucs_status_t> {
+        reply: &'a mut u64,
+    ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> {
         let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -462,16 +563,19 @@ impl Ep {
                 &param.handle,
             )
         })
+        .map(|request| fetch_amo_result(request, worker))
     }
 
     /// Atomic fetch-and-swap 64-bit; writes the previous value to `reply`.
-    pub fn amo_fswap64(
+    /// The reply buffer must remain valid until the request is resolved.
+    pub fn amo_fswap64<'w, 'a>(
         &self,
+        worker: &'w Worker,
         operand: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        reply: &mut u64,
-    ) -> Result<Option<Request>, ucs_status_t> {
+        reply: &'a mut u64,
+    ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> {
         let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -484,17 +588,20 @@ impl Ep {
                 &param.handle,
             )
         })
+        .map(|request| fetch_amo_result(request, worker))
     }
 
     /// Atomic fetch compare-and-swap 64-bit; writes the previous value to `reply`.
-    pub fn amo_fcswap64(
+    /// The reply buffer must remain valid until the request is resolved.
+    pub fn amo_fcswap64<'w, 'a>(
         &self,
+        worker: &'w Worker,
         compare: u64,
         swap: u64,
         remote_addr: u64,
         rkey: &RemoteKey,
-        reply: &mut u64,
-    ) -> Result<Option<Request>, ucs_status_t> {
+        reply: &'a mut u64,
+    ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> {
         let operand = [compare, swap];
         let param = Self::fetch_param(reply);
         status_ptr_to_result(unsafe {
@@ -508,6 +615,7 @@ impl Ep {
                 &param.handle,
             )
         })
+        .map(|request| fetch_amo_result(request, worker))
     }
 }
 
@@ -1057,20 +1165,39 @@ mod tests {
     #[test]
     #[allow(clippy::type_complexity)]
     fn fetch_amo_signatures_require_reply_output() {
-        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
-            Ep::amo_fadd64;
-        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
-            Ep::amo_fxor64;
-        let _: fn(&Ep, u64, u64, &RemoteKey, &mut u64) -> Result<Option<Request>, ucs_status_t> =
-            Ep::amo_fswap64;
-        let _: fn(
+        let _: for<'w, 'a> fn(
             &Ep,
+            &'w Worker,
+            u64,
+            u64,
+            &RemoteKey,
+            &'a mut u64,
+        ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> = Ep::amo_fadd64;
+        let _: for<'w, 'a> fn(
+            &Ep,
+            &'w Worker,
+            u64,
+            u64,
+            &RemoteKey,
+            &'a mut u64,
+        ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> = Ep::amo_fxor64;
+        let _: for<'w, 'a> fn(
+            &Ep,
+            &'w Worker,
+            u64,
+            u64,
+            &RemoteKey,
+            &'a mut u64,
+        ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> = Ep::amo_fswap64;
+        let _: for<'w, 'a> fn(
+            &Ep,
+            &'w Worker,
             u64,
             u64,
             u64,
             &RemoteKey,
-            &mut u64,
-        ) -> Result<Option<Request>, ucs_status_t> = Ep::amo_fcswap64;
+            &'a mut u64,
+        ) -> Result<FetchAmoRequest<'w, 'a>, ucs_status_t> = Ep::amo_fcswap64;
     }
 
     /// Test with invalid rkey — this segfaults on some UCX versions instead of
