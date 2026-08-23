@@ -17,6 +17,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Ep {
     pub(crate) handle: ucp_ep_h,
+    pub(crate) worker: ucp_worker_h,
     pub(crate) worker_alive: Arc<AtomicBool>,
 }
 
@@ -33,6 +34,7 @@ impl Ep {
         match result {
             Ok(()) => Ok(Ep {
                 handle: ep,
+                worker: worker.handle,
                 worker_alive: Arc::clone(&worker.alive),
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
@@ -49,6 +51,29 @@ impl Ep {
         params: &crate::RequestParam,
     ) -> Result<Option<crate::Request>, ucs_status_t> {
         status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
+    }
+
+    /// Modify endpoint error handling and user data.
+    pub fn modify(&self, params: &ModifyParams) -> Result<Option<crate::Request>, ucs_status_t> {
+        // SAFETY: self.handle is a live endpoint and params owns initialized storage.
+        status_ptr_to_result(unsafe { ucp_ep_modify_nb(self.handle, &params.handle) })
+    }
+
+    /// Estimate the time needed to send a message of `message_size` bytes.
+    pub fn evaluate_perf(&self, message_size: usize) -> Result<EpPerf, ucs_status_t> {
+        // SAFETY: UCX fills the initialized attribute structure according to its mask.
+        let mut attr: ucp_ep_evaluate_perf_attr_t = unsafe { std::mem::zeroed() };
+        attr.field_mask = ucp_ep_perf_attr_field::UCP_EP_PERF_ATTR_FIELD_ESTIMATED_TIME as u64;
+        // SAFETY: UCX performance parameter structs are valid when zeroed.
+        let mut param: ucp_ep_evaluate_perf_param_t = unsafe { std::mem::zeroed() };
+        param.field_mask = ucp_ep_perf_param_field::UCP_EP_PERF_PARAM_FIELD_MESSAGE_SIZE as u64;
+        param.message_size = message_size;
+        // SAFETY: self.handle is live and both parameter structures are initialized.
+        status_to_result(unsafe { ucp_ep_evaluate_perf(self.handle, &param, &mut attr) }).map(
+            |()| EpPerf {
+                estimated_time: attr.estimated_time,
+            },
+        )
     }
 
     /// Query endpoint attributes.
@@ -101,6 +126,22 @@ mod tests {
     fn test_endpoint_flush_api_signature() {
         let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, ucs_status_t> =
             Ep::flush;
+    }
+
+    #[test]
+    fn endpoint_issue_37_api_signatures() {
+        let _: fn(&Ep, &ModifyParams) -> Result<Option<crate::Request>, ucs_status_t> = Ep::modify;
+        let _: fn(&Ep, usize) -> Result<EpPerf, ucs_status_t> = Ep::evaluate_perf;
+    }
+
+    #[test]
+    fn modify_params_only_sets_supported_fields() {
+        let mut builder = ModifyParamsBuilder::new();
+        let params = builder.user_data(std::ptr::null_mut()).build();
+        assert_eq!(
+            params.handle.field_mask,
+            ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64
+        );
     }
 
     #[test]
@@ -202,6 +243,59 @@ pub struct EpAttr {
     pub remote_sockaddr: Option<sockaddr_storage>,
     pub transports: Option<ucp_transports_t>,
     pub user_data: Option<*mut std::os::raw::c_void>,
+}
+
+/// Parameters supported by [`Ep::modify`].
+#[derive(Debug)]
+pub struct ModifyParams {
+    pub(crate) handle: ucp_ep_params_t,
+}
+
+#[derive(Debug)]
+pub struct ModifyParamsBuilder {
+    handle: ucp_ep_params_t,
+}
+
+impl ModifyParamsBuilder {
+    pub fn new() -> Self {
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask
+        // controls which fields UCX reads.
+        Self {
+            handle: unsafe { std::mem::zeroed() },
+        }
+    }
+
+    /// Set the endpoint error callback.
+    pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut Self {
+        self.handle.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
+        self.handle.err_handler.cb = cb;
+        self
+    }
+
+    /// Set opaque endpoint user data.
+    pub fn user_data(&mut self, ptr: *mut std::ffi::c_void) -> &mut Self {
+        self.handle.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64;
+        self.handle.user_data = ptr;
+        self
+    }
+
+    pub fn build(&self) -> ModifyParams {
+        ModifyParams {
+            handle: self.handle,
+        }
+    }
+}
+
+impl Default for ModifyParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Estimated endpoint performance for a requested message size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EpPerf {
+    pub estimated_time: f64,
 }
 
 impl Ep {

@@ -117,6 +117,7 @@ fn fetch_amo_result<'w, 'a>(
 /// The rkey is automatically destroyed when dropped.
 pub struct RemoteKey {
     handle: ucp_rkey_h,
+    worker: ucp_worker_h,
 }
 
 fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
@@ -163,7 +164,10 @@ impl RemoteKey {
         status_to_result(unsafe {
             ucp_ep_rkey_unpack(ep.handle, payload.as_ptr() as *const _, &mut rkey)
         })
-        .map(|()| RemoteKey { handle: rkey })
+        .map(|()| RemoteKey {
+            handle: rkey,
+            worker: ep.worker,
+        })
     }
 
     /// Get a local pointer to remote memory for intra-node one-sided access.
@@ -189,6 +193,22 @@ impl RemoteKey {
     #[inline]
     pub fn as_raw(&self) -> ucp_rkey_h {
         self.handle
+    }
+
+    /// Compare this key with another key belonging to the same worker.
+    /// UCX returns zero when the keys refer to the same memory region.
+    pub fn compare(&self, other: &RemoteKey) -> Result<bool, ucs_status_t> {
+        if self.worker != other.worker {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
+        let params = ucp_rkey_compare_params_t { field_mask: 0 };
+        let mut result = 0;
+        // SAFETY: both keys and their worker are valid UCX handles, and the
+        // parameter and result storage live for the duration of the call.
+        status_to_result(unsafe {
+            ucp_rkey_compare(self.worker, self.handle, other.handle, &params, &mut result)
+        })
+        .map(|()| result == 0)
     }
 }
 
@@ -1159,6 +1179,12 @@ mod tests {
         assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
         let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, ucs_status_t> = RemoteKey::unpack;
         let _ = unpack;
+    }
+
+    #[test]
+    fn remote_key_compare_api_signature() {
+        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey) -> Result<bool, ucs_status_t> =
+            RemoteKey::compare;
     }
 
     #[test]
