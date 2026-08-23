@@ -99,7 +99,8 @@ impl Default for ParamsBuilder {
 
 impl ParamsBuilder {
     pub fn new() -> ParamsBuilder {
-        let uninit_params = std::mem::MaybeUninit::<ucp_params_t>::uninit();
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
+        let uninit_params = std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() });
         ParamsBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,

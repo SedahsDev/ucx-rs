@@ -125,14 +125,6 @@ impl Worker {
         unsafe { ucp_am_data_release(self.handle, data.as_ptr()) }
     }
 
-    /// Flush the worker (legacy variant).
-    pub fn flush_nb(&self, flags: u32) -> crate::Request {
-        unsafe {
-            let ptr = ucp_worker_flush_nb(self.handle, flags, None);
-            crate::Request::from_raw(ptr)
-        }
-    }
-
     /// Worker fence — ensures ordering of operations.
     pub fn fence(&self) -> Result<(), ucs_status_t> {
         crate::status_to_result(unsafe { ucp_worker_fence(self.handle) })
@@ -280,7 +272,8 @@ pub unsafe fn worker_set_am_recv_handler_nbx(
 
 impl ParamsBuilder {
     pub fn new() -> ParamsBuilder {
-        let uninit_params = std::mem::MaybeUninit::<ucp_worker_params_t>::uninit();
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
+        let uninit_params = std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() });
         ParamsBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,

@@ -114,7 +114,8 @@ impl Default for MemMapParamsBuilder {
 impl MemMapParamsBuilder {
     pub fn new() -> Self {
         Self {
-            uninit_handle: std::mem::MaybeUninit::uninit(),
+            // SAFETY: UCX parameter structs are valid when zeroed.
+            uninit_handle: std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() }),
             field_mask: 0,
         }
     }
@@ -208,7 +209,8 @@ impl Default for MemAdviseParamsBuilder {
 impl MemAdviseParamsBuilder {
     pub fn new() -> Self {
         Self {
-            uninit_handle: std::mem::MaybeUninit::uninit(),
+            // SAFETY: UCX parameter structs are valid when zeroed.
+            uninit_handle: std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() }),
             field_mask: 0,
         }
     }
@@ -265,7 +267,8 @@ impl Default for MemhPackParamsBuilder {
 impl MemhPackParamsBuilder {
     pub fn new() -> Self {
         Self {
-            uninit_handle: std::mem::MaybeUninit::uninit(),
+            // SAFETY: UCX parameter structs are valid when zeroed.
+            uninit_handle: std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() }),
             field_mask: 0,
         }
     }
