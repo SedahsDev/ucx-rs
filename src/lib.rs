@@ -307,10 +307,69 @@ mod status_tests {
         // The flag lives in op_attr_mask; the op-specific `flags` field must stay 0.
         assert_eq!(params.handle.flags, 0);
     }
+
+    #[test]
+    fn request_params_reply_buffer_does_not_set_flags_field_mask() {
+        let mut reply = 0_u64;
+        let params = RequestParamBuilder::new()
+            .reply_buffer(&mut reply as *mut _ as *mut std::os::raw::c_void)
+            .build();
+
+        assert_ne!(
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32,
+            0
+        );
+        assert_eq!(
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32,
+            0
+        );
+    }
+
+    #[test]
+    fn request_params_flags_preserves_reply_buffer_field_mask() {
+        let mut reply = 0_u64;
+        let flags = 0x1234_u32;
+        let params = RequestParamBuilder::new()
+            .reply_buffer(&mut reply as *mut _ as *mut std::os::raw::c_void)
+            .flags(flags)
+            .build();
+
+        assert_eq!(params.handle.flags, flags);
+        assert_ne!(
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32,
+            0
+        );
+        assert_ne!(
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32,
+            0
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "UCP_OP_ATTR_FLAG_NO_IMM_CMPL")]
+    fn request_params_force_and_no_imm_cmpl_remain_mutually_exclusive() {
+        let mut builder = RequestParamBuilder::new();
+        builder.flags(0x1).force_imm_cmpl().no_imm_cmpl();
+    }
 }
 
 pub struct RequestParam {
     pub(crate) handle: ucp_request_param_t,
+}
+
+impl RequestParam {
+    /// Build parameters for a fetch operation writing its result to `reply`.
+    ///
+    /// The reply buffer must outlive every request created from these params
+    /// until completion. This helper avoids a raw-pointer conversion at the
+    /// call site; the returned params must only be used while `reply` remains
+    /// valid.
+    #[inline]
+    pub fn fetch_params<T>(reply: &mut T) -> RequestParam {
+        RequestParamBuilder::new()
+            .reply_buffer(reply as *mut T as *mut std::os::raw::c_void)
+            .build()
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -355,12 +414,23 @@ impl RequestParamBuilder {
         self
     }
 
+    /// Set operation-specific flags without changing any other field mask bits.
+    #[inline]
+    pub fn flags(&mut self, flags: u32) -> &mut Self {
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
+        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
+        params.flags = flags;
+        self
+    }
+
+    /// Set the reply buffer field without changing operation-specific flags.
+    ///
+    /// Prefer [`RequestParam::fetch_params`] when the reply buffer is a Rust
+    /// reference, as it makes the buffer lifetime requirement explicit.
     #[inline]
     pub fn reply_buffer(&mut self, buf: *mut std::os::raw::c_void) -> &mut Self {
-        self.field_mask |= (ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32)
-            | (ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32);
+        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.flags = 0;
         params.reply_buffer = buf;
         self
     }
