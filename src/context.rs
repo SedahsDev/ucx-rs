@@ -253,6 +253,20 @@ pub struct Context {
     pub(crate) handle: ucp_context_h,
 }
 
+// SAFETY: Context has exclusive RAII ownership of its raw handle, is not Clone,
+// and Drop calls ucp_cleanup exactly once. UCX documents context-level APIs as
+// safe for concurrent use across workers on different threads (the ucp.h
+// mt_workers_shared discussion). Worker and Ep remain !Send, so per-worker state
+// stays thread-bound even when the owning Context crosses threads.
+unsafe impl Send for Context {}
+
+// SAFETY: Context has exclusive RAII ownership of its raw handle, is not Clone,
+// and Drop calls ucp_cleanup exactly once. UCX documents context-level APIs as
+// safe for concurrent use across workers on different threads (the ucp.h
+// mt_workers_shared discussion). Worker and Ep remain !Send, so per-worker state
+// stays thread-bound even when shared Context access crosses threads.
+unsafe impl Sync for Context {}
+
 impl Drop for Context {
     fn drop(&mut self) {
         // SAFETY: self.handle is the live context handle owned by this wrapper.
