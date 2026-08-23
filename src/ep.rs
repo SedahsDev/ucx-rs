@@ -132,6 +132,16 @@ mod tests {
     }
 
     #[test]
+    fn err_handler_arg_alone_does_not_advertise_callback() {
+        let mut builder = ParamsBuilder::new();
+        let params = builder.err_handler_arg(std::ptr::null_mut()).build();
+        assert_eq!(
+            params.handle.field_mask & ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64,
+            0
+        );
+    }
+
+    #[test]
     fn close_api_has_worker_signature() {
         let _close: fn(Ep, &Worker, u32) -> Result<(), ucs_status_t> = Ep::close;
     }
@@ -175,19 +185,30 @@ impl Ep {
     /// progressing the associated worker.
     pub fn close(self, worker: &Worker, flags: u32) -> Result<(), ucs_status_t> {
         let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: UCX request parameter structs are valid when zeroed.
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         param.flags = flags;
+        // SAFETY: this.handle is owned by the endpoint and param is initialized.
         let request = status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })?;
         if let Some(request) = request {
             for _ in 0..1_000_000 {
                 match request.check_finished() {
-                    Ok(true) => return Ok(()),
+                    Ok(true) => {
+                        request.free();
+                        return Ok(());
+                    }
                     Ok(false) => {
                         worker.progress();
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        // Do not free a request that may still be in flight.
+                        std::mem::forget(request);
+                        return Err(error);
+                    }
                 }
             }
+            // Do not free a request that may still be in flight.
+            std::mem::forget(request);
             return Err(ucs_status_t::UCS_ERR_TIMED_OUT);
         }
         Ok(())
@@ -200,11 +221,17 @@ impl Drop for Ep {
             eprintln!("ucx-rs: endpoint dropped after its worker; skipping close");
             return;
         }
+        // SAFETY: UCX request parameter structs are valid when zeroed.
         let param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         // Close returns Ok(None) if complete, Ok(Some(req)) if in progress.
         // Request::Drop frees the request; do not free manually (would double-free).
+        // SAFETY: self.handle is owned by this endpoint and param is initialized.
         match status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }) {
-            Ok(Some(_req)) => eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first"),
+            Ok(Some(_req)) => {
+                eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first");
+                // Do not free a request whose close has not completed.
+                std::mem::forget(_req);
+            }
             Ok(None) => {}
             Err(error) => eprintln!("ucx-sys: endpoint close during Drop failed: {error:?}; UCX released endpoint resources"),
         }
@@ -275,6 +302,8 @@ impl ParamsBuilder {
     /// Configure the endpoint error callback. Its state may be supplied with `user_data`.
     pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
+        // SAFETY: uninit_handle is initialized by ParamsBuilder::new and this
+        // field is written before build exposes the struct.
         unsafe {
             (*self.uninit_handle.as_mut_ptr()).err_handler.cb = cb;
         }
@@ -283,7 +312,8 @@ impl ParamsBuilder {
 
     /// Set the callback argument passed to the endpoint error callback.
     pub fn err_handler_arg(&mut self, ptr: *mut std::ffi::c_void) -> &mut ParamsBuilder {
-        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
+        // SAFETY: uninit_handle is initialized by ParamsBuilder::new and this
+        // field is written before build exposes the struct.
         unsafe {
             (*self.uninit_handle.as_mut_ptr()).err_handler.arg = ptr;
         }
@@ -293,6 +323,8 @@ impl ParamsBuilder {
     /// Set opaque endpoint user data.
     pub fn user_data(&mut self, ptr: *mut std::ffi::c_void) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64;
+        // SAFETY: uninit_handle is initialized by ParamsBuilder::new and this
+        // field is written before build exposes the struct.
         unsafe {
             (*self.uninit_handle.as_mut_ptr()).user_data = ptr;
         }
