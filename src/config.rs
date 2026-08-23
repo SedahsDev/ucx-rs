@@ -96,7 +96,9 @@ mod tests {
     #[test]
     fn test_context_query() {
         let config = Config::read("", "").expect("config read");
-        let params = ParamsBuilder::new().build();
+        let params = ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .build();
         let ctx = Context::new(&config, &params).expect("init");
         let attr = unsafe { context_query(ctx.handle, UCP_CONTEXT_ATTR_FIELD_REQUEST_SIZE) }
             .expect("context_query");
