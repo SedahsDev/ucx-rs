@@ -17,3 +17,6 @@ version = "2.6.0"
 
 [dependencies.libc]
 version = "0.2"
+
+[dev-dependencies]
+static_assertions = "1.1"
