@@ -8,6 +8,28 @@ use libc::{sockaddr_in, sockaddr_in6};
 use std::mem::MaybeUninit;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ptr;
+use std::sync::{Arc, Mutex};
+
+struct ConnHandler {
+    inner: Mutex<Box<dyn FnMut(ConnRequest) + Send + 'static>>,
+    listener: Mutex<usize>,
+}
+
+unsafe extern "C" fn conn_trampoline(conn_request: ucp_conn_request_h, arg: *mut std::ffi::c_void) {
+    // SAFETY: `arg` points to the ConnHandler held by Listener for the entire
+    // lifetime of the UCX listener. UCX supplies a live request handle for
+    // this callback; ConnRequest owns the callback delivery and must be used
+    // before the callback returns according to UCX's request lifetime rules.
+    let handler = unsafe { &*(arg as *const ConnHandler) };
+    let listener = *handler
+        .listener
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) as ucp_listener_h;
+    let request = unsafe { ConnRequest::from_raw_with_listener(conn_request, listener) };
+    if let Ok(mut callback) = handler.inner.lock() {
+        callback(request);
+    }
+}
 
 bitflags! {
     /// Fields accepted by [`ParamsBuilder`].
@@ -92,10 +114,18 @@ impl Default for ParamsBuilder {
 /// RAII wrapper for a UCP listener.
 pub struct Listener {
     handle: ucp_listener_h,
+    #[allow(dead_code)]
+    conn_handler: Option<Arc<ConnHandler>>,
 }
 
 impl Listener {
     /// Create a listener bound to `addr`.
+    ///
+    /// Any UCX callback configured through the parameters runs in the progress
+    /// context: the thread calling [`Worker::progress`], or UCX-internal
+    /// progress under MULTI. Never block or call back into the same worker from
+    /// a handler; hop heavy work to an application thread or channel. See
+    /// `THREADING.md` section 4.
     pub fn create(worker: &Worker, addr: &SocketAddr) -> Result<Self, ucs_status_t> {
         let (_storage, sockaddr) = socket_address(addr);
         let params = ParamsBuilder::new().sockaddr(sockaddr).build();
@@ -104,18 +134,73 @@ impl Listener {
         // UCX copies the address as part of listener creation.
         let result =
             status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) });
-        result.map(|()| Self { handle })
+        result.map(|()| Self {
+            handle,
+            conn_handler: None,
+        })
     }
 
-    /// Create a listener from explicitly-built parameters.
+    /// Create a listener from explicitly-built parameters. Callback execution
+    /// follows the progress-context rules documented on [`Self::create`].
     pub fn create_with_params(
         worker: &Worker,
         params: &ParamsBuilder,
     ) -> Result<Self, ucs_status_t> {
         let params = params.clone_params();
         let mut handle = ptr::null_mut();
-        status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
-            .map(|()| Self { handle })
+        status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) }).map(
+            |()| Self {
+                handle,
+                conn_handler: None,
+            },
+        )
+    }
+
+    /// Create a listener with a safe connection callback. The callback runs in
+    /// the progress context (the thread calling [`Worker::progress`], or UCX's
+    /// internal progress thread under MULTI). Do not block or call back into
+    /// the same worker; send heavy work to an application thread or channel.
+    ///
+    /// The delivered [`ConnRequest`] is valid only during the callback. It is
+    /// an owned Rust wrapper around UCX's single-use request handle: consume it
+    /// by passing it to an endpoint-creation parameter or reject it with a
+    /// [`Listener`] reference before returning.
+    pub fn create_with_conn_handler<F>(
+        worker: &Worker,
+        addr: &SocketAddr,
+        handler: F,
+    ) -> Result<Self, ucs_status_t>
+    where
+        F: FnMut(ConnRequest) + Send + 'static,
+    {
+        let conn_handler = Arc::new(ConnHandler {
+            inner: Mutex::new(Box::new(handler)),
+            listener: Mutex::new(ptr::null_mut::<std::ffi::c_void>() as usize),
+        });
+        let (_storage, sockaddr) = socket_address(addr);
+        // SAFETY: the callback and its Arc-backed argument are retained by
+        // the returned listener until after UCX listener destruction.
+        let params = unsafe {
+            ParamsBuilder::new()
+                .sockaddr(sockaddr)
+                .conn_handler(Some(conn_trampoline), Arc::as_ptr(&conn_handler) as *mut _)
+                .build()
+        };
+        let mut handle = ptr::null_mut();
+        match status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
+        {
+            Ok(()) => {
+                *conn_handler
+                    .listener
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = handle as usize;
+                Ok(Self {
+                    handle,
+                    conn_handler: Some(conn_handler),
+                })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn as_raw(&self) -> ucp_listener_h {
@@ -179,13 +264,20 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = ConnRequestFields::CLIENT
 #[derive(Debug)]
 pub struct ConnRequest {
     handle: ucp_conn_request_h,
+    listener: ucp_listener_h,
 }
 
 impl ConnRequest {
     /// # Safety
     /// `handle` must be a valid request supplied by a UCX listener callback.
     pub unsafe fn from_raw(handle: ucp_conn_request_h) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            listener: ptr::null_mut(),
+        }
+    }
+    unsafe fn from_raw_with_listener(handle: ucp_conn_request_h, listener: ucp_listener_h) -> Self {
+        Self { handle, listener }
     }
     pub fn as_raw(&self) -> ucp_conn_request_h {
         self.handle
@@ -193,6 +285,11 @@ impl ConnRequest {
     /// Reject this connection request, consuming its single-use handle.
     pub fn reject(self, listener: &Listener) -> Result<(), ucs_status_t> {
         listener.reject(self)
+    }
+    /// Reject this callback-delivered request using its originating listener.
+    /// The request is single-use and must be consumed before the callback ends.
+    pub fn reject_owned(self) -> Result<(), ucs_status_t> {
+        status_to_result(unsafe { ucp_listener_reject(self.listener, self.handle) })
     }
     pub fn query(&self, fields: ConnRequestFields) -> Result<ConnRequestAttr, ucs_status_t> {
         // SAFETY: zeroed C POD, then UCX fills exactly the requested fields.

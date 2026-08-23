@@ -104,6 +104,12 @@ silently flip any auto-trait. Closing that gap is the first issue below.
 
 ## 4. Progress & callback rules
 
+Callbacks configured by `Worker::am_register` and `Listener::create`/
+`create_with_params` run in the progress context: on the thread calling
+`Worker::progress()`, or on UCX's internal progress thread under `MULTI`.
+Handlers must not block or call back into the same worker. Hop heavy work to an
+application thread or channel.
+
 | Rule | Why |
 |------|-----|
 | Never call `Worker::progress()` concurrently on one worker | Use one owning progress thread per worker. Under MULTI in an MT-enabled build it is *safe* but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs; in non-MT or SINGLE it is UB — see §2.1. Debug builds panic on overlapping entry for diagnostics. |
