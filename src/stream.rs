@@ -13,6 +13,52 @@ use crate::Request;
 use crate::RequestParam;
 use std::ptr::NonNull;
 
+/// One endpoint reported ready by [`Worker::stream_poll`].
+///
+/// The endpoint handle is borrowed from UCX. It is valid until the next stream
+/// poll or worker progress operation, according to the UCX stream poll contract;
+/// this type never takes ownership of it and therefore cannot close the endpoint.
+#[derive(Debug, Copy, Clone)]
+pub struct StreamPollEvent {
+    ep: ucp_ep_h,
+    user_data: *mut std::ffi::c_void,
+    flags: u32,
+}
+
+impl StreamPollEvent {
+    /// Return the borrowed UCX endpoint handle reported by the poll.
+    pub fn ep_handle(&self) -> ucp_ep_h {
+        self.ep
+    }
+
+    /// Return the user data associated with the endpoint.
+    pub fn user_data(&self) -> *mut std::ffi::c_void {
+        self.user_data
+    }
+
+    /// Return the UCX stream poll flags for this endpoint.
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+}
+
+impl Request {
+    /// Test completion of a stream receive request and return its byte length.
+    ///
+    /// Returns `Ok(length)` only when UCX reports `UCS_OK` and the receive is
+    /// complete. A pending receive returns `Err(UCS_INPROGRESS)`; any other
+    /// `Err(status)` is a UCX failure status. The output length is only valid
+    /// for `Ok` results, as specified by UCX. The request remains owned by this
+    /// value in all cases. This method must only be used with a request returned
+    /// by [`Ep::stream_recv`].
+    pub fn stream_recv_test(&self) -> Result<usize, ucs_status_t> {
+        let request = self.handle.ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
+        let mut length = 0usize;
+        status_to_result(unsafe { ucp_stream_recv_request_test(request.as_ptr(), &mut length) })
+            .map(|()| length)
+    }
+}
+
 /// Data returned by [`Ep::stream_recv_data`], released when dropped.
 pub struct StreamData<'ep> {
     ep: &'ep Ep,
@@ -105,17 +151,29 @@ impl Ep {
 impl Worker {
     /// Poll for stream data on multiple endpoints.
     ///
-    /// Returns the number of endpoints with data available (negative value on error).
-    ///
-    /// # Safety
-    /// Caller must ensure `poll_eps` is valid for `max_eps` elements.
-    pub unsafe fn stream_poll(
-        &self,
-        poll_eps: *mut ucp_stream_poll_ep_t,
-        max_eps: usize,
-        flags: u32,
-    ) -> isize {
-        ucp_stream_worker_poll(self.handle, poll_eps, max_eps, flags)
+    /// Each returned endpoint handle is borrowed from UCX and must not be
+    /// closed by the caller. UCX may invalidate the handle after the next
+    /// worker progress or stream poll operation.
+    pub fn stream_poll(&self, max_eps: usize) -> Result<Vec<StreamPollEvent>, ucs_status_t> {
+        let mut poll_eps = vec![unsafe { std::mem::zeroed() }; max_eps];
+        let count =
+            unsafe { ucp_stream_worker_poll(self.handle, poll_eps.as_mut_ptr(), max_eps, 0) };
+        if count < 0 {
+            return Err(crate::status_from_ptr(
+                count as isize as usize as ucs_status_ptr_t,
+            ));
+        }
+        let count = count as usize;
+        debug_assert!(count <= max_eps);
+        poll_eps.truncate(count.min(max_eps));
+        Ok(poll_eps
+            .into_iter()
+            .map(|entry| StreamPollEvent {
+                ep: entry.ep,
+                user_data: entry.user_data,
+                flags: entry.flags,
+            })
+            .collect())
     }
 }
 
@@ -279,19 +337,24 @@ mod tests {
     #[test]
     fn test_stream_poll_signature() {
         let (_ctx, _worker) = setup_worker();
-        // Verify the FFI functions are accessible
-        extern "C" {
-            fn ucp_stream_worker_poll(
-                worker: ucp_worker_h,
-                poll_eps: *mut ucp_stream_poll_ep_t,
-                max_eps: usize,
-                flags: u32,
-            ) -> isize;
-            fn ucp_stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void);
-        }
-        // Functions exist and have correct signatures
-        let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_worker_poll) };
-        let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_data_release) };
+        let _: fn(&Worker, usize) -> Result<Vec<StreamPollEvent>, ucs_status_t> =
+            Worker::stream_poll;
+        let _: fn(&Request) -> Result<usize, ucs_status_t> = Request::stream_recv_test;
+        let _: unsafe extern "C" fn(ucp_ep_h, *mut std::os::raw::c_void) = ucp_stream_data_release;
+    }
+
+    #[test]
+    fn test_stream_poll_empty_worker() {
+        let (_ctx, worker) = setup_worker();
+        assert!(worker
+            .stream_poll(0)
+            .expect("poll with zero capacity")
+            .is_empty());
+    }
+
+    #[test]
+    fn test_stream_request_completion_signature() {
+        let _: fn(&Request) -> Result<usize, ucs_status_t> = Request::stream_recv_test;
     }
 
     #[test]
