@@ -33,7 +33,16 @@ pub struct FetchAmoRequest<'w, 'a> {
 }
 
 impl<'w, 'a> FetchAmoRequest<'w, 'a> {
-    pub fn into_inner(mut self) -> Option<crate::Request> {
+    /// Extract the underlying UCX request without completing it.
+    ///
+    /// # Safety
+    /// The returned request may be in flight and still own `reply_buffer` for
+    /// the caller-provided reply buffer. The caller must keep the reply buffer
+    /// valid until the returned request reaches completion
+    /// (`check_finished() == Ok(true)`) and must not drop it (which calls
+    /// `ucp_request_free`) while in flight. Prefer `check_finished()` + `free()`
+    /// on the wrapper, or let `Drop` handle it.
+    pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
         self.request.take()
     }
     pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
