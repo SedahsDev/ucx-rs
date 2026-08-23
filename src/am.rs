@@ -57,8 +57,16 @@ unsafe extern "C" fn am_trampoline(
     } else {
         unsafe { std::slice::from_raw_parts(data as *const u8, length) }
     };
-    match handler.inner.lock() {
-        Ok(mut callback) => callback(header, data),
+    let mut callback = match handler.inner.lock() {
+        Ok(callback) => callback,
+        // A panic poisons the mutex. Do not invoke a possibly inconsistent
+        // handler again; report the callback failure to UCX instead.
+        Err(_) => return ucs_status_t::UCS_ERR_IO_ERROR,
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(header, data))) {
+        Ok(status) => status,
+        // Handler panics are contained here and reported as a UCX error; they
+        // never unwind through this extern "C" trampoline into UCX.
         Err(_) => ucs_status_t::UCS_ERR_IO_ERROR,
     }
 }
