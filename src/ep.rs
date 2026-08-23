@@ -83,8 +83,15 @@ impl Ep {
         if !this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(None);
         }
-        // SAFETY: this endpoint is owned and its worker is alive.
-        status_ptr_to_result(unsafe { ucp_disconnect_nb(this.handle) })
+        // SAFETY: this endpoint is owned and its worker is alive. On an
+        // immediate error, UCX did not take ownership, so destroy the handle.
+        let result = status_ptr_to_result(unsafe { ucp_disconnect_nb(this.handle) });
+        if result.is_err() {
+            // SAFETY: the disconnect call returned an error without taking
+            // ownership of this endpoint; `this` is its sole owner.
+            unsafe { ucp_ep_destroy(this.handle) };
+        }
+        result
     }
 
     /// Modify endpoint error handling and user data.
