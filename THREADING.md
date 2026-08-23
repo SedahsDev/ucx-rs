@@ -87,7 +87,7 @@ therefore derived structurally:
 | Type | Derivation | Intended |
 |------|-----------|----------|
 | `Config` | contains owned `CString`-backed config handle | audit |
-| `Params` / builders (`*ParamsBuilder`) | POD + `Option<CString>` | `Send` (plain data) |
+| `Params` / builders (`*ParamsBuilder`) | POD + `Option<CString>` | `!Send` (raw pointers in bindgen structs) |
 | `Context` | raw `ucp_context_h` → `!Send !Sync` | **should be `Send + Sync`** |
 | `Worker` | raw `ucp_worker_h` → `!Send !Sync` | stays `!Send !Sync` (v1) |
 | `Ep` | raw `ucp_ep_h` + `Arc<AtomicBool>` → `!Send !Sync` | stays `!Send !Sync` |
