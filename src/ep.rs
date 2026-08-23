@@ -59,11 +59,13 @@ impl Ep {
     /// - UCP_EP_ATTR_FIELD_REMOTE_SOCKADDR = 4
     /// - UCP_EP_ATTR_FIELD_TRANSPORTS = 8
     /// - UCP_EP_ATTR_FIELD_USER_DATA = 16
-    pub fn query(&self, mask: u64) -> Result<EpAttr, ucs_status_t> {
+    pub fn query(&self, mask: EpAttrFields) -> Result<EpAttr, ucs_status_t> {
+        // SAFETY: UCX fills the initialized attribute structure according to its mask.
         let mut attr: ucp_ep_attr = unsafe { std::mem::zeroed() };
-        attr.field_mask = mask;
+        attr.field_mask = mask.bits();
         crate::status_to_result(unsafe { ucp_ep_query(self.handle, &mut attr) }).map(|()| {
-            let name = if mask & 1 != 0 {
+            let name = if mask.contains(EpAttrFields::NAME) {
+                // SAFETY: UCX documents NAME as a NUL-terminated fixed-size array.
                 unsafe {
                     std::ffi::CStr::from_ptr(attr.name.as_ptr())
                         .to_string_lossy()
@@ -74,7 +76,18 @@ impl Ep {
             };
             EpAttr {
                 name,
-                user_data: attr.user_data,
+                local_sockaddr: mask
+                    .contains(EpAttrFields::LOCAL_SOCKADDR)
+                    .then_some(attr.local_sockaddr),
+                remote_sockaddr: mask
+                    .contains(EpAttrFields::REMOTE_SOCKADDR)
+                    .then_some(attr.remote_sockaddr),
+                transports: mask
+                    .contains(EpAttrFields::TRANSPORTS)
+                    .then_some(attr.transports),
+                user_data: mask
+                    .contains(EpAttrFields::USER_DATA)
+                    .then_some(attr.user_data),
             }
         })
     }
@@ -172,11 +185,23 @@ mod tests {
     }
 }
 
-/// Endpoint attribute result.
-#[derive(Debug, Clone)]
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct EpAttrFields: u64 {
+        const NAME = 1 << 0;
+        const LOCAL_SOCKADDR = 1 << 1;
+        const REMOTE_SOCKADDR = 1 << 2;
+        const TRANSPORTS = 1 << 3;
+        const USER_DATA = 1 << 4;
+    }
+}
+
 pub struct EpAttr {
     pub name: String,
-    pub user_data: *mut std::os::raw::c_void,
+    pub local_sockaddr: Option<sockaddr_storage>,
+    pub remote_sockaddr: Option<sockaddr_storage>,
+    pub transports: Option<ucp_transports_t>,
+    pub user_data: Option<*mut std::os::raw::c_void>,
 }
 
 impl Ep {
@@ -279,18 +304,38 @@ impl ParamsBuilder {
         }
     }
 
-    pub fn local_address(&mut self, worker_address: &WorkerAddress) -> &mut ParamsBuilder {
-        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS as u64;
-        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.address = worker_address.handle;
-        self
-    }
-
     pub fn address(&mut self, worker_address: &RemoteWorkerAddress) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         let (address, _) = worker_address.get_handle();
         params.address = address;
+        self
+    }
+
+    pub fn sockaddr(&mut self, addr: &ucs_sock_addr_t) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR as u64;
+        // SAFETY: builder storage is initialized and the sockaddr is copied.
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).sockaddr = *addr;
+        }
+        self
+    }
+
+    pub fn conn_request(&mut self, req: ucp_conn_request_h) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64;
+        // SAFETY: req is an opaque UCX handle accepted by this parameter.
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).conn_request = req;
+        }
+        self
+    }
+
+    pub fn params_flags(&mut self, flags: ParamsFlags) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS as u64;
+        // SAFETY: builder storage is initialized and flags is a typed UCX mask.
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).flags = flags.bits() as u32;
+        }
         self
     }
 

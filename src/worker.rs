@@ -178,34 +178,74 @@ impl Worker {
     /// - UCP_WORKER_ATTR_FIELD_MAX_AM_HEADER = 8
     /// - UCP_WORKER_ATTR_FIELD_NAME = 16
     /// - UCP_WORKER_ATTR_FIELD_MAX_INFO_STRING = 32
-    pub fn query(&self, mask: u64) -> Result<WorkerAttr, ucs_status_t> {
+    pub fn query(&self, mask: WorkerAttrFields) -> Result<WorkerAttr, ucs_status_t> {
+        // SAFETY: UCX fills only fields selected by the documented mask.
         let mut attr: ucp_worker_attr = unsafe { std::mem::zeroed() };
-        attr.field_mask = mask;
+        attr.field_mask = mask.bits();
+        // SAFETY: self.handle is a live worker and attr is valid for UCX to fill.
         crate::status_to_result(unsafe { ucp_worker_query(self.handle, &mut attr) }).map(|()| {
-            let name = if mask & (1u64 << 4) != 0 {
-                unsafe {
-                    std::ffi::CStr::from_ptr(attr.name.as_ptr())
+            let name = if mask.contains(WorkerAttrFields::NAME) {
+                // SAFETY: UCX documents NAME as a NUL-terminated fixed-size array.
+                Some(
+                    unsafe { std::ffi::CStr::from_ptr(attr.name.as_ptr()) }
                         .to_string_lossy()
-                        .into_owned()
-                }
+                        .into_owned(),
+                )
             } else {
-                String::new()
+                None
             };
             WorkerAttr {
-                thread_mode: attr.thread_mode,
-                max_am_header: attr.max_am_header,
+                thread_mode: mask
+                    .contains(WorkerAttrFields::THREAD_MODE)
+                    .then_some(attr.thread_mode),
+                address: mask
+                    .contains(WorkerAttrFields::ADDRESS)
+                    .then_some(WorkerAddressAttr {
+                        address: attr.address,
+                        length: attr.address_length,
+                    }),
+                address_flags: mask
+                    .contains(WorkerAttrFields::ADDRESS_FLAGS)
+                    .then_some(attr.address_flags),
+                max_am_header: mask
+                    .contains(WorkerAttrFields::MAX_AM_HEADER)
+                    .then_some(attr.max_am_header),
                 name,
+                max_info_string: mask
+                    .contains(WorkerAttrFields::MAX_INFO_STRING)
+                    .then_some(attr.max_debug_string),
             }
         })
     }
 }
 
-/// Worker query attribute result.
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct WorkerAttrFields: u64 {
+        const THREAD_MODE = 1 << 0;
+        const ADDRESS = 1 << 1;
+        const ADDRESS_FLAGS = 1 << 2;
+        const MAX_AM_HEADER = 1 << 3;
+        const NAME = 1 << 4;
+        const MAX_INFO_STRING = 1 << 5;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkerAddressAttr {
+    pub address: *mut ucp_address_t,
+    pub length: usize,
+}
+
+/// Worker query attribute result. Fields are present only when requested.
 #[derive(Debug, Clone)]
 pub struct WorkerAttr {
-    pub thread_mode: ucs_thread_mode_t,
-    pub max_am_header: usize,
-    pub name: String,
+    pub thread_mode: Option<ucs_thread_mode_t>,
+    pub address: Option<WorkerAddressAttr>,
+    pub address_flags: Option<u32>,
+    pub max_am_header: Option<usize>,
+    pub name: Option<String>,
+    pub max_info_string: Option<usize>,
 }
 
 /// Query worker address attributes.

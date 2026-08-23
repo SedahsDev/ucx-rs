@@ -191,7 +191,13 @@ impl ParamsBuilder {
 }
 
 impl Context {
+    /// Initializes a context; at least one non-empty feature is required.
     pub fn new(config: &Config, params: &Params) -> Result<Context, ucs_status_t> {
+        if params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_FEATURES as u64 == 0
+            || params.handle.features == 0
+        {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
         let mut context: ucp_context_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {
@@ -225,6 +231,22 @@ pub struct Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        // SAFETY: self.handle is the live context handle owned by this wrapper.
         unsafe { ucp_cleanup(self.handle) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_rejects_missing_features_before_ffi() {
+        let config = Config::read("", "").expect("config read");
+        let params = ParamsBuilder::new().build();
+        assert!(matches!(
+            Context::new(&config, &params),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        ));
     }
 }
