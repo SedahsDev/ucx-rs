@@ -272,7 +272,7 @@ mod tests {
             .features(crate::context::Flags::Tag)
             .mt_workers_shared(1)
             .build();
-        let context = crate::context::Context::new(
+        let mut context = crate::context::Context::new(
             &crate::context::Config::read("", "").expect("config read"),
             &context_params,
         )

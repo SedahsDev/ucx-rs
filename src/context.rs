@@ -243,7 +243,10 @@ impl Context {
         }
     }
 
-    pub fn worker_create<'a>(&'a self, params: &'a worker::Params) -> Result<Worker, ucs_status_t> {
+    pub fn worker_create<'a>(
+        &'a mut self,
+        params: &'a worker::Params,
+    ) -> Result<Worker, ucs_status_t> {
         Worker::new(self, params)
     }
 
@@ -265,18 +268,15 @@ pub struct Context {
     pub(crate) handle: ucp_context_h,
 }
 
-// SAFETY: Send is sound because Context::new refuses to construct a Context
-// unless UCP_PARAM_FIELD_MT_WORKERS_SHARED was set nonzero, which enables UCX's
-// internal context mt-lock (ucp_context.c). Send is additionally sound from
-// exclusive non-Clone RAII ownership. Worker and Ep remain !Send, so per-worker
-// state stays thread-bound.
+// SAFETY: Send is sound from exclusive, non-Clone RAII ownership alone: moving
+// the sole owner does not permit concurrent access to the UCX context.
 unsafe impl Send for Context {}
 
-// SAFETY: Sync is sound because Context::new refuses to construct a Context
-// unless UCP_PARAM_FIELD_MT_WORKERS_SHARED was set nonzero, which enables UCX's
-// internal context mt-lock (ucp_context.c). Send is additionally sound from
-// exclusive non-Clone RAII ownership. Worker and Ep remain !Send, so per-worker
-// state stays thread-bound even when shared Context access crosses threads.
+// SAFETY: Context::new enforces mt_workers_shared, so UCX's context mt-lock
+// guards shared mem_map/rkey_pack/print_info operations. Worker creation takes
+// &mut Context, which provides the exclusivity needed to avoid the unprotected
+// tl_bitmap cache read-modify-write in ucp_worker_create. Worker and Ep remain
+// !Send, so per-worker state stays thread-bound.
 unsafe impl Sync for Context {}
 
 impl Drop for Context {
@@ -289,6 +289,11 @@ impl Drop for Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_create_requires_exclusive_context_access() {
+        let _: fn(&mut Context, &worker::Params) -> Result<Worker, ucs_status_t> = Worker::new;
+    }
 
     #[test]
     fn context_rejects_missing_features_before_ffi() {

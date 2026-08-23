@@ -287,7 +287,7 @@ mod tests {
             .features(Flags::Tag)
             .mt_workers_shared(1)
             .build();
-        let ctx = Context::new(&Config::read("", "").expect("config read"), &ctx_params)
+        let mut ctx = Context::new(&Config::read("", "").expect("config read"), &ctx_params)
             .expect("context create");
         let worker_params = WorkerParamsBuilder::new().build();
         let worker = ctx.worker_create(&worker_params).expect("worker create");

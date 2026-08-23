@@ -88,7 +88,7 @@ therefore derived structurally:
 |------|-----------|----------|
 | `Config` | contains owned `CString`-backed config handle | audit |
 | `Params` / builders (`*ParamsBuilder`) | POD + `Option<CString>` | `!Send` (raw pointers in bindgen structs) |
-| `Context` | raw `ucp_context_h` with unsafe impl Send+Sync (#56) | Send + Sync |
+| `Context` | raw `ucp_context_h` with unsafe impl Send+Sync (#56); shared UCX operations use the context mt-lock, while worker creation requires exclusive `&mut Context` access | Send + Sync |
 | `Worker` | raw `ucp_worker_h` → `!Send !Sync` | stays `!Send !Sync` (v1) |
 | `Ep` | raw `ucp_ep_h` + `Arc<AtomicBool>` → `!Send !Sync` | stays `!Send !Sync` |
 | `Request` | `Option<NonNull<c_void>>` → `!Send !Sync` | stays `!Send !Sync` |
@@ -107,6 +107,7 @@ silently flip any auto-trait. Closing that gap is the first issue below.
 | Rule | Why |
 |------|-----|
 | Never call `Worker::progress()` concurrently on one worker | UCX requires external serialization of progress per worker in every mode. Under MULTI it is *safe* (internal spinlock) but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs — see §2.1. |
+| Create workers only with exclusive `&mut Context` access | `ucp_worker_create` performs an unprotected cache-on-first-worker read-modify-write of context state; use a single context owner or synchronize it (for example, `Arc<Mutex<Context>>`). |
 | Do not block inside an AM recv handler or listener accept callback | Callbacks run in the progress context; blocking stalls all completions on that worker. |
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |
 | Keep fetch-AMO reply buffers borrowed until `check_finished() == Ok(true)` | UCX writes the result at completion time, independent of when the request handle was freed. |

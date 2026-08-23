@@ -32,7 +32,7 @@ fn main() {
     let params = pb.build();
     let config = Config::read("", "").expect("config read");
 
-    let context = Context::new(&config, &params).expect("Context::new failed");
+    let mut context = Context::new(&config, &params).expect("Context::new failed");
     println!("UCP context created");
 
     let worker_params = WorkerParamsBuilder::new().build();
