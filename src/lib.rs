@@ -227,12 +227,15 @@ impl Request {
 ///
 /// # Invariant
 ///
-/// A function returning `ucs_status_ptr_t` never returns `UCS_INPROGRESS`:
-/// when an operation does not complete immediately, UCP allocates a request
-/// and returns a pointer to that request instead of the status code
-/// (`UCS_INPROGRESS = 1` is a small integer that can never be a valid
-/// pointer; UCX's own `ucp_request_complete` asserts completed requests do
-/// not carry it). Callers observe `UCS_INPROGRESS` only through plain
+/// The `nbx` family and the compat close/flush/modify/disconnect
+/// status-pointer APIs routed through this helper never return
+/// `UCS_INPROGRESS`: when an operation does not complete immediately, UCP
+/// allocates a request and returns a pointer to that request instead of the
+/// status code (`UCS_INPROGRESS = 1` is a small integer that can never be a
+/// valid pointer; UCX's own `ucp_request_complete` asserts completed requests
+/// do not carry it). Some legacy callback-bearing `_nb` APIs, such as
+/// `ucp_tag_send_nb`, can return `UCS_INPROGRESS` and must never be passed to
+/// this helper. Callers observe `UCS_INPROGRESS` only through plain
 /// `ucs_status_t` APIs such as `ucp_request_check_status`
 /// (`Request::check_finished`). This classification MUST NOT change if UCX
 /// is upgraded — re-verify against
