@@ -541,12 +541,6 @@ impl Ep {
 
     // ── AMO — fetch variants ──
 
-    fn fetch_param<T>(reply: &mut T) -> RequestParam {
-        crate::RequestParamBuilder::new()
-            .reply_buffer(reply as *mut T as *mut std::os::raw::c_void)
-            .build()
-    }
-
     /// Atomic fetch-and-add 64-bit; writes the previous value to `reply`.
     /// The reply buffer must remain valid until the request is resolved.
     pub fn amo_fadd64<'w, 'a>(
@@ -557,7 +551,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -582,7 +576,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -607,7 +601,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -634,7 +628,7 @@ impl Ep {
         reply: &'a mut u64,
     ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
         let operand = [compare, swap];
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -659,7 +653,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -684,7 +678,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -709,7 +703,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -736,7 +730,7 @@ impl Ep {
         reply: &'a mut u32,
     ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
         let operand = [expected, swap];
-        let param = Self::fetch_param(reply);
+        let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
