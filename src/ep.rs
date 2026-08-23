@@ -182,7 +182,9 @@ pub struct EpAttr {
 impl Ep {
     /// Start closing this endpoint and return the completion request, if any.
     /// The caller owns progress of a returned request and should check it while
-    /// progressing the associated worker.
+    /// progressing the associated worker. If close times out, it returns
+    /// `Err(UCS_ERR_TIMED_OUT)` after leaking the in-flight close request; the
+    /// endpoint must be recreated before it is used again.
     pub fn close(self, worker: &Worker, flags: u32) -> Result<(), ucs_status_t> {
         let this = std::mem::ManuallyDrop::new(self);
         // SAFETY: UCX request parameter structs are valid when zeroed.
