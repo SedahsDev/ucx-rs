@@ -70,7 +70,3 @@ fn main() {
     assert_eq!(received, [b'Z']);
     ep.close(&worker, 0).expect("close endpoint");
 }
-
-// The ffi module is private in the library, so the callback signature cannot
-// name its types from an external example. This alias is supplied below by the
-// public API's inferred callback parameter.
