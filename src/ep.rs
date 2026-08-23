@@ -36,8 +36,8 @@ impl Ep {
     /// Flush all outstanding AMO and RMA operations on this endpoint.
     ///
     /// Completion guarantees that operations issued before the flush have
-    /// completed at both the origin and target. Unlike [`Self::flush_nbx`],
-    /// this wrapper preserves immediate completion and UCX error statuses.
+    /// completed at both the origin and target. This wrapper preserves
+    /// immediate completion and UCX error statuses.
     pub fn flush(
         &self,
         params: &crate::RequestParam,
