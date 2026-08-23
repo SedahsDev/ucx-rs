@@ -1,3 +1,11 @@
+//! # Teardown
+//!
+//! [`Ep::close`] is the explicit graceful teardown path and waits for the
+//! close request to complete. [`Drop`] performs a best-effort graceful close
+//! when the worker is still alive. [`Ep::destroy`] and [`Ep::disconnect_nb`]
+//! are force/error-path escape hatches; use them only for broken endpoints and
+//! never while operations are pending on the endpoint.
+
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
@@ -49,6 +57,34 @@ impl Ep {
         params: &crate::RequestParam,
     ) -> Result<Option<crate::Request>, ucs_status_t> {
         status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
+    }
+
+    /// Immediately destroy a broken or erroring endpoint.
+    ///
+    /// Do not call this while operations are pending on the endpoint. This
+    /// consumes the endpoint, so it cannot be used after destruction. If the
+    /// worker has already been destroyed, the UCX call is skipped.
+    pub fn destroy(self) {
+        let this = std::mem::ManuallyDrop::new(self);
+        if this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
+            // SAFETY: the endpoint and its worker are alive and owned by this value.
+            unsafe { ucp_ep_destroy(this.handle) };
+        }
+    }
+
+    /// Start the deprecated legacy disconnect operation.
+    ///
+    /// This is an error-path/force-teardown escape hatch and must not be used
+    /// while operations are pending. [`Ep::close`] is recommended for normal
+    /// graceful teardown; `ucp_ep_close_nb` replaces this deprecated UCX API.
+    /// The returned request, when present, is owned by the caller.
+    pub fn disconnect_nb(self) -> Result<Option<crate::Request>, ucs_status_t> {
+        let this = std::mem::ManuallyDrop::new(self);
+        if !this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(None);
+        }
+        // SAFETY: this endpoint is owned and its worker is alive.
+        status_ptr_to_result(unsafe { ucp_disconnect_nb(this.handle) })
     }
 
     /// Modify endpoint error handling and user data.
@@ -207,6 +243,12 @@ mod tests {
     #[test]
     fn close_api_has_worker_signature() {
         let _close: fn(Ep, &Worker, u32) -> Result<(), ucs_status_t> = Ep::close;
+    }
+
+    #[test]
+    fn teardown_api_has_expected_signatures() {
+        let _: fn(Ep) = Ep::destroy;
+        let _: fn(Ep) -> Result<Option<crate::Request>, ucs_status_t> = Ep::disconnect_nb;
     }
 
     #[test]
