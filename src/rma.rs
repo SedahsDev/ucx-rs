@@ -29,17 +29,27 @@ pub struct FetchAmoRequest<'a> {
 }
 
 impl<'a> FetchAmoRequest<'a> {
-    pub fn into_inner(self) -> Option<crate::Request> {
-        self.request
+    pub fn into_inner(mut self) -> Option<crate::Request> {
+        self.request.take()
     }
     pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
         self.request
             .as_ref()
             .map_or(Ok(true), crate::Request::check_finished)
     }
-    pub fn free(self) {
-        if let Some(request) = self.request {
+    pub fn free(mut self) {
+        if let Some(request) = self.request.take() {
             request.free();
+        }
+    }
+}
+
+impl Drop for FetchAmoRequest<'_> {
+    fn drop(&mut self) {
+        // A pending request cannot safely be freed without completion. Deliberately
+        // leak it if discarded; callers should progress then call `free`.
+        if let Some(request) = self.request.take() {
+            std::mem::forget(request);
         }
     }
 }
