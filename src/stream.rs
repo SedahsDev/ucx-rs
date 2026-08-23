@@ -5,13 +5,70 @@
 
 use crate::ep::Ep;
 use crate::ffi::*;
+use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
+use std::ptr::NonNull;
+
+/// Data returned by [`Ep::stream_recv_data`], released when dropped.
+pub struct StreamData<'ep> {
+    ep: &'ep Ep,
+    data: NonNull<std::ffi::c_void>,
+    length: usize,
+}
+
+impl StreamData<'_> {
+    /// View the received stream data as bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: UCX returned `data` for `length` readable bytes and this
+        // guard keeps the allocation alive until it is dropped.
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr() as *const u8, self.length) }
+    }
+
+    /// Number of bytes in the received data.
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Whether the received data is empty.
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+}
+
+impl Drop for StreamData<'_> {
+    fn drop(&mut self) {
+        // SAFETY: `data` was returned by UCX for this endpoint and is released
+        // exactly once by this guard.
+        unsafe { ucp_stream_data_release(self.ep.handle, self.data.as_ptr()) }
+    }
+}
 
 impl Ep {
+    /// Receive one internally allocated stream data buffer.
+    ///
+    /// `None` means no data is currently available. The returned guard releases
+    /// the UCX buffer when dropped.
+    pub fn stream_recv_data(&self) -> Result<Option<StreamData<'_>>, ucs_status_t> {
+        let mut length = 0usize;
+        // SAFETY: self.handle is a live endpoint and length is writable.
+        let ptr = unsafe { ucp_stream_recv_data_nb(self.handle, &mut length) };
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        if status_ptr_is_err(ptr) {
+            return Err(crate::status_from_ptr(ptr));
+        }
+        Ok(Some(StreamData {
+            ep: self,
+            data: NonNull::new(ptr).expect("non-null checked above"),
+            length,
+        }))
+    }
+
     /// Send data on a stream (safe wrapper).
     pub fn stream_send(
         &self,
@@ -125,8 +182,15 @@ pub unsafe fn stream_worker_poll(
 pub unsafe fn stream_recv_data_nb(
     ep: ucp_ep_h,
     length: *mut usize,
-) -> Result<Option<Request>, ucs_status_t> {
-    status_ptr_to_result(ucp_stream_recv_data_nb(ep, length))
+) -> Result<Option<*mut std::os::raw::c_void>, ucs_status_t> {
+    let ptr = ucp_stream_recv_data_nb(ep, length);
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    if status_ptr_is_err(ptr) {
+        return Err(crate::status_from_ptr(ptr));
+    }
+    Ok(Some(ptr))
 }
 
 /// Test a stream receive request and get the data length.
@@ -149,7 +213,11 @@ pub unsafe fn stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void)
 }
 
 #[cfg(test)]
-#[allow(clippy::let_unit_value, clippy::missing_transmute_annotations)]
+#[allow(
+    clippy::let_unit_value,
+    clippy::missing_transmute_annotations,
+    clippy::type_complexity
+)]
 mod tests {
     use super::*;
     use crate::context::{Config, Context, Flags, ParamsBuilder as CtxParamsBuilder};
@@ -201,17 +269,10 @@ mod tests {
             }
         }
 
-        // Verify stream_recv compiles with valid params
-        let mut recv_buf = vec![0u8; 64];
-        let result = ep.stream_recv(&mut recv_buf, &param);
-        match result {
-            Ok((_req, _len)) => {
-                // Received data (unlikely without peer, but valid)
-            }
-            Err(_status) => {
-                // Error expected without connected peer — API is valid
-            }
-        }
+        // Do not call stream_recv on a bare self-EP: UCX requires a connected
+        // stream peer and dereferences uninitialized stream state otherwise.
+        let _: fn(&Ep, &mut [u8], &RequestParam) -> Result<(Option<Request>, usize), ucs_status_t> =
+            Ep::stream_recv;
     }
 
     /// Test that Worker::stream_poll and stream_data_release FFI functions exist.
@@ -231,5 +292,11 @@ mod tests {
         // Functions exist and have correct signatures
         let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_worker_poll) };
         let _ = unsafe { std::mem::transmute::<_, ()>(ucp_stream_data_release) };
+    }
+
+    #[test]
+    fn test_stream_recv_data_signature() {
+        let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, ucs_status_t> =
+            Ep::stream_recv_data;
     }
 }

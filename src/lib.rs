@@ -166,7 +166,7 @@ pub fn status_to_result(status: ucs_status_t) -> Result<(), ucs_status_t> {
 /// `(ucs_status_t)(intptr_t)ptr`. Casting through `isize` preserves the signed
 /// status value and avoids truncating an arbitrary pointer to `i8`.
 #[inline]
-fn status_ptr_is_err(ptr: ucs_status_ptr_t) -> bool {
+pub(crate) fn status_ptr_is_err(ptr: ucs_status_ptr_t) -> bool {
     ptr as usize >= (ucs_status_t::UCS_ERR_LAST as isize) as usize
 }
 

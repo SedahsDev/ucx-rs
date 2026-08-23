@@ -88,6 +88,30 @@ impl Worker {
         progress > 0
     }
 
+    /// Block until `request` completes, progressing this worker.
+    /// Returns `Ok(false)` after a bounded spin; use the efd/arm/wait APIs for
+    /// a real blocking wait.
+    ///
+    /// ```no_run
+    /// # let worker: &ucx_sys::worker::Worker = todo!();
+    /// # let request: ucx_sys::Request = todo!();
+    /// let completed = worker.wait_request(&request).unwrap();
+    /// assert!(completed);
+    /// ```
+    pub fn wait_request(&self, request: &Request) -> Result<bool, ucs_status_t> {
+        const MAX_ROUNDS: usize = 1_000_000;
+        for _ in 0..MAX_ROUNDS {
+            match request.check_finished() {
+                Ok(true) => return Ok(true),
+                Ok(false) => {
+                    self.progress();
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(false)
+    }
+
     pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, ucs_status_t> {
         Ep::new(ep_params, self)
     }
@@ -139,11 +163,17 @@ impl Worker {
     }
 
     /// Arm the worker for asynchronous completion.
+    ///
+    /// In the single-threaded model, progress the worker, arm it, then poll or
+    /// epoll [`Self::get_efd`] and call [`Self::wait`]. Repeat after wakeup.
     pub fn arm(&self) -> Result<(), ucs_status_t> {
         crate::status_to_result(unsafe { ucp_worker_arm(self.handle) })
     }
 
     /// Wait for an asynchronous event on the worker.
+    ///
+    /// Pair this with [`Self::arm`] and a progress loop; it blocks for a UCX
+    /// event but does not perform worker progress itself.
     pub fn wait(&self) -> Result<(), ucs_status_t> {
         crate::status_to_result(unsafe { ucp_worker_wait(self.handle) })
     }
@@ -156,14 +186,16 @@ impl Worker {
         ucp_worker_wait_mem(self.handle, address);
     }
 
-    /// Signal the worker to wake up from wait.
-    pub fn signal(&self) {
-        unsafe {
-            let _ = ucp_worker_signal(self.handle);
-        }
+    /// Signal the worker to wake up from [`Self::wait`].
+    pub fn signal(&self) -> Result<(), ucs_status_t> {
+        // SAFETY: self.handle is a live worker handle.
+        crate::status_to_result(unsafe { ucp_worker_signal(self.handle) })
     }
 
     /// Get the event file descriptor for the worker.
+    ///
+    /// Poll or epoll this fd after [`Self::arm`], then call [`Self::wait`] and
+    /// resume the single-threaded progress loop when it becomes readable.
     pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
         let mut fd: std::os::raw::c_int = -1;
         crate::status_to_result(unsafe { ucp_worker_get_efd(self.handle, &mut fd) }).map(|()| fd)
