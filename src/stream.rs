@@ -213,7 +213,11 @@ pub unsafe fn stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void)
 }
 
 #[cfg(test)]
-#[allow(clippy::let_unit_value, clippy::missing_transmute_annotations)]
+#[allow(
+    clippy::let_unit_value,
+    clippy::missing_transmute_annotations,
+    clippy::type_complexity
+)]
 mod tests {
     use super::*;
     use crate::context::{Config, Context, Flags, ParamsBuilder as CtxParamsBuilder};
@@ -267,6 +271,8 @@ mod tests {
 
         // Do not call stream_recv on a bare self-EP: UCX requires a connected
         // stream peer and dereferences uninitialized stream state otherwise.
+        let _: fn(&Ep, &mut [u8], &RequestParam) -> Result<(Option<Request>, usize), ucs_status_t> =
+            Ep::stream_recv;
     }
 
     /// Test that Worker::stream_poll and stream_data_release FFI functions exist.
