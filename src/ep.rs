@@ -59,7 +59,12 @@ impl Ep {
     ///
     /// Completion guarantees that operations issued before the flush have
     /// completed at both the origin and target. This wrapper preserves
-    /// immediate completion and UCX error statuses.
+    /// immediate completion and UCX error statuses. UCX may make progress while
+    /// servicing this call: concurrent calls are safe but contended for a
+    /// `UCS_THREAD_MODE_MULTI` worker in an MT-enabled UCX build, but are
+    /// undefined behavior in a non-MT build or `UCS_THREAD_MODE_SINGLE`. See
+    /// `THREADING.md` §2.1. Prefer one thread to own each worker's progress
+    /// loop, using `Worker::arm()` and `Worker::get_efd()` for wakeups.
     pub fn flush(
         &self,
         params: &crate::RequestParam,

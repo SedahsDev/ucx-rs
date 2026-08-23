@@ -106,7 +106,7 @@ silently flip any auto-trait. Closing that gap is the first issue below.
 
 | Rule | Why |
 |------|-----|
-| Never call `Worker::progress()` concurrently on one worker | UCX requires external serialization of progress per worker in every mode. Under MULTI it is *safe* (internal spinlock) but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs — see §2.1. |
+| Never call `Worker::progress()` concurrently on one worker | Use one owning progress thread per worker. Under MULTI in an MT-enabled build it is *safe* but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs; in non-MT or SINGLE it is UB — see §2.1. Debug builds panic on overlapping entry for diagnostics. |
 | Create workers only with exclusive `&mut Context` access | `ucp_worker_create` performs an unprotected cache-on-first-worker read-modify-write of context state; use a single context owner or synchronize it (for example, `Arc<Mutex<Context>>`). |
 | Do not block inside an AM recv handler or listener accept callback | Callbacks run in the progress context; blocking stalls all completions on that worker. |
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |
