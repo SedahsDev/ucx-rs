@@ -142,6 +142,11 @@ pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, uc
     if status_ptr_is_err(ptr) {
         return Err(status_from_ptr(ptr));
     }
+    // UCX uses small non-negative integers for immediate statuses; only larger
+    // values can be real request addresses.
+    if ptr as usize <= ucs_status_t::UCS_INPROGRESS as usize {
+        return Ok(None);
+    }
     Ok(Request::new(ptr))
 }
 
@@ -207,7 +212,8 @@ fn status_from_ptr(ptr: ucs_status_ptr_t) -> ucs_status_t {
         -100 => ucs_status_t::UCS_ERR_LAST,
         // The committed bindgen enum contains every status value UCX can return;
         // reaching this arm indicates an invalid or unsupported status pointer.
-        _ => panic!("UCX returned an invalid error status pointer"),
+        // Keep decoding non-panicking when runtime UCX returns an unknown status.
+        _ => ucs_status_t::UCS_ERR_LAST,
     }
 }
 
@@ -269,9 +275,37 @@ mod status_tests {
     }
 
     #[test]
+    fn status_ptr_to_result_treats_in_progress_as_immediate() {
+        assert!(matches!(
+            status_ptr_to_result(ucs_status_t::UCS_INPROGRESS as usize as ucs_status_ptr_t),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn status_from_ptr_unknown_error_is_generic() {
+        assert_eq!(
+            status_from_ptr((-101i32) as isize as usize as ucs_status_ptr_t),
+            ucs_status_t::UCS_ERR_LAST
+        );
+    }
+
+    #[test]
     fn request_check_finished_on_freed_handle_is_complete() {
         let request = Request { handle: None };
         assert_eq!(request.check_finished(), Ok(true));
+    }
+
+    #[test]
+    fn request_params_no_imm_cmpl_sets_flag_in_op_attr_mask_only() {
+        let mut builder = RequestParamBuilder::new();
+        let params = builder.no_imm_cmpl().build();
+        assert_ne!(
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32,
+            0
+        );
+        // The flag lives in op_attr_mask; the op-specific `flags` field must stay 0.
+        assert_eq!(params.handle.flags, 0);
     }
 }
 
@@ -294,7 +328,9 @@ impl Default for RequestParamBuilder {
 impl RequestParamBuilder {
     #[inline]
     pub fn new() -> RequestParamBuilder {
-        let uninit_params = std::mem::MaybeUninit::<ucp_request_param_t>::uninit();
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask
+        // controls which fields UCX reads.
+        let uninit_params = std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() });
         RequestParamBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,

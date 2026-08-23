@@ -33,19 +33,11 @@ impl Ep {
         }
     }
 
-    /// Flush the endpoint.
-    pub fn flush_nbx(&self) -> crate::Request {
-        unsafe {
-            let ptr = ucp_ep_flush_nbx(self.handle, std::ptr::null());
-            crate::Request::from_raw(ptr)
-        }
-    }
-
     /// Flush all outstanding AMO and RMA operations on this endpoint.
     ///
     /// Completion guarantees that operations issued before the flush have
-    /// completed at both the origin and target. Unlike [`Self::flush_nbx`],
-    /// this wrapper preserves immediate completion and UCX error statuses.
+    /// completed at both the origin and target. This wrapper preserves
+    /// immediate completion and UCX error statuses.
     pub fn flush(
         &self,
         params: &crate::RequestParam,
@@ -212,7 +204,8 @@ impl Default for ParamsBuilder {
 
 impl ParamsBuilder {
     pub fn new() -> ParamsBuilder {
-        let uninit_params = std::mem::MaybeUninit::<ucp_ep_params_t>::uninit();
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
+        let uninit_params = std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() });
         ParamsBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,

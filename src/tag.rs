@@ -28,18 +28,21 @@ impl Ep {
 
     /// Tag send with synchronous completion (safe wrapper).
     ///
-    /// Guarantees remote delivery before the request completes.
-    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Request {
-        unsafe {
-            let ptr = ucp_tag_send_sync_nbx(
+    /// Returns a `Result` containing the request or a UCX error status.
+    /// Guarantees remote delivery before the request completes. If the send
+    /// completes immediately, the result contains an inert `Request` whose
+    /// drop is a no-op and whose `check_finished()` returns `Ok(true)`.
+    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Request, ucs_status_t> {
+        let result = status_ptr_to_result(unsafe {
+            ucp_tag_send_sync_nbx(
                 self.handle,
                 data.as_ptr() as _,
                 data.len(),
                 tag,
                 std::ptr::null(),
-            );
-            Request::from_raw(ptr)
-        }
+            )
+        });
+        result.map(|request| request.unwrap_or(Request { handle: None }))
     }
 }
 
@@ -217,6 +220,11 @@ mod tests {
     use std::rc::Rc;
 
     const TAG_FULL: u64 = u64::MAX;
+
+    #[test]
+    fn tag_send_sync_api_signature() {
+        let _: fn(&Ep, &[u8], u64) -> Result<Request, ucs_status_t> = Ep::tag_send_sync;
+    }
 
     #[test]
     fn tag_recv_test_maps_completed_status_to_info() {

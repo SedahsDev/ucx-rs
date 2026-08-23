@@ -69,7 +69,8 @@ impl Default for HandlerParamsBuilder {
 impl HandlerParamsBuilder {
     #[inline]
     pub fn new() -> HandlerParamsBuilder {
-        let uninit_params = std::mem::MaybeUninit::<ucp_am_handler_param_t>::uninit();
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
+        let uninit_params = std::mem::MaybeUninit::new(unsafe { std::mem::zeroed() });
         HandlerParamsBuilder {
             uninit_handle: uninit_params,
             flags: 0,
