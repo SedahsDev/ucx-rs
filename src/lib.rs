@@ -138,26 +138,32 @@ impl Request {
     ///
     /// An inert request is represented as a successfully completed request.
     #[inline]
-    pub fn test(&self) -> Result<RequestState, ucs_status_t> {
+    pub fn test(&self) -> RequestState {
         let Some(h) = self.handle else {
-            return Ok(RequestState { status: Ok(()) });
+            return RequestState { status: Ok(()) };
         };
         let mut info: ucp_tag_recv_info_t = unsafe { std::mem::zeroed() };
         let status = unsafe { ucp_request_test(h.as_ptr(), &mut info) };
-        Ok(RequestState {
+        RequestState {
             status: status_to_result(status),
-        })
+        }
     }
 
     /// Release this request through UCX's deprecated `ucp_request_release`.
     ///
-    /// This consumes the wrapper and releases the request regardless of its
-    /// current state, allowing the communication to progress internally while
-    /// suppressing further notifications and callbacks. It differs from
-    /// [`Request::free`] (and `Drop`), which uses `ucp_request_free`; `release`
-    /// is retained for compatibility with the legacy UCX API and should only be
-    /// used where that API's no-more-callback semantics are intended. The
-    /// operation is not cancelled.
+    /// This consumes the wrapper and releases the request memory regardless of
+    /// its current state. The operation is not cancelled: it continues to
+    /// progress internally, and its completion callback may still fire. This
+    /// differs from [`Request::free`] (and `Drop`), which uses
+    /// `ucp_request_free` to release the request and disable further callback
+    /// invocation.
+    ///
+    /// # Warning
+    ///
+    /// After `release()`, any `user_data` and callback closures that touch Rust
+    /// resources must remain valid until UCX has completed the operation and no
+    /// longer invokes the callback. The caller must not free resources on which
+    /// the callback depends.
     #[inline]
     pub fn release(mut self) {
         if let Some(h) = self.handle.take() {
@@ -665,7 +671,7 @@ mod tests {
     #[test]
     fn request_helper_api_signatures() {
         let is_completed: fn(&Request) -> bool = Request::is_completed;
-        let test: fn(&Request) -> Result<RequestState, ucs_status_t> = Request::test;
+        let test: fn(&Request) -> RequestState = Request::test;
         let release: fn(Request) = Request::release;
         let check_finished: fn(&Request) -> Result<bool, ucs_status_t> = Request::check_finished;
         let _ = (is_completed, test, release, check_finished);
