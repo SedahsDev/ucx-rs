@@ -11,8 +11,11 @@ use std::os::fd::RawFd;
 
 /// Open a Rust-owned file descriptor as a C stream for one UCX call.
 ///
-/// The descriptor is duplicated because `fclose` owns and closes the descriptor
-/// underlying its `FILE*`; the caller's descriptor must remain usable.
+/// The `w` mode truncates from the start of the file, providing fresh-dump
+/// semantics for diagnostics. The descriptor is duplicated because `fclose`
+/// owns and closes the descriptor underlying its `FILE*`; the caller's
+/// descriptor must remain usable. If `f` panics, the duplicated descriptor and
+/// `FILE*` leak; callers pass a single extern C call, which cannot panic.
 pub(crate) fn with_file_stream<T>(fd: RawFd, f: impl FnOnce(*mut libc::FILE) -> T) -> Option<T> {
     // SAFETY: dup only borrows the caller's descriptor and returns an owned copy.
     let duplicate = unsafe { libc::dup(fd) };
