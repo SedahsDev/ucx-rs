@@ -176,8 +176,7 @@ impl RemoteKey {
     /// UCX RMA/AMO while the slice is borrowed are outside Rust's aliasing model;
     /// synchronize externally and do not hold overlapping `&mut` references
     /// across such operations.
-    #[allow(clippy::mut_from_ref)]
-    pub fn rkey_ptr(&self, remote_addr: u64, len: usize) -> Result<&mut [u8], ucs_status_t> {
+    pub fn rkey_ptr(&mut self, remote_addr: u64, len: usize) -> Result<&mut [u8], ucs_status_t> {
         let mut addr = std::ptr::null_mut();
         status_to_result(unsafe { ucp_rkey_ptr(self.handle, remote_addr, &mut addr) })?;
         if addr.is_null() {
@@ -1217,6 +1216,8 @@ mod tests {
     /// Structural test: verify rkey_ptr function exists in FFI.
     #[test]
     fn test_rkey_ptr_signature() {
+        let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], ucs_status_t> =
+            RemoteKey::rkey_ptr;
         // Verify the FFI function is accessible — just check it compiles
         extern "C" {
             fn ucp_rkey_ptr(
