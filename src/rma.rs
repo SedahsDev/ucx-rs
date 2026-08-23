@@ -18,6 +18,8 @@ pub type ucp_rkey_h = crate::ffi::ucp_rkey_h;
 
 use crate::ep::Ep;
 use std::marker::PhantomData;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 /// A fetch-AMO completion tied to both its worker and reply buffer.
 ///
@@ -117,7 +119,7 @@ fn fetch_amo_result<'w, 'a>(
 /// The rkey is automatically destroyed when dropped.
 pub struct RemoteKey {
     handle: ucp_rkey_h,
-    worker: ucp_worker_h,
+    worker_alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
@@ -166,7 +168,7 @@ impl RemoteKey {
         })
         .map(|()| RemoteKey {
             handle: rkey,
-            worker: ep.worker,
+            worker_alive: Arc::clone(&ep.worker_alive),
         })
     }
 
@@ -197,16 +199,26 @@ impl RemoteKey {
 
     /// Compare this key with another key belonging to the same worker.
     /// UCX returns zero when the keys refer to the same memory region.
-    pub fn compare(&self, other: &RemoteKey) -> Result<bool, ucs_status_t> {
-        if self.worker != other.worker {
+    pub fn compare(&self, other: &RemoteKey, worker: &Worker) -> Result<bool, ucs_status_t> {
+        if !self.worker_alive.load(Ordering::Acquire)
+            || !other.worker_alive.load(Ordering::Acquire)
+            || !Arc::ptr_eq(&self.worker_alive, &other.worker_alive)
+            || !Arc::ptr_eq(&self.worker_alive, &worker.alive)
+        {
             return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
         }
         let params = ucp_rkey_compare_params_t { field_mask: 0 };
         let mut result = 0;
-        // SAFETY: both keys and their worker are valid UCX handles, and the
-        // parameter and result storage live for the duration of the call.
+        // SAFETY: the alive flags establish that both keys came from this live
+        // worker, and the parameter and result storage live for the call.
         status_to_result(unsafe {
-            ucp_rkey_compare(self.worker, self.handle, other.handle, &params, &mut result)
+            ucp_rkey_compare(
+                worker.handle,
+                self.handle,
+                other.handle,
+                &params,
+                &mut result,
+            )
         })
         .map(|()| result == 0)
     }
@@ -1183,8 +1195,31 @@ mod tests {
 
     #[test]
     fn remote_key_compare_api_signature() {
-        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey) -> Result<bool, ucs_status_t> =
+        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey, &'a Worker) -> Result<bool, ucs_status_t> =
             RemoteKey::compare;
+    }
+
+    #[test]
+    fn remote_key_compare_rejects_dead_worker_before_ffi() {
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first = RemoteKey {
+            handle: std::ptr::null_mut(),
+            worker_alive: Arc::clone(&alive),
+        };
+        let second = RemoteKey {
+            handle: std::ptr::null_mut(),
+            worker_alive: Arc::clone(&alive),
+        };
+        let worker = Worker {
+            handle: std::ptr::null_mut(),
+            alive,
+        };
+
+        assert_eq!(
+            first.compare(&second, &worker),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        );
+        std::mem::forget(worker);
     }
 
     #[test]

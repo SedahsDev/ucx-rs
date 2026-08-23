@@ -17,7 +17,6 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Ep {
     pub(crate) handle: ucp_ep_h,
-    pub(crate) worker: ucp_worker_h,
     pub(crate) worker_alive: Arc<AtomicBool>,
 }
 
@@ -34,7 +33,6 @@ impl Ep {
         match result {
             Ok(()) => Ok(Ep {
                 handle: ep,
-                worker: worker.handle,
                 worker_alive: Arc::clone(&worker.alive),
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
@@ -54,6 +52,9 @@ impl Ep {
     }
 
     /// Modify endpoint error handling and user data.
+    ///
+    /// `ucp_ep_modify_nb` is an upstream deprecated compatibility API declared
+    /// in `ucp_compat.h`.
     pub fn modify(&self, params: &ModifyParams) -> Result<Option<crate::Request>, ucs_status_t> {
         // SAFETY: self.handle is a live endpoint and params owns initialized storage.
         status_ptr_to_result(unsafe { ucp_ep_modify_nb(self.handle, &params.handle) })
@@ -142,6 +143,14 @@ mod tests {
             params.handle.field_mask,
             ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64
         );
+    }
+
+    #[test]
+    fn modify_params_sets_error_handler_argument() {
+        let argument = 42usize as *mut std::ffi::c_void;
+        let mut builder = ModifyParamsBuilder::new();
+        let params = builder.err_handler_arg(argument).build();
+        assert_eq!(params.handle.err_handler.arg, argument);
     }
 
     #[test]
@@ -269,6 +278,12 @@ impl ModifyParamsBuilder {
     pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut Self {
         self.handle.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
         self.handle.err_handler.cb = cb;
+        self
+    }
+
+    /// Set the argument passed to the endpoint error callback.
+    pub fn err_handler_arg(&mut self, ptr: *mut std::ffi::c_void) -> &mut Self {
+        self.handle.err_handler.arg = ptr;
         self
     }
 
