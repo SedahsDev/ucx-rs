@@ -39,10 +39,38 @@ From `ucs/type/thread_mode.h` and `ucp/api/ucp.h`:
 * `UCS_THREAD_MODE_SERIALIZED` — multiple threads may access, one at a time.
 * `UCS_THREAD_MODE_MULTI` — concurrent access where UCX documents it safe.
   Per `ucp.h`, UCP guarantees thread safety for **context-level** calls and,
-  under MULTI, for worker operations; `progress()` remains externally
-  serialized per worker even under MULTI.
+  under MULTI, for worker operations.
+
+### 2.1 `progress()` under MULTI is a spinlock, not a free-for-all
+
+Verified against UCX source (`src/ucp/core/ucp_worker.c`,
+`src/ucs/type/spinlock.h`, `src/ucs/async/async.h`; re-verify when the pinned
+UCX version changes):
+
+* In a `--enable-mt` build, `ucp_worker_progress` wraps its body in
+  `UCP_WORKER_THREAD_CS_ENTER_CONDITIONAL`. Under `THREAD_MULTI` that expands
+  to `UCS_ASYNC_BLOCK(&worker->async)`, which for
+  `UCS_ASYNC_MODE_THREAD_SPINLOCK` is `ucs_recursive_spin_lock` — a
+  `pthread_spinlock_t`.
+* Consequence: concurrent `progress()` callers do not queue politely on a
+  mutex; losers **busy-wait** while holding nothing. Each failed acquisition
+  is an atomic read-modify-write on the worker's shared lock word, so N
+  threads calling `progress()` in a tight loop means N−1 threads burning CPU
+  and thrashing one cache line. Throughput collapses as caller count rises;
+  single-caller latency also degrades because the spinning itself steals
+  memory bandwidth from the thread inside the critical section.
+* In non-MT builds (`ENABLE_MT` off) or `SINGLE` mode, the CS macros compile
+  out entirely and concurrent `progress()` is simply undefined behavior —
+  there is no lock to contend on at all.
 * `ucp_context_attr.mt_workers_shared` reports whether the context needs
   internal thread-safety support (workers on different threads).
+
+**Guidance for ucx-rs users:** exactly one thread should own each worker's
+progress loop. If multiple application threads need to drive completions,
+funnel them through one dedicated progress thread (or use `arm()` +
+`get_efd()` wakeup instead of polling), rather than letting several threads
+call `Worker::progress()` concurrently — even though MULTI makes that *safe*,
+it does not make it *fast* (§2.1).
 
 Consequence for the Rust layer: **thread-mode selection is a property of the
 worker at creation** (`Worker::ParamsBuilder::thread_mode`), but auto-trait
@@ -78,7 +106,7 @@ silently flip any auto-trait. Closing that gap is the first issue below.
 
 | Rule | Why |
 |------|-----|
-| Never call `Worker::progress()` concurrently on one worker | UCX requires external serialization of progress per worker in every mode. |
+| Never call `Worker::progress()` concurrently on one worker | UCX requires external serialization of progress per worker in every mode. Under MULTI it is *safe* (internal spinlock) but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs — see §2.1. |
 | Do not block inside an AM recv handler or listener accept callback | Callbacks run in the progress context; blocking stalls all completions on that worker. |
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |
 | Keep fetch-AMO reply buffers borrowed until `check_finished() == Ok(true)` | UCX writes the result at completion time, independent of when the request handle was freed. |
