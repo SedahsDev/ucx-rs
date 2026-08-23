@@ -7,6 +7,8 @@ use crate::worker::WorkerAddress;
 use bitflags::bitflags;
 use std::ffi::CString;
 use std::ptr::NonNull;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// UCX endpoint ownership wrapper.
 ///
@@ -15,6 +17,7 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct Ep {
     pub(crate) handle: ucp_ep_h,
+    pub(crate) worker_alive: Arc<AtomicBool>,
 }
 
 impl Ep {
@@ -28,7 +31,10 @@ impl Ep {
         let result =
             status_to_result(unsafe { ucp_ep_create(worker.handle, &ep_params.handle, &mut ep) });
         match result {
-            Ok(()) => Ok(Ep { handle: ep }),
+            Ok(()) => Ok(Ep {
+                handle: ep,
+                worker_alive: Arc::clone(&worker.alive),
+            }),
             Err(ucs_status_t) => Err(ucs_status_t),
         }
     }
@@ -103,8 +109,31 @@ mod tests {
     }
 
     #[test]
-    fn close_api_has_consuming_request_signature() {
-        let _close: fn(Ep, u32) -> Result<Option<crate::Request>, ucs_status_t> = Ep::close;
+    fn params_builder_sets_error_callback_fields() {
+        unsafe extern "C" fn callback(
+            _arg: *mut std::ffi::c_void,
+            _ep: ucp_ep_h,
+            _status: ucs_status_t,
+        ) {
+        }
+        let mut builder = ParamsBuilder::new();
+        let params = builder
+            .err_handler(Some(callback))
+            .user_data(std::ptr::null_mut())
+            .build();
+        assert_ne!(
+            params.handle.field_mask & ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64,
+            0
+        );
+        assert_ne!(
+            params.handle.field_mask & ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64,
+            0
+        );
+    }
+
+    #[test]
+    fn close_api_has_worker_signature() {
+        let _close: fn(Ep, &Worker, u32) -> Result<(), ucs_status_t> = Ep::close;
     }
 
     #[test]
@@ -126,17 +155,8 @@ mod tests {
         let ep_params = ParamsBuilder::new().address(&remote).build();
         let ep = worker.create_ep(ep_params).expect("endpoint create");
         drop(address);
-        let close_request = ep.close(0).expect("endpoint close should start");
-        if let Some(request) = close_request {
-            for _ in 0..1_000_000 {
-                if request.check_finished().expect("close request status") {
-                    break;
-                }
-                worker.progress();
-            }
-            assert!(request.check_finished().expect("close request status"));
-            request.free();
-        }
+        ep.close(&worker, 0)
+            .expect("endpoint close should complete");
         drop(worker);
         drop(context);
     }
@@ -153,21 +173,38 @@ impl Ep {
     /// Start closing this endpoint and return the completion request, if any.
     /// The caller owns progress of a returned request and should check it while
     /// progressing the associated worker.
-    pub fn close(self, flags: u32) -> Result<Option<crate::Request>, ucs_status_t> {
+    pub fn close(self, worker: &Worker, flags: u32) -> Result<(), ucs_status_t> {
         let this = std::mem::ManuallyDrop::new(self);
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         param.flags = flags;
-        status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })
+        let request = status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })?;
+        if let Some(request) = request {
+            for _ in 0..1_000_000 {
+                match request.check_finished() {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {
+                        worker.progress();
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            return Err(ucs_status_t::UCS_ERR_TIMED_OUT);
+        }
+        Ok(())
     }
 }
 
 impl Drop for Ep {
     fn drop(&mut self) {
+        if !self.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
+            eprintln!("ucx-rs: endpoint dropped after its worker; skipping close");
+            return;
+        }
         let param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         // Close returns Ok(None) if complete, Ok(Some(req)) if in progress.
         // Request::Drop frees the request; do not free manually (would double-free).
         match status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }) {
-            Ok(Some(req)) => drop(req),
+            Ok(Some(_req)) => eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first"),
             Ok(None) => {}
             Err(error) => eprintln!("ucx-sys: endpoint close during Drop failed: {error:?}; UCX released endpoint resources"),
         }
@@ -232,6 +269,33 @@ impl ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.err_mode = mode;
+        self
+    }
+
+    /// Configure the endpoint error callback. Its state may be supplied with `user_data`.
+    pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).err_handler.cb = cb;
+        }
+        self
+    }
+
+    /// Set the callback argument passed to the endpoint error callback.
+    pub fn err_handler_arg(&mut self, ptr: *mut std::ffi::c_void) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).err_handler.arg = ptr;
+        }
+        self
+    }
+
+    /// Set opaque endpoint user data.
+    pub fn user_data(&mut self, ptr: *mut std::ffi::c_void) -> &mut ParamsBuilder {
+        self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_USER_DATA as u64;
+        unsafe {
+            (*self.uninit_handle.as_mut_ptr()).user_data = ptr;
+        }
         self
     }
 
