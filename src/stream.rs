@@ -45,9 +45,12 @@ impl StreamPollEvent {
 impl Request {
     /// Test completion of a stream receive request and return its byte length.
     ///
-    /// `Err(UCS_INPROGRESS)` means that the request has not completed yet.
-    /// The request remains owned by this value in all cases. This method must
-    /// only be used with a request returned by [`Ep::stream_recv`].
+    /// Returns `Ok(length)` only when UCX reports `UCS_OK` and the receive is
+    /// complete. A pending receive returns `Err(UCS_INPROGRESS)`; any other
+    /// `Err(status)` is a UCX failure status. The output length is only valid
+    /// for `Ok` results, as specified by UCX. The request remains owned by this
+    /// value in all cases. This method must only be used with a request returned
+    /// by [`Ep::stream_recv`].
     pub fn stream_recv_test(&self) -> Result<usize, ucs_status_t> {
         let request = self.handle.ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
         let mut length = 0usize;
