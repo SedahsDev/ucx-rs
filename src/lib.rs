@@ -418,6 +418,7 @@ impl RequestParamBuilder {
     #[inline]
     pub fn flags(&mut self, flags: u32) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
+        // SAFETY: the builder initialized the parameter storage with zeroed UCX fields.
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.flags = flags;
         self
