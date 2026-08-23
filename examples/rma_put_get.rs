@@ -23,6 +23,7 @@ fn wait(worker: &ucx_sys::worker::Worker, request: ucx_sys::Request) {
 fn main() {
     let params = ParamsBuilder::new()
         .features(Flags::Rma)
+        .mt_workers_shared(1)
         .estimated_num_eps(1)
         .build();
     let context = Context::new(&Config::read("", "").expect("config"), &params).expect("context");

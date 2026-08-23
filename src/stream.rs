@@ -283,7 +283,10 @@ mod tests {
 
     /// Helper: create a UCX context + worker with Tag feature.
     fn setup_worker() -> (Context, Worker) {
-        let ctx_params = CtxParamsBuilder::new().features(Flags::Tag).build();
+        let ctx_params = CtxParamsBuilder::new()
+            .features(Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
         let ctx = Context::new(&Config::read("", "").expect("config read"), &ctx_params)
             .expect("context create");
         let worker_params = WorkerParamsBuilder::new().build();

@@ -92,12 +92,14 @@ pub struct ParamsBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_params_t>,
     field_mask: u64,
     name: Option<CString>,
+    mt_workers_shared: bool,
 }
 
 #[derive(Debug)]
 pub struct Params {
     handle: ucp_params_t,
     name: Option<CString>,
+    pub(crate) mt_workers_shared: bool,
 }
 
 // This builder wraps up the unsafe parts of building the ucp_param_t struct. On construction
@@ -121,6 +123,7 @@ impl ParamsBuilder {
             uninit_handle: uninit_params,
             field_mask: 0,
             name: None,
+            mt_workers_shared: false,
         }
     }
 
@@ -164,6 +167,7 @@ impl ParamsBuilder {
         self.field_mask |= ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.mt_workers_shared = shared;
+        self.mt_workers_shared = shared != 0;
         self
     }
 
@@ -194,6 +198,7 @@ impl ParamsBuilder {
 
         let mut ucp_param = Params {
             name: None,
+            mt_workers_shared: self.mt_workers_shared,
             handle: unsafe { self.uninit_handle.assume_init() },
         };
 
@@ -211,6 +216,13 @@ impl Context {
     pub fn new(config: &Config, params: &Params) -> Result<Context, ucs_status_t> {
         if params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_FEATURES as u64 == 0
             || params.handle.features == 0
+        {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
+        if !params.mt_workers_shared
+            || params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED as u64
+                == 0
+            || params.handle.mt_workers_shared == 0
         {
             return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
         }
@@ -253,18 +265,18 @@ pub struct Context {
     pub(crate) handle: ucp_context_h,
 }
 
-// SAFETY: Context has exclusive RAII ownership of its raw handle, is not Clone,
-// and Drop calls ucp_cleanup exactly once. UCX documents context-level APIs as
-// safe for concurrent use across workers on different threads (the ucp.h
-// mt_workers_shared discussion). Worker and Ep remain !Send, so per-worker state
-// stays thread-bound even when the owning Context crosses threads.
+// SAFETY: Send is sound because Context::new refuses to construct a Context
+// unless UCP_PARAM_FIELD_MT_WORKERS_SHARED was set nonzero, which enables UCX's
+// internal context mt-lock (ucp_context.c). Send is additionally sound from
+// exclusive non-Clone RAII ownership. Worker and Ep remain !Send, so per-worker
+// state stays thread-bound.
 unsafe impl Send for Context {}
 
-// SAFETY: Context has exclusive RAII ownership of its raw handle, is not Clone,
-// and Drop calls ucp_cleanup exactly once. UCX documents context-level APIs as
-// safe for concurrent use across workers on different threads (the ucp.h
-// mt_workers_shared discussion). Worker and Ep remain !Send, so per-worker state
-// stays thread-bound even when shared Context access crosses threads.
+// SAFETY: Sync is sound because Context::new refuses to construct a Context
+// unless UCP_PARAM_FIELD_MT_WORKERS_SHARED was set nonzero, which enables UCX's
+// internal context mt-lock (ucp_context.c). Send is additionally sound from
+// exclusive non-Clone RAII ownership. Worker and Ep remain !Send, so per-worker
+// state stays thread-bound even when shared Context access crosses threads.
 unsafe impl Sync for Context {}
 
 impl Drop for Context {
@@ -281,7 +293,17 @@ mod tests {
     #[test]
     fn context_rejects_missing_features_before_ffi() {
         let config = Config::read("", "").expect("config read");
-        let params = ParamsBuilder::new().build();
+        let params = ParamsBuilder::new().mt_workers_shared(1).build();
+        assert!(matches!(
+            Context::new(&config, &params),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        ));
+    }
+
+    #[test]
+    fn context_rejects_unshared_mt_context() {
+        let config = Config::read("", "").expect("config read");
+        let params = ParamsBuilder::new().features(Flags::Tag).build();
         assert!(matches!(
             Context::new(&config, &params),
             Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
