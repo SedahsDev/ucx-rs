@@ -297,17 +297,15 @@ mod status_tests {
     }
 
     #[test]
-    fn request_params_store_completion_flags_in_flags_field() {
+    fn request_params_no_imm_cmpl_sets_flag_in_op_attr_mask_only() {
         let mut builder = RequestParamBuilder::new();
         let params = builder.no_imm_cmpl().build();
         assert_ne!(
-            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32,
+            params.handle.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32,
             0
         );
-        assert_eq!(
-            params.handle.flags,
-            ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32
-        );
+        // The flag lives in op_attr_mask; the op-specific `flags` field must stay 0.
+        assert_eq!(params.handle.flags, 0);
     }
 }
 
@@ -344,9 +342,6 @@ impl RequestParamBuilder {
         if self.field_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32 != 0 {
             panic!("Requesting UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL while UCP_OP_ATTR_FLAG_NO_IMM_CMPL is also set");
         }
-        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
-        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.flags = ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32;
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32;
         self
     }
@@ -356,9 +351,6 @@ impl RequestParamBuilder {
         if self.field_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32 != 0 {
             panic!("Requesting UCP_OP_ATTR_FLAG_NO_IMM_CMPL while UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL is also set");
         }
-        self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
-        let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.flags = ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32;
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32;
         self
     }
