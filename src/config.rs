@@ -7,6 +7,31 @@ use crate::context::ConfigError;
 use crate::ffi::*;
 use crate::status_to_result;
 use std::ffi::CStr;
+use std::os::fd::RawFd;
+
+/// Open a Rust-owned file descriptor as a C stream for one UCX call.
+///
+/// The descriptor is duplicated because `fclose` owns and closes the descriptor
+/// underlying its `FILE*`; the caller's descriptor must remain usable.
+pub(crate) fn with_file_stream<T>(fd: RawFd, f: impl FnOnce(*mut libc::FILE) -> T) -> Option<T> {
+    // SAFETY: dup only borrows the caller's descriptor and returns an owned copy.
+    let duplicate = unsafe { libc::dup(fd) };
+    if duplicate < 0 {
+        return None;
+    }
+    // SAFETY: duplicate is an owned descriptor and the mode string is NUL-terminated.
+    #[allow(clippy::manual_c_str_literals)]
+    let stream = unsafe { libc::fdopen(duplicate, b"w\0".as_ptr().cast()) };
+    if stream.is_null() {
+        // SAFETY: fdopen did not take ownership when it failed.
+        unsafe { libc::close(duplicate) };
+        return None;
+    }
+    let result = f(stream);
+    // SAFETY: stream was returned by fdopen and is closed exactly once here.
+    unsafe { libc::fclose(stream) };
+    Some(result)
+}
 
 /// Modify a configuration value.
 ///
@@ -70,7 +95,10 @@ pub unsafe fn context_query(
 /// # Safety
 /// Caller must ensure `context` is a valid UCP context handle and `fd` is a valid file descriptor.
 pub unsafe fn context_print_info(context: ucp_context_h, fd: std::os::fd::RawFd) {
-    ucp_context_print_info(context, fd as *mut _);
+    let _ = with_file_stream(fd, |stream| {
+        // SAFETY: caller guarantees that context is a valid live UCX context.
+        ucp_context_print_info(context, stream.cast());
+    });
 }
 
 #[cfg(test)]
@@ -103,6 +131,35 @@ mod tests {
         let attr = unsafe { context_query(ctx.handle, UCP_CONTEXT_ATTR_FIELD_REQUEST_SIZE) }
             .expect("context_query");
         assert!(attr.request_size > 0);
+    }
+
+    #[test]
+    fn context_print_info_writes_to_file() {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::os::fd::AsRawFd;
+
+        let config = Config::read("", "").expect("config read");
+        let params = ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .build();
+        let context = Context::new(&config, &params).expect("init");
+        let path = std::env::temp_dir().join(format!("ucx-context-info-{}", std::process::id()));
+        let file = std::fs::File::create(&path).expect("create temp file");
+        context.print_info(file.as_raw_fd());
+        drop(file);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .expect("open output");
+        file.seek(SeekFrom::Start(0)).expect("rewind");
+        let mut output = String::new();
+        file.read_to_string(&mut output).expect("read output");
+        std::fs::remove_file(path).expect("remove temp file");
+        assert!(
+            !output.is_empty(),
+            "context diagnostics should not be empty"
+        );
+        assert!(output.contains("UCP"), "unexpected diagnostics: {output}");
     }
 
     #[test]

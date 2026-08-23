@@ -88,6 +88,14 @@ impl Worker {
         progress > 0
     }
 
+    /// Print worker diagnostics to `fd`. Invalid descriptors are ignored.
+    pub fn print_info(&self, fd: std::os::fd::RawFd) {
+        let _ = crate::config::with_file_stream(fd, |stream| {
+            // SAFETY: self owns a live worker and stream is valid for this call.
+            unsafe { ucp_worker_print_info(self.handle, stream.cast()) };
+        });
+    }
+
     /// Block until `request` completes, progressing this worker.
     /// Returns `Ok(false)` after a bounded spin; use the efd/arm/wait APIs for
     /// a real blocking wait.

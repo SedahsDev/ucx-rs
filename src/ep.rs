@@ -34,6 +34,14 @@ impl Ep {
         self.handle
     }
 
+    /// Print endpoint diagnostics to `fd`. Invalid descriptors are ignored.
+    pub fn print_info(&self, fd: std::os::fd::RawFd) {
+        let _ = crate::config::with_file_stream(fd, |stream| {
+            // SAFETY: self owns a live endpoint and stream is valid for this call.
+            unsafe { ucp_ep_print_info(self.handle, stream.cast()) };
+        });
+    }
+
     pub fn new(ep_params: Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
