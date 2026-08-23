@@ -50,9 +50,28 @@ impl<'w, 'a> FetchAmoRequest<'w, 'a> {
             .as_ref()
             .map_or(Ok(true), crate::Request::check_finished)
     }
+    /// Progress the request to completion before releasing its reply borrow.
+    ///
+    /// If completion cannot be observed within the bounded progress loop, the
+    /// request is deliberately leaked rather than freed while it may still be
+    /// in flight. This preserves the same safety contract as [`Drop`].
     pub fn free(mut self) {
         if let Some(request) = self.request.take() {
-            request.free();
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) | Err(_) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the reply buffer after this timeout.
+            std::mem::forget(request);
         }
     }
 }
