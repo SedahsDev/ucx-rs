@@ -42,6 +42,14 @@ pub struct Request {
     pub(crate) handle: Option<NonNull<::std::os::raw::c_void>>,
 }
 
+/// The result of testing a non-blocking request.
+#[derive(Debug, Clone)]
+pub struct RequestState {
+    /// `Ok(())` means the request completed successfully; `Err` contains the
+    /// UCX status returned by `ucp_request_test` (including `UCS_INPROGRESS`).
+    pub status: Result<(), ucs_status_t>,
+}
+
 impl Drop for Request {
     fn drop(&mut self) {
         if let Some(h) = self.handle.take() {
@@ -100,6 +108,61 @@ impl Request {
             return Err(status_from_ptr(status_ptr));
         }
         Ok(status == ucs_status_t::UCS_OK)
+    }
+
+    /// Check completion status without consuming or otherwise changing the
+    /// request. This is the lowest-cost completion query and does not fill any
+    /// receive metadata. Unlike [`Request::test`], it is suitable when only a
+    /// boolean completion indication is needed; unlike [`Request::check_finished`],
+    /// it does not decode a UCX status or report an error.
+    ///
+    /// An inert request (one already freed or cancelled) is complete.
+    #[inline]
+    pub fn is_completed(&self) -> bool {
+        let Some(h) = self.handle else {
+            return true;
+        };
+        unsafe { ucp_request_is_completed(h.as_ptr()) != 0 }
+    }
+
+    /// Test a request and return the status reported by UCX.
+    ///
+    /// This uses the legacy `ucp_request_test` API, which fills tag-receive
+    /// metadata in an out-parameter. The metadata is intentionally discarded:
+    /// this method exposes only the status, and callers needing receive
+    /// information should use a more specific UCX API. Unlike
+    /// [`Request::check_finished`], this invokes the richer test routine and
+    /// supplies its out-parameter; unlike [`Request::is_completed`], it
+    /// returns the actual UCX status (including `UCS_INPROGRESS`). The request
+    /// remains owned and must still be freed or released after completion.
+    ///
+    /// An inert request is represented as a successfully completed request.
+    #[inline]
+    pub fn test(&self) -> Result<RequestState, ucs_status_t> {
+        let Some(h) = self.handle else {
+            return Ok(RequestState { status: Ok(()) });
+        };
+        let mut info: ucp_tag_recv_info_t = unsafe { std::mem::zeroed() };
+        let status = unsafe { ucp_request_test(h.as_ptr(), &mut info) };
+        Ok(RequestState {
+            status: status_to_result(status),
+        })
+    }
+
+    /// Release this request through UCX's deprecated `ucp_request_release`.
+    ///
+    /// This consumes the wrapper and releases the request regardless of its
+    /// current state, allowing the communication to progress internally while
+    /// suppressing further notifications and callbacks. It differs from
+    /// [`Request::free`] (and `Drop`), which uses `ucp_request_free`; `release`
+    /// is retained for compatibility with the legacy UCX API and should only be
+    /// used where that API's no-more-callback semantics are intended. The
+    /// operation is not cancelled.
+    #[inline]
+    pub fn release(mut self) {
+        if let Some(h) = self.handle.take() {
+            unsafe { ucp_request_release(h.as_ptr()) };
+        }
     }
 
     /// Cancel this request on `worker`, then free it (handle becomes inert).
@@ -597,6 +660,15 @@ mod tests {
             worker,
             ep,
         })
+    }
+
+    #[test]
+    fn request_helper_api_signatures() {
+        let is_completed: fn(&Request) -> bool = Request::is_completed;
+        let test: fn(&Request) -> Result<RequestState, ucs_status_t> = Request::test;
+        let release: fn(Request) = Request::release;
+        let check_finished: fn(&Request) -> Result<bool, ucs_status_t> = Request::check_finished;
+        let _ = (is_completed, test, release, check_finished);
     }
 
     #[test]
