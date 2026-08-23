@@ -216,24 +216,40 @@ impl Request {
     }
 }
 
-// In UCX we usually use a ucs_status_ptr_t to represent the status of a nonblocking operation
-// in this the possible outcomes can be UCS_OK, where the application can reuse all the input
-// parameters immediately, a pointer that can be queried for the status of the underlying
-// nonblocking operation, or an error. Rust APIs operate similarly, except it uses the Rust
-// type system to express this. It will have a Result type that either contains an Ok() type
-// or an Err() type. It also has an Option() type that basically is the equivalent of a nullable
-// pointer, except Rust will force the user to be sure to check the Option().
+// UCX uses `ucs_status_ptr_t` for nonblocking operations: the result is either
+// an immediate status, a request pointer, or an error. This helper maps those
+// outcomes to `Result<Option<Request>, ucs_status_t>`. A status-pointer API
+// never returns `UCS_INPROGRESS`; an incomplete operation returns a request
+// pointer instead, while callers observe that status through plain
+// `ucs_status_t` APIs such as `ucp_request_check_status`.
 
-// This helper function will automatically translate the ucs_status_ptr_t into a Result that
-// either is an empty Ok() as the equivilent to UCS_OK, a Ok(Request) that represents getting
-// back a pointer or an Err(ucs_status_t) that indicates an error. Compile test shows that this
-// produces extremely efficient assembly
-
+/// Translates a UCX status pointer into an immediate result, request, or error.
+///
+/// # Invariant
+///
+/// A function returning `ucs_status_ptr_t` never returns `UCS_INPROGRESS`:
+/// when an operation does not complete immediately, UCP allocates a request
+/// and returns a pointer to that request instead of the status code
+/// (`UCS_INPROGRESS = 1` is a small integer that can never be a valid
+/// pointer; UCX's own `ucp_request_complete` asserts completed requests do
+/// not carry it). Callers observe `UCS_INPROGRESS` only through plain
+/// `ucs_status_t` APIs such as `ucp_request_check_status`
+/// (`Request::check_finished`). This classification MUST NOT change if UCX
+/// is upgraded — re-verify against
+/// `src/ucp/core/ucp_request.inl` and `src/ucs/type/status.h` in the new UCX
+/// version first.
 #[inline]
 pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, ucs_status_t> {
     if status_ptr_is_err(ptr) {
         return Err(status_from_ptr(ptr));
     }
+    // Invariant guard: see doc note above. UCS_INPROGRESS must never arrive
+    // through a status_ptr; treat any future violation loudly in debug builds.
+    debug_assert!(
+        ptr as usize != ucs_status_t::UCS_INPROGRESS as usize,
+        "UCX returned UCS_INPROGRESS through a ucs_status_ptr_t API - \
+         violates the status_ptr contract, see status_ptr_to_result docs"
+    );
     // UCX uses small non-negative integers for immediate statuses; only larger
     // values can be real request addresses.
     if ptr as usize <= ucs_status_t::UCS_INPROGRESS as usize {
@@ -367,11 +383,9 @@ mod status_tests {
     }
 
     #[test]
-    fn status_ptr_to_result_treats_in_progress_as_immediate() {
-        assert!(matches!(
-            status_ptr_to_result(ucs_status_t::UCS_INPROGRESS as usize as ucs_status_ptr_t),
-            Ok(None)
-        ));
+    #[should_panic(expected = "UCX returned UCS_INPROGRESS through a ucs_status_ptr_t API")]
+    fn status_ptr_to_result_panics_on_in_progress_in_debug() {
+        let _ = status_ptr_to_result(ucs_status_t::UCS_INPROGRESS as usize as ucs_status_ptr_t);
     }
 
     #[test]
