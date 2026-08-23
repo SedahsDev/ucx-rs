@@ -6,7 +6,23 @@
 use crate::context::Context;
 use crate::ffi::*;
 use crate::status_to_result;
+use std::ffi::CString;
 use std::marker::PhantomData;
+use std::os::fd::RawFd;
+
+/// Print UCX memory diagnostics for `mem_spec` to `fd`.
+pub fn mem_print_info(
+    mem_spec: &str,
+    context: &Context,
+    fd: RawFd,
+) -> Result<(), std::ffi::NulError> {
+    let spec = CString::new(mem_spec)?;
+    let _ = crate::config::with_file_stream(fd, |stream| {
+        // SAFETY: context is a live UCX handle; spec and stream are valid.
+        unsafe { ucp_mem_print_info(spec.as_ptr(), context.handle, stream.cast()) };
+    });
+    Ok(())
+}
 
 /// RAII wrapper around a UCP memory handle (`ucp_mem_h`).
 /// The handle is automatically unmapped when dropped.

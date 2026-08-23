@@ -63,6 +63,22 @@ impl Config {
             .map(|()| Config { handle: config })
             .map_err(ConfigError::Ucs)
     }
+
+    /// Print this configuration to `fd`. Invalid descriptors or titles with NULs are ignored.
+    pub fn print(
+        &self,
+        title: &str,
+        print_flags: ucs_config_print_flags_t,
+        fd: std::os::fd::RawFd,
+    ) {
+        let Ok(title) = CString::new(title) else {
+            return;
+        };
+        let _ = crate::config::with_file_stream(fd, |stream| {
+            // SAFETY: self owns a live configuration; title and stream are valid for this call.
+            unsafe { ucp_config_print(self.handle, stream.cast(), title.as_ptr(), print_flags) };
+        });
+    }
 }
 
 impl Drop for Config {
@@ -217,6 +233,14 @@ impl Context {
 
     pub fn worker_create<'a>(&'a self, params: &'a worker::Params) -> Result<Worker, ucs_status_t> {
         Worker::new(self, params)
+    }
+
+    /// Print context diagnostics to `fd`. Invalid descriptors are ignored.
+    pub fn print_info(&self, fd: std::os::fd::RawFd) {
+        let _ = crate::config::with_file_stream(fd, |stream| {
+            // SAFETY: self owns a live context and stream is valid for this call.
+            unsafe { ucp_context_print_info(self.handle, stream.cast()) };
+        });
     }
 }
 
