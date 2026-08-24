@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_mode_worker_can_progress_through_wrapper() {
+    fn serialized_mode_worker_can_progress_through_wrapper() {
         let (_context, worker) = setup_worker();
         let worker = MtWorker::new(worker).expect("UCX should grant a threaded worker");
         let _ = worker.progress();
@@ -153,7 +153,9 @@ impl std::fmt::Debug for MtWorker {
 // MULTI, and every operation below locks the worker mutex before accessing it.
 unsafe impl Send for MtWorker {}
 // SAFETY: See the `Send` implementation. Shared handles cannot access the
-// contained worker without taking the same mutex.
+// contained worker without taking the same mutex. However, `create_ep` returns
+// an `Ep` that remains `!Send` and `!Sync`, so this mutex does not make endpoints
+// derived from the `MtWorker` thread-safe; callers must serialize their use.
 unsafe impl Sync for MtWorker {}
 
 impl MtWorker {
