@@ -1307,6 +1307,7 @@ mod tests {
             worker_alive: Arc::clone(&alive),
         };
         let worker = Worker {
+            am_handlers: Vec::new(),
             handle: std::ptr::null_mut(),
             alive,
             #[cfg(debug_assertions)]

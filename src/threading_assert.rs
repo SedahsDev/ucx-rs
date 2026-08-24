@@ -5,6 +5,7 @@ mod asserts {
     // Sessions/context: Context owns the session handle and UCX permits context-level
     // operations across workers on different threads; workers remain thread-bound.
     assert_impl_all!(crate::context::Context: Send, Sync);
+    assert_impl_all!(crate::am::AmHandler: Send, Sync);
 
     // These wrappers are tied to the UCX object/progress context that owns them.
     assert_not_impl_any!(crate::worker::Worker: Send, Sync);

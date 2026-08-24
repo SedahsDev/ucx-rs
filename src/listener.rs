@@ -8,6 +8,69 @@ use libc::{sockaddr_in, sockaddr_in6};
 use std::mem::MaybeUninit;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ptr;
+use std::sync::{Arc, Mutex};
+
+type ConnCallback = Box<dyn FnMut(ConnRequest) + Send + 'static>;
+
+struct ListenerState {
+    // Raw UCX handles are opaque pointers and are not Send/Sync in Rust.
+    // Carrying the address as usize lets this state cross UCX progress threads.
+    handle: Mutex<usize>,
+    // This is kept in the same allocation as the handle. ListenerState's Drop
+    // destroys the UCX listener before this field is dropped.
+    conn_handler: Option<Mutex<ConnCallback>>,
+}
+
+impl std::fmt::Debug for ListenerState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ListenerState")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ListenerState {
+    fn drop(&mut self) {
+        let handle = match self.handle.lock() {
+            Ok(handle) => *handle as ucp_listener_h,
+            Err(poisoned) => *poisoned.into_inner() as ucp_listener_h,
+        };
+        if !handle.is_null() {
+            // SAFETY: the state owns the handle and is dropped only after the
+            // Listener and all callback-delivered ConnRequests are gone.
+            unsafe { ucp_listener_destroy(handle) };
+        }
+    }
+}
+
+unsafe extern "C" fn conn_trampoline(conn_request: ucp_conn_request_h, arg: *mut std::ffi::c_void) {
+    // SAFETY: `arg` points to the ListenerState allocation retained by the
+    // Listener and every callback-delivered ConnRequest.
+    if arg.is_null() {
+        return;
+    }
+    // Take one strong reference for the request without consuming the Arc
+    // owned by the Listener.
+    unsafe { Arc::increment_strong_count(arg as *const ListenerState) };
+    let request_state = unsafe { Arc::from_raw(arg as *const ListenerState) };
+    let request = ConnRequest {
+        handle: conn_request,
+        state: request_state,
+    };
+    let callback_state = Arc::clone(&request.state);
+    let mut callback = match callback_state.conn_handler.as_ref() {
+        Some(handler) => match handler.lock() {
+            Ok(callback) => callback,
+            // A poisoned handler cannot be trusted. The request is dropped without
+            // invoking user code, and the callback returns to UCX normally.
+            Err(_) => return,
+        },
+        None => return,
+    };
+    // Handler panics are contained here and never unwind through this
+    // extern "C" trampoline into UCX.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(request)));
+}
 
 bitflags! {
     /// Fields accepted by [`ParamsBuilder`].
@@ -91,11 +154,17 @@ impl Default for ParamsBuilder {
 
 /// RAII wrapper for a UCP listener.
 pub struct Listener {
-    handle: ucp_listener_h,
+    state: Arc<ListenerState>,
 }
 
 impl Listener {
     /// Create a listener bound to `addr`.
+    ///
+    /// Any UCX callback configured through the parameters runs in the progress
+    /// context: the thread calling [`Worker::progress`], or UCX-internal
+    /// progress under MULTI. Never block or call back into the same worker from
+    /// a handler; hop heavy work to an application thread or channel. See
+    /// `THREADING.md` section 4.
     pub fn create(worker: &Worker, addr: &SocketAddr) -> Result<Self, ucs_status_t> {
         let (_storage, sockaddr) = socket_address(addr);
         let params = ParamsBuilder::new().sockaddr(sockaddr).build();
@@ -104,22 +173,82 @@ impl Listener {
         // UCX copies the address as part of listener creation.
         let result =
             status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) });
-        result.map(|()| Self { handle })
+        result.map(|()| Self {
+            state: Arc::new(ListenerState {
+                handle: Mutex::new(handle as usize),
+                conn_handler: None,
+            }),
+        })
     }
 
-    /// Create a listener from explicitly-built parameters.
+    /// Create a listener from explicitly-built parameters. Callback execution
+    /// follows the progress-context rules documented on [`Self::create`].
     pub fn create_with_params(
         worker: &Worker,
         params: &ParamsBuilder,
     ) -> Result<Self, ucs_status_t> {
         let params = params.clone_params();
         let mut handle = ptr::null_mut();
-        status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
-            .map(|()| Self { handle })
+        status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) }).map(
+            |()| Self {
+                state: Arc::new(ListenerState {
+                    handle: Mutex::new(handle as usize),
+                    conn_handler: None,
+                }),
+            },
+        )
+    }
+
+    /// Create a listener with a safe connection callback. The callback runs in
+    /// the progress context (the thread calling [`Worker::progress`], or UCX's
+    /// internal progress thread under MULTI). Do not block or call back into
+    /// the same worker; send heavy work to an application thread or channel.
+    ///
+    /// The delivered [`ConnRequest`] retains the complete listener state,
+    /// including callback storage and the UCX handle, so it may be safely moved
+    /// out of the callback and rejected later. Teardown is deferred until every
+    /// request is dropped; callback storage is released after listener destroy.
+    pub fn create_with_conn_handler<F>(
+        worker: &Worker,
+        addr: &SocketAddr,
+        handler: F,
+    ) -> Result<Self, ucs_status_t>
+    where
+        F: FnMut(ConnRequest) + Send + 'static,
+    {
+        let state = Arc::new(ListenerState {
+            handle: Mutex::new(0),
+            conn_handler: Some(Mutex::new(Box::new(handler))),
+        });
+        let (_storage, sockaddr) = socket_address(addr);
+        // SAFETY: the callback and its Arc-backed argument are retained by
+        // the returned listener until after UCX listener destruction.
+        let params = unsafe {
+            ParamsBuilder::new()
+                .sockaddr(sockaddr)
+                .conn_handler(Some(conn_trampoline), Arc::as_ptr(&state) as *mut _)
+                .build()
+        };
+        let mut handle = ptr::null_mut();
+        match status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
+        {
+            Ok(()) => {
+                *state
+                    .handle
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = handle as usize;
+                Ok(Self { state })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn as_raw(&self) -> ucp_listener_h {
-        self.handle
+        *self
+            .state
+            .handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) as ucp_listener_h
     }
 
     pub fn query(&self) -> Result<ListenerAttr, ucs_status_t> {
@@ -127,7 +256,7 @@ impl Listener {
         let mut attr = unsafe { MaybeUninit::<ucp_listener_attr>::zeroed().assume_init() };
         attr.field_mask = ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR as u64;
         // SAFETY: self.handle is live and attr is a valid writable UCX struct.
-        status_to_result(unsafe { ucp_listener_query(self.handle, &mut attr) }).map(|()| {
+        status_to_result(unsafe { ucp_listener_query(self.as_raw(), &mut attr) }).map(|()| {
             ListenerAttr {
                 sockaddr: attr.sockaddr,
                 socket_addr: from_storage(&attr.sockaddr),
@@ -138,7 +267,7 @@ impl Listener {
     /// Reject a connection request, consuming its single-use handle.
     pub fn reject(&self, request: ConnRequest) -> Result<(), ucs_status_t> {
         // SAFETY: request is a live handle delivered by UCX to the callback.
-        status_to_result(unsafe { ucp_listener_reject(self.handle, request.handle) })
+        status_to_result(unsafe { ucp_listener_reject(self.as_raw(), request.handle) })
     }
 }
 
@@ -149,12 +278,7 @@ impl ParamsBuilder {
 }
 
 impl Drop for Listener {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            // SAFETY: handle was returned by UCX and is destroyed exactly once.
-            unsafe { ucp_listener_destroy(self.handle) };
-        }
-    }
+    fn drop(&mut self) {}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,13 +303,20 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = ConnRequestFields::CLIENT
 #[derive(Debug)]
 pub struct ConnRequest {
     handle: ucp_conn_request_h,
+    state: Arc<ListenerState>,
 }
 
 impl ConnRequest {
     /// # Safety
     /// `handle` must be a valid request supplied by a UCX listener callback.
     pub unsafe fn from_raw(handle: ucp_conn_request_h) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            state: Arc::new(ListenerState {
+                handle: Mutex::new(0),
+                conn_handler: None,
+            }),
+        }
     }
     pub fn as_raw(&self) -> ucp_conn_request_h {
         self.handle
@@ -193,6 +324,21 @@ impl ConnRequest {
     /// Reject this connection request, consuming its single-use handle.
     pub fn reject(self, listener: &Listener) -> Result<(), ucs_status_t> {
         listener.reject(self)
+    }
+    /// Reject this callback-delivered request using its originating listener.
+    /// The retained listener state makes this safe after the [`Listener`] is
+    /// dropped. If the callback raced listener creation before its handle was
+    /// published, UCX cannot safely reject the request and invalid-param is
+    /// returned instead of dereferencing a null handle.
+    pub fn reject_owned(self) -> Result<(), ucs_status_t> {
+        let listener = match self.state.handle.lock() {
+            Ok(listener) => *listener as ucp_listener_h,
+            Err(_) => return Err(ucs_status_t::UCS_ERR_INVALID_PARAM),
+        };
+        if listener.is_null() {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
+        status_to_result(unsafe { ucp_listener_reject(listener, self.handle) })
     }
     pub fn query(&self, fields: ConnRequestFields) -> Result<ConnRequestAttr, ucs_status_t> {
         // SAFETY: zeroed C POD, then UCX fills exactly the requested fields.
@@ -339,5 +485,15 @@ mod tests {
             );
         }
         assert_eq!(from_storage(&ss), Some(addr));
+    }
+
+    #[test]
+    fn panicking_connection_handler_is_contained() {
+        let handler = Arc::new(ListenerState {
+            handle: Mutex::new(0),
+            conn_handler: Some(Mutex::new(Box::new(|_: ConnRequest| panic!("handler")))),
+        });
+        let arg = Arc::as_ptr(&handler) as *mut std::ffi::c_void;
+        unsafe { conn_trampoline(ptr::null_mut(), arg) };
     }
 }

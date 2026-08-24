@@ -52,6 +52,7 @@ impl Drop for ProgressGuard<'_> {
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
     pub(crate) alive: Arc<AtomicBool>,
+    pub(crate) am_handlers: Vec<std::sync::Arc<crate::am::AmHandler>>,
     #[cfg(debug_assertions)]
     pub(crate) progressing: AtomicBool,
 }
@@ -120,6 +121,7 @@ impl Worker {
             Ok(()) => Ok(Worker {
                 handle: worker,
                 alive: Arc::new(AtomicBool::new(true)),
+                am_handlers: Vec::new(),
                 #[cfg(debug_assertions)]
                 progressing: AtomicBool::new(false),
             }),
