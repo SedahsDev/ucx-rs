@@ -70,7 +70,9 @@ mod tests {
         let mut context =
             Context::new(&Config::read("", "").expect("config read"), &context_params)
                 .expect("context create");
-        let worker_params = ParamsBuilder::new().build();
+        let mut worker_params = ParamsBuilder::new();
+        worker_params.thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED);
+        let worker_params = worker_params.build();
         let worker = context
             .worker_create(&worker_params)
             .expect("worker create");
@@ -81,6 +83,152 @@ mod tests {
     fn progress_works_with_a_real_worker() {
         let (_context, worker) = setup_worker();
         let _ = worker.progress();
+    }
+
+    #[test]
+    fn single_mode_worker_cannot_be_wrapped() {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config read"), &context_params)
+                .expect("context create");
+        let mut params = ParamsBuilder::new();
+        params.thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE);
+        let worker = context
+            .worker_create(&params.build())
+            .expect("worker create");
+        assert!(matches!(
+            MtWorker::new(worker),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        ));
+    }
+
+    #[test]
+    fn serialized_mode_worker_can_progress_through_wrapper() {
+        let (_context, worker) = setup_worker();
+        let worker = MtWorker::new(worker).expect("UCX should grant a threaded worker");
+        let _ = worker.progress();
+        let _clone = worker.clone();
+    }
+}
+
+/// A cloneable, thread-safe handle to a worker configured for serialized or
+/// multi-threaded access.
+///
+/// Construction queries the mode UCX actually granted. Every operation takes
+/// the internal mutex for its duration. Cloning this value clones the handle,
+/// not the underlying UCX worker; all clones access the same worker.
+///
+/// Endpoints returned by [`MtWorker::create_ep`] remain `!Send` and `!Sync`.
+/// Keep them on the constructing thread, or serialize their use yourself.
+/// Fetch-AMO operations whose reply buffer is borrowed are not cross-thread
+/// compatible; an owned-buffer API is future work. Per-operation locking may
+/// also negate the parallelism benefit of `UCS_THREAD_MODE_MULTI` and should
+/// be measured before relying on it for performance.
+pub struct MtWorker {
+    inner: Arc<MtWorkerInner>,
+}
+
+struct MtWorkerInner {
+    worker: std::sync::Mutex<Worker>,
+}
+
+impl Clone for MtWorker {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl std::fmt::Debug for MtWorker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("MtWorker").finish_non_exhaustive()
+    }
+}
+
+// SAFETY: `new` admits only workers whose UCX-granted mode is SERIALIZED or
+// MULTI, and every operation below locks the worker mutex before accessing it.
+unsafe impl Send for MtWorker {}
+// SAFETY: See the `Send` implementation. Shared handles cannot access the
+// contained worker without taking the same mutex. However, `create_ep` returns
+// an `Ep` that remains `!Send` and `!Sync`, so this mutex does not make endpoints
+// derived from the `MtWorker` thread-safe; callers must serialize their use.
+unsafe impl Sync for MtWorker {}
+
+impl MtWorker {
+    /// Wrap a worker only when UCX reports a thread-safe worker mode.
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn new(worker: Worker) -> Result<Self, ucs_status_t> {
+        let mode = worker
+            .query(WorkerAttrFields::THREAD_MODE)?
+            .thread_mode
+            .ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
+        if mode != ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED
+            && mode != ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
+        {
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        }
+        Ok(Self {
+            inner: Arc::new(MtWorkerInner {
+                worker: std::sync::Mutex::new(worker),
+            }),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Worker> {
+        self.inner
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn progress(&self) -> bool {
+        self.lock().progress()
+    }
+
+    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+        self.lock().flush(params)
+    }
+
+    pub fn wait(&self) -> Result<(), ucs_status_t> {
+        self.lock().wait()
+    }
+    pub fn arm(&self) -> Result<(), ucs_status_t> {
+        self.lock().arm()
+    }
+    pub fn signal(&self) -> Result<(), ucs_status_t> {
+        self.lock().signal()
+    }
+    pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
+        self.lock().get_efd()
+    }
+    pub fn cancel_request(&self, request: &mut Request) {
+        self.lock().cancel_request(request)
+    }
+
+    pub fn wait_request(&self, request: &Request) -> Result<bool, ucs_status_t> {
+        const MAX_ROUNDS: usize = 1_000_000;
+        for _ in 0..MAX_ROUNDS {
+            match request.check_finished() {
+                Ok(true) => return Ok(true),
+                Ok(false) => {
+                    self.progress();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, ucs_status_t> {
+        self.lock().create_ep(ep_params)
+    }
+
+    pub fn pack_address(&self) -> Result<Vec<u8>, ucs_status_t> {
+        self.lock().pack_address().map(|address| address.to_vec())
     }
 }
 

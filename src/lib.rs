@@ -31,8 +31,7 @@
 //! `Ep::Drop` checks the runtime `worker_alive` guard and skips a late cleanup as
 //! a safety net; that guard is not a license to violate the required drop order.
 //!
-//! An `MtWorker` abstraction may be added in a future release; it is not
-//! provided by this crate currently.
+
 #![allow(unused_imports)]
 
 mod ffi;

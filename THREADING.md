@@ -130,6 +130,12 @@ application thread or channel.
    API surface (doc lints; optionally a debug lock under a feature flag).
 4. Callback-context documentation and a safe AM-handler trampoline with typed
    user context (hop-off helper parity with pmix-rs `threading.rs`).
-5. Future (opt-in): an `MtWorker` wrapper providing `Send + Sync` access under
-   `UCS_THREAD_MODE_MULTI`/`SERIALIZED` with an internal mutex — not provided
-   by this crate today.
+5. **Implemented (opt-in):** `worker::MtWorker` provides `Send + Sync` access
+   under `UCS_THREAD_MODE_MULTI`/`SERIALIZED` with an internal mutex. The
+   wrapper verifies UCX's granted thread mode at construction; it does not
+   trust the requested mode. Endpoints created through it remain `!Send +
+   !Sync` and must stay on the constructing thread or be serialized by the
+   caller. Fetch-AMO reply-buffer pinning remains incompatible with
+   cross-thread use; an owned-buffer variant is future work. Per-operation
+   locking may negate MULTI's parallelism benefit; this is a measured-later
+   caveat, not a benchmark claim.
