@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in, thread-mode-checked `worker::MtWorker` access.
+
 ## 0.1.0
 
 - Portable `build.rs` (`UCX_PREFIX` / include+lib env vars)
