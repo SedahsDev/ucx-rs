@@ -10,16 +10,23 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
-struct ConnHandler {
-    inner: Mutex<Box<dyn FnMut(ConnRequest) + Send + 'static>>,
-    state: Arc<ListenerState>,
-}
+type ConnCallback = Box<dyn FnMut(ConnRequest) + Send + 'static>;
 
-#[derive(Debug)]
 struct ListenerState {
     // Raw UCX handles are opaque pointers and are not Send/Sync in Rust.
     // Carrying the address as usize lets this state cross UCX progress threads.
     handle: Mutex<usize>,
+    // This is kept in the same allocation as the handle. ListenerState's Drop
+    // destroys the UCX listener before this field is dropped.
+    conn_handler: Option<Mutex<ConnCallback>>,
+}
+
+impl std::fmt::Debug for ListenerState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ListenerState")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for ListenerState {
@@ -37,20 +44,28 @@ impl Drop for ListenerState {
 }
 
 unsafe extern "C" fn conn_trampoline(conn_request: ucp_conn_request_h, arg: *mut std::ffi::c_void) {
-    // SAFETY: `arg` points to the ConnHandler held by Listener for the entire
-    // lifetime of the UCX listener. UCX supplies a live request handle for
-    // this callback; ConnRequest owns the callback delivery and must be used
-    // before the callback returns according to UCX's request lifetime rules.
-    let handler = unsafe { &*(arg as *const ConnHandler) };
+    // SAFETY: `arg` points to the ListenerState allocation retained by the
+    // Listener and every callback-delivered ConnRequest.
+    if arg.is_null() {
+        return;
+    }
+    // Take one strong reference for the request without consuming the Arc
+    // owned by the Listener.
+    unsafe { Arc::increment_strong_count(arg as *const ListenerState) };
+    let request_state = unsafe { Arc::from_raw(arg as *const ListenerState) };
     let request = ConnRequest {
         handle: conn_request,
-        state: Arc::clone(&handler.state),
+        state: request_state,
     };
-    let mut callback = match handler.inner.lock() {
-        Ok(callback) => callback,
-        // A poisoned handler cannot be trusted. The request is dropped without
-        // invoking user code, and the callback returns to UCX normally.
-        Err(_) => return,
+    let callback_state = Arc::clone(&request.state);
+    let mut callback = match callback_state.conn_handler.as_ref() {
+        Some(handler) => match handler.lock() {
+            Ok(callback) => callback,
+            // A poisoned handler cannot be trusted. The request is dropped without
+            // invoking user code, and the callback returns to UCX normally.
+            Err(_) => return,
+        },
+        None => return,
     };
     // Handler panics are contained here and never unwind through this
     // extern "C" trampoline into UCX.
@@ -140,8 +155,6 @@ impl Default for ParamsBuilder {
 /// RAII wrapper for a UCP listener.
 pub struct Listener {
     state: Arc<ListenerState>,
-    #[allow(dead_code)]
-    conn_handler: Option<Arc<ConnHandler>>,
 }
 
 impl Listener {
@@ -163,8 +176,8 @@ impl Listener {
         result.map(|()| Self {
             state: Arc::new(ListenerState {
                 handle: Mutex::new(handle as usize),
+                conn_handler: None,
             }),
-            conn_handler: None,
         })
     }
 
@@ -180,8 +193,8 @@ impl Listener {
             |()| Self {
                 state: Arc::new(ListenerState {
                     handle: Mutex::new(handle as usize),
+                    conn_handler: None,
                 }),
-                conn_handler: None,
             },
         )
     }
@@ -191,9 +204,10 @@ impl Listener {
     /// internal progress thread under MULTI). Do not block or call back into
     /// the same worker; send heavy work to an application thread or channel.
     ///
-    /// The delivered [`ConnRequest`] retains the listener state, so it may be
-    /// safely moved out of the callback and rejected later. This also keeps the
-    /// UCX listener alive until every delivered request has been dropped.
+    /// The delivered [`ConnRequest`] retains the complete listener state,
+    /// including callback storage and the UCX handle, so it may be safely moved
+    /// out of the callback and rejected later. Teardown is deferred until every
+    /// request is dropped; callback storage is released after listener destroy.
     pub fn create_with_conn_handler<F>(
         worker: &Worker,
         addr: &SocketAddr,
@@ -202,11 +216,9 @@ impl Listener {
     where
         F: FnMut(ConnRequest) + Send + 'static,
     {
-        let conn_handler = Arc::new(ConnHandler {
-            inner: Mutex::new(Box::new(handler)),
-            state: Arc::new(ListenerState {
-                handle: Mutex::new(0),
-            }),
+        let state = Arc::new(ListenerState {
+            handle: Mutex::new(0),
+            conn_handler: Some(Mutex::new(Box::new(handler))),
         });
         let (_storage, sockaddr) = socket_address(addr);
         // SAFETY: the callback and its Arc-backed argument are retained by
@@ -214,22 +226,18 @@ impl Listener {
         let params = unsafe {
             ParamsBuilder::new()
                 .sockaddr(sockaddr)
-                .conn_handler(Some(conn_trampoline), Arc::as_ptr(&conn_handler) as *mut _)
+                .conn_handler(Some(conn_trampoline), Arc::as_ptr(&state) as *mut _)
                 .build()
         };
         let mut handle = ptr::null_mut();
         match status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
         {
             Ok(()) => {
-                *conn_handler
-                    .state
+                *state
                     .handle
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = handle as usize;
-                Ok(Self {
-                    state: Arc::clone(&conn_handler.state),
-                    conn_handler: Some(conn_handler),
-                })
+                Ok(Self { state })
             }
             Err(error) => Err(error),
         }
@@ -306,6 +314,7 @@ impl ConnRequest {
             handle,
             state: Arc::new(ListenerState {
                 handle: Mutex::new(0),
+                conn_handler: None,
             }),
         }
     }
@@ -480,11 +489,9 @@ mod tests {
 
     #[test]
     fn panicking_connection_handler_is_contained() {
-        let handler = Arc::new(ConnHandler {
-            inner: Mutex::new(Box::new(|_: ConnRequest| panic!("handler"))),
-            state: Arc::new(ListenerState {
-                handle: Mutex::new(0),
-            }),
+        let handler = Arc::new(ListenerState {
+            handle: Mutex::new(0),
+            conn_handler: Some(Mutex::new(Box::new(|_: ConnRequest| panic!("handler")))),
         });
         let arg = Arc::as_ptr(&handler) as *mut std::ffi::c_void;
         unsafe { conn_trampoline(ptr::null_mut(), arg) };
