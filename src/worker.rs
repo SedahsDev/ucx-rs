@@ -193,6 +193,11 @@ impl MtWorker {
         self.lock().flush(params)
     }
 
+    /// Apply worker-wide UCX ordering to operations issued before this call.
+    pub fn fence(&self) -> Result<(), ucs_status_t> {
+        self.lock().fence()
+    }
+
     pub fn wait(&self) -> Result<(), ucs_status_t> {
         self.lock().wait()
     }
