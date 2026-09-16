@@ -93,6 +93,67 @@ impl Ep {
         })
     }
 
+    /// Put `len` bytes from an arbitrary address, including device (GPU) memory.
+    ///
+    /// The slice-based [`Ep::rma_put`] cannot express accelerator buffers — a device pointer
+    /// must never be turned into a host `&[u8]`. See [`Ep::tag_send_ptr`] for the rationale.
+    /// Set `RequestParamBuilder::memory_type(UCS_MEMORY_TYPE_CUDA)` for device buffers.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must be valid for reads of `len` bytes and readable by UCX for the whole
+    ///   operation (device allocation on the current device, or managed memory).
+    /// - The memory must stay alive and unpublished until the request completes.
+    /// - `len` must not exceed the underlying allocation.
+    pub unsafe fn rma_put_ptr(
+        &self,
+        ptr: *const u8,
+        len: usize,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_put_nbx(
+                self.handle,
+                ptr as _,
+                len,
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
+    /// Get `len` bytes into an arbitrary address, including device (GPU) memory.
+    ///
+    /// Counterpart of [`Ep::rma_put_ptr`].
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must be valid for writes of `len` bytes and writable by UCX for the whole
+    ///   operation (device allocation on the current device, or managed memory).
+    /// - The memory must stay alive and unpublished until the request completes.
+    pub unsafe fn rma_get_ptr(
+        &self,
+        ptr: *mut u8,
+        len: usize,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_get_nbx(
+                self.handle,
+                ptr as _,
+                len,
+                remote_addr,
+                rkey.handle,
+                &param.handle,
+            )
+        })
+    }
+
     // ── AMO — no-fetch variants ──
 
     /// Atomic add 64-bit on remote memory (no fetch of old value).
