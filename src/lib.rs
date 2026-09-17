@@ -38,7 +38,7 @@ mod ffi;
 mod threading_assert;
 use crate::ffi::*;
 
-pub use ffi::{ucp_am_recv_param_t, ucs_status_t};
+pub use ffi::{ucp_am_recv_param_t, ucs_status_t, ucs_thread_mode_t};
 
 pub mod am;
 pub mod config;
