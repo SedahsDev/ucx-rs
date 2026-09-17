@@ -185,6 +185,24 @@ impl MtWorker {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Run `operation` against the underlying worker while holding the
+    /// serialization lock.
+    ///
+    /// This is the escape hatch for entry points that take a `&Worker` directly,
+    /// such as the fetch-AMO family (`Ep::amo_fadd32` and friends) whose
+    /// borrowed reply buffer has no owned-buffer equivalent yet. The lock is
+    /// held for the whole call.
+    ///
+    /// `operation` must not re-enter this `MtWorker` (for example by calling
+    /// [`MtWorker::progress`] or [`MtWorker::wait_request`]): the internal mutex
+    /// is not reentrant and the call will deadlock.
+    pub fn with_worker<F, T>(&self, operation: F) -> T
+    where
+        F: FnOnce(&Worker) -> T,
+    {
+        operation(&self.lock())
+    }
+
     pub fn progress(&self) -> bool {
         self.lock().progress()
     }
