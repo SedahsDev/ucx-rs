@@ -55,8 +55,8 @@ jobs:
       - name: Run RMA/AMO smoke test
         run: |
           export UCX_TLS=self
+          echo "UCX_TLS=$UCX_TLS"
           cargo test -- rma_amo_self --nocapture
-        continue-on-error: true
         env:
           RUST_BACKTRACE: 1
 
