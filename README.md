@@ -44,22 +44,4 @@ fn main() {
     let params = pb.build();
     let config = Config::default();
     let ctx = Context::new(&config, &params).expect("ucp_init");
-    let _ = ctx; // drop cleans up
-}
-```
-
-## Notes
-
-- RMA needs a transport that supports it (`TLS=tcp` often has no RMA).
-- Multi-process tests typically need `prterun` / a DVM.
-- See [`REVIEW.md`](./REVIEW.md) for API completeness and safety notes.
-
-## License
-
-BSD-style (see `LICENSE`).
-
-
-## Stream API
-
-`stream` module provides UCP stream send/recv/poll wrappers. Enable `UCP_FEATURE_STREAM`
-in context features when using them. See `src/stream.rs`.
+    let _ = ctx; // drop c
