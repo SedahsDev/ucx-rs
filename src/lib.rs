@@ -38,7 +38,11 @@ mod ffi;
 mod threading_assert;
 use crate::ffi::*;
 
-pub use ffi::{ucp_am_recv_param_t, ucs_status_t, ucs_thread_mode_t};
+// Enumerations that appear in this crate's *public* signatures (`MemMapParamsBuilder::memory_type`,
+// `Builder::memory_type`, runtime thread-mode setup). Without re-exporting them, downstream crates
+// cannot name a type they are required to pass — the compiler reports `enum ... is private` even
+// though the method taking it is `pub`. Re-export rather than widening `ffi` to `pub`.
+pub use crate::ffi::{ucp_am_recv_param_t, ucs_memory_type_t, ucs_status_t, ucs_thread_mode_t};
 
 pub mod am;
 pub mod config;

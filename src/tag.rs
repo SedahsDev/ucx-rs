@@ -44,6 +44,34 @@ impl Ep {
         });
         result.map(|request| request.unwrap_or(Request { handle: None }))
     }
+
+    /// Send `len` bytes from an arbitrary address, including device (GPU) memory.
+    ///
+    /// The slice-based [`Ep::tag_send`] cannot express accelerator buffers: a device pointer
+    /// must never be turned into a host `&[u8]`, because the host cannot dereference it. This
+    /// variant takes the address and length separately so UCX can pick a CUDA-aware transport
+    /// (`cuda_copy`, `cuda_ipc`, `gdr_copy`). Pair it with
+    /// `RequestParamBuilder::memory_type(UCS_MEMORY_TYPE_CUDA)` so UCX does not probe the buffer.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must be valid for reads of `len` bytes and readable by UCX for the whole
+    ///   operation. For device memory it must be a device allocation on the current device,
+    ///   or managed memory.
+    /// - The memory must stay alive and unpublished (no host reallocation, no `free`) until the
+    ///   returned request completes; with a blocking wait that means until the wait returns.
+    /// - `len` must not exceed the underlying allocation.
+    pub unsafe fn tag_send_ptr(
+        &self,
+        ptr: *const u8,
+        len: usize,
+        tag: u64,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_tag_send_nbx(self.handle, ptr as _, len, tag, &param.handle)
+        })
+    }
 }
 
 pub struct MessageHandle {
@@ -101,6 +129,31 @@ impl Worker {
                 mask,
                 &param.handle,
             )
+        })
+    }
+
+    /// Receive into an arbitrary address, including device (GPU) memory.
+    ///
+    /// Counterpart of [`Ep::tag_send_ptr`]. Note the asymmetry in UCX itself: tag *send* is an
+    /// endpoint operation while tag *receive* is a worker operation, so the two pointer variants
+    /// live on different types.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must be valid for writes of `len` bytes and writable by UCX for the whole
+    ///   operation (device allocation on the current device, or managed memory).
+    /// - The memory must stay alive and unpublished until the returned request completes.
+    /// - `len` must not exceed the underlying allocation.
+    pub unsafe fn tag_recv_ptr(
+        &self,
+        ptr: *mut u8,
+        len: usize,
+        tag: u64,
+        mask: u64,
+        param: &RequestParam,
+    ) -> Result<Option<Request>, ucs_status_t> {
+        status_ptr_to_result(unsafe {
+            ucp_tag_recv_nbx(self.handle, ptr as _, len, tag, mask, &param.handle)
         })
     }
 
