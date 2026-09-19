@@ -45,4 +45,5 @@ fn main() {
     let config = Config::default();
     let ctx = Context::new(&config, &params).expect("ucp_init");
     let _ = ctx; // drop c
-...
+}
+```
