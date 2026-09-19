@@ -52,11 +52,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libucx-dev
 
-      - name: Run RMA/AMO smoke test
+      - name: Run RMA/AMO smoke test with debug logging
         run: |
           export UCX_TLS=self
+          export UCX_LOG_LEVEL=debug
           echo "UCX_TLS=$UCX_TLS"
-          cargo test -- rma_amo_self --nocapture
+          echo "UCX_LOG_LEVEL=$UCX_LOG_LEVEL"
+          cargo test -- rma_amo_self --nocapture 2>&1 | tee /tmp/ucx_rma_amo.log
+          if grep -q "using.*self" /tmp/ucx_rma_amo.log; then
+            echo "✅ Confirmed: UCX selected 'self' transport"
+          else
+            echo "⚠️ Warning: 'self' transport not confirmed in logs"
+            echo "=== UCX log excerpt ==="
+            tail -n 50 /tmp/ucx_rma_amo.log
+            echo "========================"
+          fi
         env:
           RUST_BACKTRACE: 1
 
