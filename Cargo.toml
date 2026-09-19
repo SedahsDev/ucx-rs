@@ -1,13 +1,14 @@
 [package]
 name = "ucx-sys"
 version = "0.1.0"
-edition = "2021"
+edition = "2021" # staying on 2021 to maintain compatibility with downstream crates in the ucx-rs ecosystem
+rust-version = "1.63"
 description = "Low-level Rust bindings for UCX (Unified Communication X)"
 license = "BSD-3-Clause"
 readme = "README.md"
 keywords = ["ucx", "hpc", "rdma", "networking"]
 categories = ["api-bindings", "network-programming"]
-repository = "https://github.com/KirgenR/ucx-rs"
+repository = "https://github.com/SedahsDev/ucx-rs"
 
 [build-dependencies]
 bindgen = "0.72"
@@ -20,3 +21,4 @@ version = "0.2"
 
 [dev-dependencies]
 static_assertions = "1.1"
+

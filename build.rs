@@ -1,6 +1,14 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+/// Minimum supported UCX version (major, minor)
+const MIN_MAJOR: u32 = 1;
+const MIN_MINOR: u32 = 19;
+
+/// Maximum supported UCX version (major, minor) — inclusive upper bound
+const MAX_MAJOR: u32 = 1;
+const MAX_MINOR: u32 = 22;
+
 /// Discover UCX include/lib dirs.
 /// Order: UCX_PREFIX → UCX_INCLUDE_DIR/UCX_LIB_DIR → common prefixes → /usr
 fn discover_ucx() -> (PathBuf, PathBuf) {
@@ -95,4 +103,81 @@ fn main() {
                 .expect("Failed to copy fallback bindings to OUT_DIR");
         }
     }
+
+    // Validate UCX version at build time
+    let version_check_code = r#"
+#include <ucp/api/ucp.h>
+#include <stdio.h>
+
+int main() {
+    unsigned version = ucp_get_version();
+    int major = version / 10000;
+    int minor = (version % 10000) / 100;
+    int release = version % 100;
+    printf("UCX_VERSION=%d.%d.%d\n", major, minor, release);
+    return 0;
+}
+"#;
+
+    let tmpdir = std::env::temp_dir();
+    let src_file = tmpdir.join("ucx_version_check.c");
+    std::fs::write(&src_file, version_check_code).expect("Failed to write version check C file");
+
+    let bin_file = tmpdir.join("ucx_version_check");
+    let status = std::process::Command::new("cc")
+        .arg(&src_file)
+        .arg("-o")
+        .arg(&bin_file)
+        .arg(format!("-I{}", include_dir.display()))
+        .status()
+        .expect("Failed to compile version check program");
+
+    if !status.success() {
+        println!("cargo:warning=Failed to compile UCX version check — skipping version validation");
+        return;
+    }
+
+    let output = std::process::Command::new(&bin_file)
+        .output()
+        .expect("Failed to run version check program");
+
+    let version_str = String::from_utf8_lossy(&output.stdout);
+    let version_line = version_str
+        .lines()
+        .find(|l| l.starts_with("UCX_VERSION="))
+        .unwrap_or("UCX_VERSION=0.0.0");
+
+    let parts: Vec<&str> = version_line
+        .trim_start_matches("UCX_VERSION=")
+        .split('.')
+        .collect();
+    if parts.len() < 3 {
+        println!("cargo:warning=Could not parse UCX version — skipping version validation");
+        return;
+    }
+
+    let (major, minor): (u32, u32) = match (parts[0].parse(), parts[1].parse()) {
+        (Ok(maj), Ok(min)) => (maj, min),
+        _ => {
+            println!("cargo:warning=Could not parse UCX version — skipping version validation");
+            return;
+        }
+    };
+
+    if major < MIN_MAJOR || (major == MIN_MAJOR && minor < MIN_MINOR) {
+        panic!(
+            "UCX version {}.{}, but minimum supported is {}.{}",
+            major, minor, MIN_MAJOR, MIN_MINOR
+        );
+    }
+
+    if major > MAX_MAJOR || (major == MAX_MAJOR && minor > MAX_MINOR) {
+        panic!(
+            "UCX version {}.{}, but maximum supported is {}.{}",
+            major, minor, MAX_MAJOR, MAX_MINOR
+        );
+    }
+
+    println!("cargo:warning=UCX version {}.{}.{} is within supported range ({}.{}, {}.{})",
+             major, minor, parts[2], MIN_MAJOR, MIN_MINOR, MAX_MAJOR, MAX_MINOR);
 }
