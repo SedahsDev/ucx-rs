@@ -25,6 +25,10 @@ Also: `UCX_INCLUDE_DIR` + `UCX_LIB_DIR`. Fallbacks: `/usr`, `/usr/local`, `/opt/
 
 See [`../BUILDING.md`](../BUILDING.md).
 
+## UCX version support
+
+This crate is validated against UCX **1.22.0** (latest upstream as of 2026-08-02) and supports versions in the range **>= 1.19, <= 1.22**. The build script enforces this range at compile time using `ucp_get_version()`.
+
 ## Minimal example
 
 ```rust
