@@ -58,7 +58,7 @@ jobs:
           export UCX_LOG_LEVEL=debug
           echo "UCX_TLS=$UCX_TLS"
           echo "UCX_LOG_LEVEL=$UCX_LOG_LEVEL"
-          cargo test -- rma_amo_self --nocapture 2>&1 | tee /tmp/ucx_rma_amo.log
+          cargo test -- rma_amo_self --ignored --nocapture 2>&1 | tee /tmp/ucx_rma_amo.log
           if grep -q "using.*self" /tmp/ucx_rma_amo.log; then
             echo "✅ Confirmed: UCX selected 'self' transport"
           else
