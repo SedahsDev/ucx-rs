@@ -8,7 +8,7 @@ license = "BSD-3-Clause"
 readme = "README.md"
 keywords = ["ucx", "hpc", "rdma", "networking"]
 categories = ["api-bindings", "network-programming"]
-repository = "https://github.com/ucx-rs/ucx-rs"
+repository = "https://github.com/SedahsDev/ucx-rs"
 
 [build-dependencies]
 bindgen = "0.72"
@@ -21,5 +21,4 @@ version = "0.2"
 
 [dev-dependencies]
 static_assertions = "1.1"
-
 
