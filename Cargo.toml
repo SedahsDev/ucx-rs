@@ -2,13 +2,13 @@
 name = "ucx-sys"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.70"
 description = "Low-level Rust bindings for UCX (Unified Communication X)"
 license = "BSD-3-Clause"
 readme = "README.md"
 keywords = ["ucx", "hpc", "rdma", "networking"]
 categories = ["api-bindings", "network-programming"]
-repository = "https://github.com/pmix-rs/ucx-rs"
+repository = "https://github.com/SedahsDev/ucx-rs"
 
 [build-dependencies]
 bindgen = "0.72"
