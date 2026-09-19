@@ -33,7 +33,35 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: test
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
       - name: example
         run: cargo run --example version_and_context
+
+  rma_amo_smoke:
+    name: RMA/AMO smoke test (self TLS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UCX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libucx-dev
+
+      - name: Run RMA/AMO smoke test
+        run: |
+          export UCX_TLS=self
+          cargo test -- rma_amo_self --nocapture
+        continue-on-error: true
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Document ignored RMA/AMO test
+        run: |
+          echo "If the RMA/AMO test fails or is ignored, it is expected on GitHub-hosted runners where self TLS RMA/AMO may be unsupported."
+          echo "See THREADING.md for details."
+        if: always()
