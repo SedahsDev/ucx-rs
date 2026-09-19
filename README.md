@@ -25,6 +25,10 @@ Also: `UCX_INCLUDE_DIR` + `UCX_LIB_DIR`. Fallbacks: `/usr`, `/usr/local`, `/opt/
 
 See [`../BUILDING.md`](../BUILDING.md).
 
+## UCX version support
+
+This crate is validated against UCX **1.22.0** (latest upstream as of 2026-08-02) and supports versions in the range **>= 1.19, <= 1.22**. The build script enforces this range at compile time using `ucp_get_version()`.
+
 ## Minimal example
 
 ```rust
@@ -40,10 +44,9 @@ fn main() {
     let params = pb.build();
     let config = Config::default();
     let ctx = Context::new(&config, &params).expect("ucp_init");
-    let _ = ctx; // drop cleans up
+    let _ = ctx; // drop c
 }
 ```
-
 ## Notes
 
 - RMA needs a transport that supports it (`TLS=tcp` often has no RMA).
@@ -54,10 +57,7 @@ fn main() {
 
 BSD-style (see `LICENSE`).
 
-
 ## Stream API
 
 `stream` module provides UCP stream send/recv/poll wrappers. Enable `UCP_FEATURE_STREAM`
 in context features when using them. See `src/stream.rs`.
-
-```

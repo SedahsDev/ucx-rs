@@ -46,6 +46,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Install UCX
         run: |
@@ -75,3 +77,41 @@ jobs:
           echo "If the RMA/AMO test fails or is ignored, it is expected on GitHub-hosted runners where self TLS RMA/AMO may be unsupported."
           echo "See THREADING.md for details."
         if: always()
+
+  tier1-ucx-122:
+    name: Tier 1 (UCX 1.22.0)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install UCX 1.22.0 from source
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential wget libnuma-dev libmlx5-dev librdmacm-dev libibverbs-dev
+          cd /tmp
+          wget -q https://github.com/openucx/ucx/releases/download/v1.22.0/ucx-1.22.0.tar.gz
+          tar -xzf ucx-1.22.0.tar.gz
+          cd ucx-1.22.0
+          ./configure --prefix=/opt/ucx-1.22.0 --enable-mlx5 --enable-rdmacm --enable-ibverbs
+          make -j$(nproc)
+          sudo make install
+
+      - name: Set UCX_PREFIX to 1.22.0
+        run: echo "UCX_PREFIX=/opt/ucx-1.22.0" >> $GITHUB_ENV
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test
+
+      - name: example
+        run: cargo run --example version_and_context
