@@ -5,6 +5,7 @@
 
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::ThreadMode;
 use std::ffi::CStr;
 
 /// Get the UCX library version.
@@ -31,16 +32,17 @@ pub const UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL: u64 = 1;
 /// Library attributes queried via `lib_query()`.
 #[derive(Debug, Clone)]
 pub struct LibAttr {
-    pub max_thread_level: ucs_thread_mode_t,
+    pub max_thread_level: ThreadMode,
 }
 
 /// Query library-wide attributes.
 pub fn lib_query() -> Result<LibAttr, ucs_status_t> {
     let mut attr: ucp_lib_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL;
-    status_to_result(unsafe { ucp_lib_query(&mut attr) }).map(|()| LibAttr {
-        max_thread_level: attr.max_thread_level,
-    })
+    status_to_result(unsafe { ucp_lib_query(&mut attr) })?;
+    let max_thread_level = ThreadMode::try_from(attr.max_thread_level)
+        .map_err(|_| ucs_status_t::UCS_ERR_UNSUPPORTED)?;
+    Ok(LibAttr { max_thread_level })
 }
 
 /// Legacy `ucp_init` is deprecated in UCX 1.18 and not available in the
@@ -76,6 +78,6 @@ mod tests {
     fn test_lib_query() {
         let attr = lib_query().expect("lib_query should succeed");
         // Just verify it returns something valid
-        let _ = attr.max_thread_level as i32;
+        let _ = attr.max_thread_level;
     }
 }

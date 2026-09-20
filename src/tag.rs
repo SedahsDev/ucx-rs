@@ -1,3 +1,4 @@
+use crate::dt::DataType;
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
@@ -252,10 +253,10 @@ pub unsafe fn tag_msg_recv_nb(
     worker: ucp_worker_h,
     buffer: *mut std::os::raw::c_void,
     count: usize,
-    datatype: ucp_datatype_t,
+    datatype: DataType,
     message: ucp_tag_message_h,
 ) -> crate::Request {
-    let ptr = ucp_tag_msg_recv_nb(worker, buffer, count, datatype, message, None);
+    let ptr = ucp_tag_msg_recv_nb(worker, buffer, count, datatype.into(), message, None);
     crate::Request::from_raw(ptr)
 }
 

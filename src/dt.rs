@@ -7,11 +7,40 @@
 use crate::ffi::*;
 use crate::status_to_result;
 
-/// UCP contiguous data type class, sourced from bindgen.
-pub const UCP_DATATYPE_CONTIG: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t;
+/// A UCP data type descriptor.
+///
+/// Owns the opaque value UCX uses to describe a buffer layout. Convert to and
+/// from the raw UCX representation with `From`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DataType(ucp_datatype_t);
 
-/// UCP I/O vector data type class, sourced from bindgen.
-pub const UCP_DATATYPE_IOV: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_IOV as ucp_datatype_t;
+impl DataType {
+    #[inline]
+    pub(crate) fn as_raw(self) -> ucp_datatype_t {
+        self.0
+    }
+}
+
+impl From<ucp_datatype_t> for DataType {
+    #[inline]
+    fn from(raw: ucp_datatype_t) -> DataType {
+        DataType(raw)
+    }
+}
+
+impl From<DataType> for ucp_datatype_t {
+    #[inline]
+    fn from(datatype: DataType) -> ucp_datatype_t {
+        datatype.0
+    }
+}
+
+/// UCP contiguous data type class.
+pub const UCP_DATATYPE_CONTIG: DataType =
+    DataType(ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t);
+
+/// UCP I/O vector data type class.
+pub const UCP_DATATYPE_IOV: DataType = DataType(ucp_dt_type::UCP_DATATYPE_IOV as ucp_datatype_t);
 
 /// Create a contiguous data type with the given element size (in bytes).
 /// Equivalent to the C macro `ucp_dt_make_contig(elem_size)`.
@@ -19,15 +48,17 @@ pub const UCP_DATATYPE_IOV: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_IOV as uc
 /// The encoding is `(elem_size << UCP_DATATYPE_SHIFT) | UCP_DATATYPE_CONTIG`.
 /// Element size 0 is preserved, matching the C macro and producing the class-only value.
 #[must_use]
-pub fn dt_make_contig(elem_size: usize) -> ucp_datatype_t {
-    ((elem_size as ucp_datatype_t) << ucp_dt_type::UCP_DATATYPE_SHIFT as ucp_datatype_t)
-        | UCP_DATATYPE_CONTIG
+pub fn dt_make_contig(elem_size: usize) -> DataType {
+    DataType(
+        ((elem_size as ucp_datatype_t) << ucp_dt_type::UCP_DATATYPE_SHIFT as ucp_datatype_t)
+            | UCP_DATATYPE_CONTIG.0,
+    )
 }
 
 /// Create an I/O vector data type.
 /// Equivalent to the C macro `ucp_dt_make_iov()`.
 #[must_use]
-pub fn dt_make_iov() -> ucp_datatype_t {
+pub fn dt_make_iov() -> DataType {
     UCP_DATATYPE_IOV
 }
 
@@ -40,15 +71,16 @@ pub fn dt_make_iov() -> ucp_datatype_t {
 pub unsafe fn dt_create_generic(
     ops: &ucp_generic_dt_ops,
     context: *mut std::os::raw::c_void,
-) -> Result<ucp_datatype_t, ucs_status_t> {
+) -> Result<DataType, ucs_status_t> {
     let mut datatype: ucp_datatype_t = 0;
-    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype)).map(|()| datatype)
+    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype))
+        .map(|()| DataType(datatype))
 }
 
 /// Destroy a user-defined data type.
-pub fn dt_destroy(datatype: ucp_datatype_t) {
+pub fn dt_destroy(datatype: DataType) {
     unsafe {
-        ucp_dt_destroy(datatype);
+        ucp_dt_destroy(datatype.as_raw());
     }
 }
 
@@ -66,10 +98,10 @@ pub struct DataTypeAttr {
 }
 
 /// Query data type attributes.
-pub fn dt_query(datatype: ucp_datatype_t, mask: u64) -> Result<DataTypeAttr, ucs_status_t> {
+pub fn dt_query(datatype: DataType, mask: u64) -> Result<DataTypeAttr, ucs_status_t> {
     let mut attr: ucp_datatype_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
-    status_to_result(unsafe { ucp_dt_query(datatype, &mut attr) }).map(|()| DataTypeAttr {
+    status_to_result(unsafe { ucp_dt_query(datatype.as_raw(), &mut attr) }).map(|()| DataTypeAttr {
         packed_size: attr.packed_size,
         buffer: attr.buffer,
         count: attr.count,
@@ -82,10 +114,10 @@ mod tests {
 
     #[test]
     fn test_dt_make_contig() {
-        assert_eq!(dt_make_contig(0), 0);
-        assert_eq!(dt_make_contig(1), 8);
-        assert_eq!(dt_make_contig(4), 32);
-        assert_eq!(dt_make_contig(8), 64);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(0)), 0);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(1)), 8);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(4)), 32);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(8)), 64);
     }
 
     #[test]
@@ -95,7 +127,7 @@ mod tests {
         for elem_size in [2, 16] {
             assert_eq!(
                 dt_make_contig(elem_size),
-                ((elem_size as ucp_datatype_t) << shift) | class
+                DataType::from(((elem_size as ucp_datatype_t) << shift) | class)
             );
         }
     }
@@ -103,7 +135,7 @@ mod tests {
     #[test]
     fn test_dt_make_iov() {
         let dt = dt_make_iov();
-        assert_eq!(dt, 2); // UCP_DATATYPE_IOV
+        assert_eq!(ucp_datatype_t::from(dt), 2); // UCP_DATATYPE_IOV
     }
 
     #[test]
@@ -112,8 +144,8 @@ mod tests {
         // Just verify the contig type creation works.
         let dt = dt_make_contig(4);
         assert_ne!(dt, dt_make_contig(8));
-        assert_eq!(dt_make_contig(1), 8);
-        assert_eq!(dt_make_contig(4), 32);
-        assert_eq!(dt_make_contig(8), 64);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(1)), 8);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(4)), 32);
+        assert_eq!(ucp_datatype_t::from(dt_make_contig(8)), 64);
     }
 }

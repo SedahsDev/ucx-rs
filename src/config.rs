@@ -6,6 +6,7 @@
 use crate::context::ConfigError;
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::ThreadMode;
 use std::ffi::CStr;
 use std::os::fd::RawFd;
 
@@ -61,7 +62,7 @@ pub const UCP_CONTEXT_ATTR_FIELD_NAME: u64 = 8;
 #[derive(Debug, Clone)]
 pub struct ContextAttr {
     pub request_size: usize,
-    pub thread_mode: ucs_thread_mode_t,
+    pub thread_mode: ThreadMode,
     pub memory_types: u64,
     pub name: String,
 }
@@ -76,20 +77,21 @@ pub unsafe fn context_query(
 ) -> Result<ContextAttr, ucs_status_t> {
     let mut attr: ucp_context_attr = std::mem::zeroed();
     attr.field_mask = mask;
-    status_to_result(ucp_context_query(context, &mut attr)).map(|()| {
-        let name = if mask & UCP_CONTEXT_ATTR_FIELD_NAME != 0 {
-            CStr::from_ptr(attr.name.as_ptr())
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            String::new()
-        };
-        ContextAttr {
-            request_size: attr.request_size,
-            thread_mode: attr.thread_mode,
-            memory_types: attr.memory_types,
-            name,
-        }
+    status_to_result(ucp_context_query(context, &mut attr))?;
+    let name = if mask & UCP_CONTEXT_ATTR_FIELD_NAME != 0 {
+        CStr::from_ptr(attr.name.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        String::new()
+    };
+    let thread_mode =
+        ThreadMode::try_from(attr.thread_mode).map_err(|_| ucs_status_t::UCS_ERR_UNSUPPORTED)?;
+    Ok(ContextAttr {
+        request_size: attr.request_size,
+        thread_mode,
+        memory_types: attr.memory_types,
+        name,
     })
 }
 
