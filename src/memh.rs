@@ -87,7 +87,7 @@ impl MemHandle {
         let mut attr: ucp_mem_attr_t = unsafe { std::mem::zeroed() };
         let result = status_to_result(unsafe { ucp_mem_query(self.handle, &mut attr) });
         match result {
-            Ok(()) => Ok(MemAttr { handle: attr }),
+            Ok(()) => Ok(MemAttr::from_ffi(attr)),
             Err(e) => Err(e),
         }
     }
@@ -462,26 +462,37 @@ impl Drop for PackedRkeyBuffer {
 
 /// Attributes returned by `MemHandle::query()`.
 pub struct MemAttr {
-    handle: ucp_mem_attr_t,
+    address: *mut std::os::raw::c_void,
+    length: usize,
+    mem_type: ucs_memory_type_t,
 }
 
 impl MemAttr {
+    /// Construct a `MemAttr` from the raw FFI struct.
+    pub(crate) fn from_ffi(ffi: ucp_mem_attr_t) -> Self {
+        MemAttr {
+            address: ffi.address,
+            length: ffi.length,
+            mem_type: ffi.mem_type,
+        }
+    }
+
     /// Get the address of the mapped memory region.
     #[inline]
     pub fn address(&self) -> *mut std::os::raw::c_void {
-        self.handle.address
+        self.address
     }
 
     /// Get the length of the mapped memory region.
     #[inline]
     pub fn length(&self) -> usize {
-        self.handle.length
+        self.length
     }
 
     /// Get the memory type.
     #[inline]
     pub fn mem_type(&self) -> ucs_memory_type_t {
-        self.handle.mem_type
+        self.mem_type
     }
 }
 
