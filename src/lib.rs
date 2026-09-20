@@ -65,6 +65,27 @@ use std::ptr::NonNull;
 /// Dropping a live request calls `ucp_request_free`. After cancel/free, the
 /// internal handle is cleared so double-free cannot occur.
 ///
+/// # Request lifetime invariant (two-flag handshake)
+///
+/// A UCP request is reclaimed only when *both* of the following have happened,
+/// in either order (`src/ucp/core/ucp_request.{h,c,inl}`):
+///
+/// 1. UCX marks the operation **completed** (`UCP_REQUEST_FLAG_COMPLETED`), and
+/// 2. the user **releases** the request (`ucp_request_free`; the deprecated
+///    `ucp_request_release` is an alias), which sets
+///    `UCP_REQUEST_FLAG_RELEASED`.
+///
+/// Whichever happens first only sets its flag; the other side must still
+/// happen. Therefore releasing an in-flight request is *defined, supported*
+/// behavior — not undefined behavior. The operation keeps progressing after the
+/// release, so any buffers, `user_data`, and callback state it touches must
+/// stay valid until UCX actually completes it.
+///
+/// The corollary is that **released is not the same as completed**: once this
+/// wrapper has released its handle it can no longer observe completion, so
+/// completion queries such as [`Request::check_finished`] must not pretend the
+/// operation finished.
+///
 /// # Thread safety
 ///
 /// Not `Send`/`Sync`. Pair with a worker in the same thread (see
@@ -85,6 +106,9 @@ impl Drop for Request {
     fn drop(&mut self) {
         if let Some(h) = self.handle.take() {
             // SAFETY: handle came from UCX as a request pointer and has not been freed yet.
+            // Releasing an in-flight request is defined behavior: it only sets
+            // UCP_REQUEST_FLAG_RELEASED, and UCX reclaims the request once the
+            // operation also completes.
             unsafe { ucp_request_free(h.as_ptr()) };
         }
     }
@@ -127,11 +151,17 @@ impl Request {
     /// Check an outstanding request.
     ///
     /// Returns `Ok(true)` completed, `Ok(false)` in progress, `Err` on failure.
-    /// Returns `Ok(true)` if the request was already freed/cancelled.
+    ///
+    /// A released request (already freed or cancelled through this wrapper) is
+    /// **not** reported as completed. Releasing only sets
+    /// `UCP_REQUEST_FLAG_RELEASED`; the operation may still be in flight, and
+    /// the handle is gone, so completion can no longer be queried. In that case
+    /// this returns `Err(UCS_ERR_INVALID_PARAM)` rather than conflating
+    /// "released" with "completed".
     #[inline]
     pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
         let Some(h) = self.handle else {
-            return Ok(true);
+            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
         };
         let status = unsafe { ucp_request_check_status(h.as_ptr()) };
         let status_ptr = status as isize as usize as ucs_status_ptr_t;
@@ -183,9 +213,11 @@ impl Request {
     /// Release this request through UCX's deprecated `ucp_request_release`.
     ///
     /// This consumes the wrapper and releases the request memory regardless of
-    /// its current state. The operation is not cancelled: it continues to
-    /// progress internally, and its completion callback may still fire. This
-    /// differs from [`Request::free`] (and `Drop`), which uses
+    /// its current state. Releasing an in-flight request is defined behavior:
+    /// it sets `UCP_REQUEST_FLAG_RELEASED` and UCX reclaims the request once
+    /// the operation also completes. The operation is not cancelled: it
+    /// continues to progress internally, and its completion callback may still
+    /// fire. This differs from [`Request::free`] (and `Drop`), which uses
     /// `ucp_request_free` to release the request and disable further callback
     /// invocation.
     ///
@@ -204,7 +236,8 @@ impl Request {
 
     /// Cancel this request on `worker`, then free it (handle becomes inert).
     ///
-    /// After cancel, further `check_finished` returns `Ok(true)`.
+    /// After cancel, the request has been released but completion can no longer
+    /// be observed, so `check_finished` reports `UCS_ERR_INVALID_PARAM`.
     pub fn cancel(&mut self, worker: &worker::Worker) {
         if let Some(h) = self.handle.take() {
             // SAFETY: worker and request handles are valid UCX objects.
@@ -216,6 +249,10 @@ impl Request {
     }
 
     /// Explicit free without drop glue (handle becomes inert). Prefer Drop normally.
+    ///
+    /// Freeing an in-flight request is defined behavior: it sets
+    /// `UCP_REQUEST_FLAG_RELEASED` and UCX reclaims the request once the
+    /// operation also completes.
     pub fn free(mut self) {
         let _ = self
             .handle
@@ -408,9 +445,15 @@ mod status_tests {
     }
 
     #[test]
-    fn request_check_finished_on_freed_handle_is_complete() {
+    fn request_check_finished_on_released_handle_is_not_complete() {
+        // Releasing a request only sets UCP_REQUEST_FLAG_RELEASED; the
+        // operation may still be in flight, so "released" must never be
+        // reported as "completed".
         let request = Request { handle: None };
-        assert_eq!(request.check_finished(), Ok(true));
+        assert_eq!(
+            request.check_finished(),
+            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        );
     }
 
     #[test]
