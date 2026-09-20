@@ -76,39 +76,48 @@ impl Ep {
 
 pub struct MessageHandle {
     pub(crate) handle: ucp_tag_message_h,
-    pub(crate) info: ucp_tag_recv_info_t,
+    pub(crate) info: TagInfo,
     removed: bool,
 }
 
 impl MessageHandle {
     pub fn len(&self) -> usize {
-        self.info.length
+        self.info.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.info.length == 0
+        self.info.is_empty()
     }
 
     pub fn sender_tag(&self) -> u64 {
-        self.info.sender_tag
+        self.info.sender_tag()
     }
 }
 
 pub struct TagInfo {
-    pub(crate) handle: ucp_tag_recv_info_t,
+    length: usize,
+    sender_tag: u64,
 }
 
 impl TagInfo {
+    /// Construct a `TagInfo` from the raw FFI struct.
+    pub(crate) fn from_ffi(ffi: ucp_tag_recv_info_t) -> Self {
+        TagInfo {
+            length: ffi.length,
+            sender_tag: ffi.sender_tag,
+        }
+    }
+
     pub fn len(&self) -> usize {
-        self.handle.length
+        self.length
     }
 
     pub fn is_empty(&self) -> bool {
-        self.handle.length == 0
+        self.length == 0
     }
 
     pub fn sender_tag(&self) -> u64 {
-        self.handle.sender_tag
+        self.sender_tag
     }
 }
 
@@ -166,7 +175,7 @@ impl Worker {
         if !handle.is_null() {
             Some(MessageHandle {
                 handle,
-                info: unsafe { info.assume_init() },
+                info: TagInfo::from_ffi(unsafe { info.assume_init() }),
                 removed: remove,
             })
         } else {
@@ -200,10 +209,7 @@ fn map_tag_recv_test_status(
     info: std::mem::MaybeUninit<ucp_tag_recv_info_t>,
 ) -> Result<Option<TagInfo>, ucs_status_t> {
     match status {
-        ucs_status_t::UCS_OK => Ok(Some(TagInfo {
-            // UCX initializes `info` only for a completed request.
-            handle: unsafe { info.assume_init() },
-        })),
+        ucs_status_t::UCS_OK => Ok(Some(TagInfo::from_ffi(unsafe { info.assume_init() }))),
         ucs_status_t::UCS_INPROGRESS => Ok(None),
         _ => Err(status),
     }
