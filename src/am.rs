@@ -213,6 +213,18 @@ pub struct HandlerParams {
     pub(crate) handle: ucp_am_handler_param_t,
 }
 
+impl From<HandlerParams> for ucp_am_handler_param_t {
+    fn from(val: HandlerParams) -> Self {
+        val.handle
+    }
+}
+
+impl From<ucp_am_handler_param_t> for HandlerParams {
+    fn from(handle: ucp_am_handler_param_t) -> Self {
+        HandlerParams { handle }
+    }
+}
+
 /// Receive active message data.
 ///
 /// # Safety
