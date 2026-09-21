@@ -1,5 +1,6 @@
 //! UCP listeners and incoming connection requests.
 
+use crate::ep::SockAddrStorage;
 use crate::ffi::*;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -258,7 +259,7 @@ impl Listener {
         // SAFETY: self.handle is live and attr is a valid writable UCX struct.
         status_to_result(unsafe { ucp_listener_query(self.as_raw(), &mut attr) }).map(|()| {
             ListenerAttr {
-                sockaddr: attr.sockaddr,
+                sockaddr: SockAddrStorage(attr.sockaddr),
                 socket_addr: from_storage(&attr.sockaddr),
             }
         })
@@ -283,7 +284,7 @@ impl Drop for Listener {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ListenerAttr {
-    pub sockaddr: sockaddr_storage,
+    pub sockaddr: SockAddrStorage,
     pub socket_addr: Option<SocketAddr>,
 }
 
