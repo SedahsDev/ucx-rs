@@ -14,7 +14,7 @@ use crate::RequestParam;
 
 /// Re-export the remote key handle type for external callers.
 #[allow(non_camel_case_types)]
-pub type ucp_rkey_h = crate::ffi::ucp_rkey_h;
+pub(crate) type ucp_rkey_h = crate::ffi::ucp_rkey_h;
 
 use crate::ep::Ep;
 use std::marker::PhantomData;
@@ -191,9 +191,9 @@ impl RemoteKey {
         Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
     }
 
-    /// Get the raw rkey handle.
+    /// Get the raw rkey handle (internal).
     #[inline]
-    pub fn as_raw(&self) -> ucp_rkey_h {
+    pub(crate) fn as_raw(&self) -> ucp_rkey_h {
         self.handle
     }
 
