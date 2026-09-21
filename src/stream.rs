@@ -26,8 +26,8 @@ pub struct StreamPollEvent {
 }
 
 impl StreamPollEvent {
-    /// Return the borrowed UCX endpoint handle reported by the poll.
-    pub fn ep_handle(&self) -> ucp_ep_h {
+    /// Return the borrowed UCX endpoint handle reported by the poll (internal).
+    pub(crate) fn ep_handle(&self) -> ucp_ep_h {
         self.ep
     }
 

@@ -29,8 +29,8 @@ pub struct Ep {
 }
 
 impl Ep {
-    /// Expose the raw UCP endpoint handle for FFI callers.
-    pub fn handle(&self) -> ucp_ep_h {
+    /// Expose the raw UCP endpoint handle for internal callers.
+    pub(crate) fn handle(&self) -> ucp_ep_h {
         self.handle
     }
 
