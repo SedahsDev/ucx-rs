@@ -19,3 +19,23 @@ pub struct EpAttr {
     pub transports: Option<ucp_transports_t>,
     pub user_data: Option<*mut std::os::raw::c_void>,
 }
+
+/// This is the native wrapper used in place of the raw C `sockaddr_storage`
+/// type in public APIs.
+#[derive(Clone, Copy)]
+pub struct SockAddrStorage(pub(crate) sockaddr_storage);
+
+impl std::fmt::Debug for SockAddrStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SockAddrStorage")
+            .field("family", &self.0.ss_family)
+            .finish()
+    }
+}
+
+impl From<sockaddr_storage> for SockAddrStorage {
+    fn from(value: sockaddr_storage) -> Self {
+        SockAddrStorage(value)
+    }
+}
+

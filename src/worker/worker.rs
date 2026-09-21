@@ -543,3 +543,12 @@ bitflags! {
         const MAX_INFO_STRING = 1 << 5;
     }
 }
+
+pub struct CpuSet(pub(crate) ucs_cpu_set_t);
+
+impl std::fmt::Debug for CpuSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("CpuSet").finish_non_exhaustive()
+    }
+}
+

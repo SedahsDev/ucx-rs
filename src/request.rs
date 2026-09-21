@@ -515,3 +515,36 @@ mod tests {
         assert_eq!(send_buffer[0], recv_buffer[0]);
     }
 }
+
+pub struct RequestAttrFields(u64);
+
+#[allow(non_upper_case_globals)]
+impl RequestAttrFields {
+    /// Fill the informational string describing the request.
+    pub const InfoString: RequestAttrFields = RequestAttrFields(1);
+    /// Size of the informational string buffer.
+    pub const InfoStringSize: RequestAttrFields = RequestAttrFields(2);
+    /// Current status of the request.
+    pub const Status: RequestAttrFields = RequestAttrFields(4);
+    /// Memory type of the request's buffer.
+    pub const MemType: RequestAttrFields = RequestAttrFields(8);
+
+    /// An empty mask: query no attribute.
+    #[inline]
+    pub const fn empty() -> RequestAttrFields {
+        RequestAttrFields(0)
+    }
+
+    /// The raw field-mask bits handed to UCX.
+    #[inline]
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    /// True if every bit of `other` is set in `self`.
+    #[inline]
+    pub const fn contains(self, other: RequestAttrFields) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
