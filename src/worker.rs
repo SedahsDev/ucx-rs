@@ -612,7 +612,8 @@ impl Drop for WorkerAddress<'_> {
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct UcpWorkerFlags: u64 {
-        const IgnoreRequestLeak = ucp_worker_flags_t::UCP_WORKER_FLAG_IGNORE_REQUEST_LEAK as u64;
+        /// Corresponds to `UCP_WORKER_FLAG_IGNORE_REQUEST_LEAK`.
+        const IgnoreRequestLeak = 1 << 0;
     }
 }
 

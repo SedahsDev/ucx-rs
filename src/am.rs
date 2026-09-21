@@ -135,11 +135,20 @@ impl Ep {
     }
 }
 
+const AM_CB_FLAG_WHOLE_MSG: u32 = ucp_am_cb_flags::UCP_AM_FLAG_WHOLE_MSG as u32;
+const AM_CB_FLAG_PERSISTENT_DATA: u32 = ucp_am_cb_flags::UCP_AM_FLAG_PERSISTENT_DATA as u32;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct CbFlags: u32 {
-        const WholeMsg = ucp_am_cb_flags::UCP_AM_FLAG_WHOLE_MSG as u32;
-    const PersistentData = ucp_am_cb_flags::UCP_AM_FLAG_PERSISTENT_DATA as u32;
+        const WholeMsg = AM_CB_FLAG_WHOLE_MSG;
+        const PersistentData = AM_CB_FLAG_PERSISTENT_DATA;
+    }
+}
+
+impl From<ucp_am_cb_flags> for CbFlags {
+    fn from(flag: ucp_am_cb_flags) -> Self {
+        CbFlags::from_bits_truncate(flag as u32)
     }
 }
 

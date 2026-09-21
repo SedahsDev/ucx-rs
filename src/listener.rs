@@ -72,13 +72,19 @@ unsafe extern "C" fn conn_trampoline(conn_request: ucp_conn_request_h, arg: *mut
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(request)));
 }
 
+const FIELD_SOCK_ADDR: u64 = ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR as u64;
+const FIELD_ACCEPT_HANDLER: u64 =
+    ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER as u64;
+const FIELD_CONN_HANDLER: u64 =
+    ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_CONN_HANDLER as u64;
+
 bitflags! {
     /// Fields accepted by [`ParamsBuilder`].
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ListenerParamFields: u64 {
-        const SOCK_ADDR = ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR as u64;
-        const ACCEPT_HANDLER = ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER as u64;
-        const CONN_HANDLER = ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_CONN_HANDLER as u64;
+        const SOCK_ADDR = FIELD_SOCK_ADDR;
+        const ACCEPT_HANDLER = FIELD_ACCEPT_HANDLER;
+        const CONN_HANDLER = FIELD_CONN_HANDLER;
     }
 }
 
@@ -287,12 +293,17 @@ pub struct ListenerAttr {
     pub socket_addr: Option<SocketAddr>,
 }
 
+const FIELD_CLIENT_ADDR: u64 =
+    ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR as u64;
+const FIELD_CLIENT_ID: u64 =
+    ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID as u64;
+
 bitflags! {
     /// Fields that may be requested from a connection request.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ConnRequestFields: u64 {
-        const CLIENT_ADDR = ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR as u64;
-        const CLIENT_ID = ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID as u64;
+        const CLIENT_ADDR = FIELD_CLIENT_ADDR;
+        const CLIENT_ID = FIELD_CLIENT_ID;
     }
 }
 

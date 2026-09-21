@@ -31,17 +31,28 @@ impl std::error::Error for ConfigError {}
 type RequestInitCb = unsafe extern "C" fn(request: *mut ::std::os::raw::c_void);
 type RequestCleanUpCb = unsafe extern "C" fn(request: *mut ::std::os::raw::c_void);
 
+// Raw feature bits stay private so the bindgen `ucp_feature` enum is not part of
+// the public API surface.
+const FEATURE_TAG: u64 = ucp_feature::UCP_FEATURE_TAG as u64;
+const FEATURE_RMA: u64 = ucp_feature::UCP_FEATURE_RMA as u64;
+const FEATURE_AMO32: u64 = ucp_feature::UCP_FEATURE_AMO32 as u64;
+const FEATURE_AMO64: u64 = ucp_feature::UCP_FEATURE_AMO64 as u64;
+const FEATURE_WAKEUP: u64 = ucp_feature::UCP_FEATURE_WAKEUP as u64;
+const FEATURE_STREAM: u64 = ucp_feature::UCP_FEATURE_STREAM as u64;
+const FEATURE_AM: u64 = ucp_feature::UCP_FEATURE_AM as u64;
+const FEATURE_EXPORTED_MEMH: u64 = ucp_feature::UCP_FEATURE_EXPORTED_MEMH as u64;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct Flags: u64 {
-        const Tag = ucp_feature::UCP_FEATURE_TAG as u64;
-        const Rma = ucp_feature::UCP_FEATURE_RMA as u64;
-        const Amo32 = ucp_feature::UCP_FEATURE_AMO32 as u64;
-        const Amo64 = ucp_feature::UCP_FEATURE_AMO64 as u64;
-        const Wakeup = ucp_feature::UCP_FEATURE_WAKEUP as u64;
-        const Stream = ucp_feature::UCP_FEATURE_STREAM as u64;
-        const Am = ucp_feature::UCP_FEATURE_AM as u64;
-        const ExportedMemH = ucp_feature::UCP_FEATURE_EXPORTED_MEMH as u64;
+        const Tag = FEATURE_TAG;
+        const Rma = FEATURE_RMA;
+        const Amo32 = FEATURE_AMO32;
+        const Amo64 = FEATURE_AMO64;
+        const Wakeup = FEATURE_WAKEUP;
+        const Stream = FEATURE_STREAM;
+        const Am = FEATURE_AM;
+        const ExportedMemH = FEATURE_EXPORTED_MEMH;
     }
 }
 
