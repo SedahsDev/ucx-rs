@@ -597,24 +597,88 @@ pub unsafe fn request_alloc(worker: ucp_worker_h) -> Request {
     Request::from_raw(ptr)
 }
 
+/// Native field mask selecting which request attributes [`request_query`] fills.
+///
+/// This is the owned Rust representation of UCX's request attribute field
+/// mask, so callers never have to name a raw binding type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RequestAttrFields(u64);
+
+#[allow(non_upper_case_globals)]
+impl RequestAttrFields {
+    /// Fill the informational string describing the request.
+    pub const InfoString: RequestAttrFields = RequestAttrFields(1);
+    /// Size of the informational string buffer.
+    pub const InfoStringSize: RequestAttrFields = RequestAttrFields(2);
+    /// Current status of the request.
+    pub const Status: RequestAttrFields = RequestAttrFields(4);
+    /// Memory type of the request's buffer.
+    pub const MemType: RequestAttrFields = RequestAttrFields(8);
+
+    /// An empty mask: query no attribute.
+    #[inline]
+    pub const fn empty() -> RequestAttrFields {
+        RequestAttrFields(0)
+    }
+
+    /// The raw field-mask bits handed to UCX.
+    #[inline]
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    /// True if every bit of `other` is set in `self`.
+    #[inline]
+    pub const fn contains(self, other: RequestAttrFields) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
+impl From<u64> for RequestAttrFields {
+    #[inline]
+    fn from(bits: u64) -> RequestAttrFields {
+        RequestAttrFields(bits)
+    }
+}
+
+impl From<RequestAttrFields> for u64 {
+    #[inline]
+    fn from(fields: RequestAttrFields) -> u64 {
+        fields.0
+    }
+}
+
+impl std::ops::BitOr for RequestAttrFields {
+    type Output = RequestAttrFields;
+
+    #[inline]
+    fn bitor(self, rhs: RequestAttrFields) -> RequestAttrFields {
+        RequestAttrFields(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for RequestAttrFields {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: RequestAttrFields) {
+        self.0 |= rhs.0;
+    }
+}
+
 /// Query request attributes.
 ///
-/// Field masks for ucp_request_attr_t:
-/// - UCP_REQUEST_ATTR_FIELD_INFO_STRING = 1
-/// - UCP_REQUEST_ATTR_FIELD_INFO_STRING_SIZE = 2
-/// - UCP_REQUEST_ATTR_FIELD_STATUS = 4
-/// - UCP_REQUEST_ATTR_FIELD_MEM_TYPE = 8
+/// `mask` selects the attributes UCX should fill, for example
+/// [`RequestAttrFields::Status`] combined with `|`.
 ///
 /// # Safety
 /// Caller must ensure `request` is a valid request pointer.
 pub unsafe fn request_query(
     request: *mut std::os::raw::c_void,
-    mask: u64,
+    mask: RequestAttrFields,
 ) -> Result<RequestAttr, ucs_status_t> {
     let mut attr: ucp_request_attr_t = std::mem::zeroed();
-    attr.field_mask = mask;
+    attr.field_mask = mask.bits();
     status_to_result(ucp_request_query(request, &mut attr)).map(|()| RequestAttr {
-        status: if mask & 4 != 0 {
+        status: if mask.contains(RequestAttrFields::Status) {
             attr.status
         } else {
             ucs_status_t::UCS_OK

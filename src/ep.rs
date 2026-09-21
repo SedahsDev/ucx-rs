@@ -272,6 +272,22 @@ mod tests {
     }
 
     #[test]
+    fn params_flags_match_ucx_values() {
+        assert_eq!(
+            ParamsFlags::ClientServer.bits(),
+            ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER as u64
+        );
+        assert_eq!(
+            ParamsFlags::NoLoopback.bits(),
+            ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_NO_LOOPBACK as u64
+        );
+        assert_eq!(
+            ParamsFlags::SendClientId.bits(),
+            ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_SEND_CLIENT_ID as u64
+        );
+    }
+
+    #[test]
     fn close_self_endpoint_immediately_or_with_request() {
         let context_params = crate::context::ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
@@ -437,12 +453,18 @@ impl Drop for Ep {
     }
 }
 
+/// Raw UCX endpoint parameter flag values, kept private so the bindgen enum
+/// does not appear in the public API.
+const PARAMS_FLAG_CLIENT_SERVER: u64 = 1 << 0;
+const PARAMS_FLAG_NO_LOOPBACK: u64 = 1 << 1;
+const PARAMS_FLAG_SEND_CLIENT_ID: u64 = 1 << 2;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct ParamsFlags: u64 {
-        const ClientServer = ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER as u64;
-        const NoLoopback = ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_NO_LOOPBACK as u64;
-        const SendClientId = ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_SEND_CLIENT_ID as u64;
+        const ClientServer = PARAMS_FLAG_CLIENT_SERVER;
+        const NoLoopback = PARAMS_FLAG_NO_LOOPBACK;
+        const SendClientId = PARAMS_FLAG_SEND_CLIENT_ID;
     }
 }
 
