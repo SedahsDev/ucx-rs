@@ -160,10 +160,10 @@ impl Ep {
                 name,
                 local_sockaddr: mask
                     .contains(EpAttrFields::LOCAL_SOCKADDR)
-                    .then_some(attr.local_sockaddr),
+                    .then_some(SockAddrStorage::from(attr.local_sockaddr)),
                 remote_sockaddr: mask
                     .contains(EpAttrFields::REMOTE_SOCKADDR)
-                    .then_some(attr.remote_sockaddr),
+                    .then_some(SockAddrStorage::from(attr.remote_sockaddr)),
                 transports: mask
                     .contains(EpAttrFields::TRANSPORTS)
                     .then_some(attr.transports),
@@ -325,10 +325,37 @@ bitflags! {
     }
 }
 
+/// Owned copy of a platform socket address storage value.
+///
+/// This is the native wrapper used in place of the raw C `sockaddr_storage`
+/// type in public APIs.
+#[derive(Clone, Copy)]
+pub struct SockAddrStorage(pub(crate) sockaddr_storage);
+
+impl std::fmt::Debug for SockAddrStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SockAddrStorage")
+            .field("family", &self.0.ss_family)
+            .finish()
+    }
+}
+
+impl From<sockaddr_storage> for SockAddrStorage {
+    fn from(value: sockaddr_storage) -> Self {
+        SockAddrStorage(value)
+    }
+}
+
+impl From<SockAddrStorage> for sockaddr_storage {
+    fn from(value: SockAddrStorage) -> Self {
+        value.0
+    }
+}
+
 pub struct EpAttr {
     pub name: String,
-    pub local_sockaddr: Option<sockaddr_storage>,
-    pub remote_sockaddr: Option<sockaddr_storage>,
+    pub local_sockaddr: Option<SockAddrStorage>,
+    pub remote_sockaddr: Option<SockAddrStorage>,
     pub transports: Option<ucp_transports_t>,
     pub user_data: Option<*mut std::os::raw::c_void>,
 }

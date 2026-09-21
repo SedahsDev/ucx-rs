@@ -57,6 +57,10 @@ pub mod tag;
 pub mod version;
 pub mod worker;
 
+// Native socket-address wrapper used by endpoint and listener attributes, so
+// callers never have to name the raw bindgen `sockaddr_storage` type.
+pub use crate::ep::SockAddrStorage;
+
 use std::ffi::CString;
 use std::ptr::NonNull;
 

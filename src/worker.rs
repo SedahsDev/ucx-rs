@@ -630,6 +630,28 @@ pub unsafe fn worker_set_am_recv_handler_nbx(
     status_to_result(ucp_worker_set_am_recv_handler(worker, param))
 }
 
+/// Owned CPU affinity mask used when creating a worker.
+#[derive(Clone, Copy)]
+pub struct CpuSet(pub(crate) ucs_cpu_set_t);
+
+impl std::fmt::Debug for CpuSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("CpuSet").finish_non_exhaustive()
+    }
+}
+
+impl From<ucs_cpu_set_t> for CpuSet {
+    fn from(cpu_set: ucs_cpu_set_t) -> Self {
+        CpuSet(cpu_set)
+    }
+}
+
+impl From<CpuSet> for ucs_cpu_set_t {
+    fn from(cpu_set: CpuSet) -> Self {
+        cpu_set.0
+    }
+}
+
 impl ParamsBuilder {
     pub fn new() -> ParamsBuilder {
         // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
@@ -648,10 +670,10 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn cpu_set(&mut self, cpu_set: ucs_cpu_set_t) -> &mut ParamsBuilder {
+    pub fn cpu_set(&mut self, cpu_set: CpuSet) -> &mut ParamsBuilder {
         self.field_mask |= ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_CPU_MASK as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.cpu_mask = cpu_set;
+        params.cpu_mask = cpu_set.0;
         self
     }
 
