@@ -16,6 +16,16 @@ pub use modify::*;
 pub use perf::*;
 pub use params::*;
 
+
+/// Native alias for the endpoint error-handler callback.
+/// Mirrors the C signature; the raw handle/status params are unavoidable for a
+/// C callback invoked by UCX. Consumers name `ErrHandlerCb`, not `ucp_err_handler_cb_t`.
+pub type ErrHandlerCb = Option<unsafe extern "C" fn(
+    arg: *mut std::os::raw::c_void,
+    ep: ucp_ep_h,
+    status: ucs_status_t,
+)>;
+
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;

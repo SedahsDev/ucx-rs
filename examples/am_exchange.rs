@@ -16,7 +16,7 @@ unsafe extern "C" fn receive(
     header_length: usize,
     _data: *mut c_void,
     _length: usize,
-    _param: *const ucx_sys::ucp_am_recv_param_t,
+    _param: *const ucx_sys::am::ucp_am_recv_param_t,
 ) -> ucx_sys::am::ucs_status_t {
     if arg.is_null() || header.is_null() || header_length == 0 {
         return ucx_sys::am::ucs_status_t::UCS_ERR_INVALID_PARAM;

@@ -84,7 +84,7 @@ impl ParamsBuilder {
     }
 
     /// Configure the endpoint error callback. Its state may be supplied with `user_data`.
-    pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut ParamsBuilder {
+    pub fn err_handler(&mut self, cb: crate::ep::ErrHandlerCb) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
         // SAFETY: uninit_handle is initialized by ParamsBuilder::new and this
         // field is written before build exposes the struct.

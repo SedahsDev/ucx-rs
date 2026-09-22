@@ -1,6 +1,21 @@
 //! UCP listeners and incoming connection requests.
 
 use crate::ep::SockAddrStorage;
+
+/// Native alias for the listener accept callback.
+/// Mirrors the C signature (raw ep handle is unavoidable for a C callback).
+pub type AcceptHandlerCb = Option<unsafe extern "C" fn(
+    ep: ucp_ep_h,
+    arg: *mut std::os::raw::c_void,
+)>;
+
+/// Native alias for the listener connection-request callback.
+/// Mirrors the C signature (raw conn-request handle is unavoidable for a C callback).
+pub type ConnHandlerCb = Option<unsafe extern "C" fn(
+    conn_request: ucp_conn_request_h,
+    arg: *mut std::os::raw::c_void,
+)>;
+
 use crate::ffi::*;
 use crate::status_to_result;
 use crate::Status;
@@ -125,7 +140,7 @@ impl ParamsBuilder {
     /// lifetime and for every invocation by UCX.
     pub unsafe fn accept_handler(
         mut self,
-        callback: ucp_listener_accept_callback_t,
+        callback: AcceptHandlerCb,
         arg: *mut std::ffi::c_void,
     ) -> Self {
         self.params.field_mask |= UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER;
@@ -141,7 +156,7 @@ impl ParamsBuilder {
     /// lifetime and for every invocation by UCX.
     pub unsafe fn conn_handler(
         mut self,
-        callback: ucp_listener_conn_callback_t,
+        callback: ConnHandlerCb,
         arg: *mut std::ffi::c_void,
     ) -> Self {
         self.params.field_mask |= UCP_LISTENER_PARAM_FIELD_CONN_HANDLER;

@@ -21,7 +21,7 @@ impl ModifyParamsBuilder {
     }
 
     /// Set the endpoint error callback.
-    pub fn err_handler(&mut self, cb: ucp_err_handler_cb_t) -> &mut Self {
+    pub fn err_handler(&mut self, cb: crate::ep::ErrHandlerCb) -> &mut Self {
         self.handle.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
         self.handle.err_handler.cb = cb;
         self
