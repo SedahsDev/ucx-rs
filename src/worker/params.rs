@@ -42,10 +42,10 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn cpu_set(&mut self, cpu_set: ucs_cpu_set_t) -> &mut ParamsBuilder {
+    pub fn cpu_set(&mut self, cpu_set: &crate::worker::CpuSet) -> &mut ParamsBuilder {
         self.field_mask |= ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_CPU_MASK as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.cpu_mask = cpu_set;
+        params.cpu_mask = cpu_set.0;
         self
     }
 

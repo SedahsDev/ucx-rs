@@ -49,11 +49,11 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn sockaddr(&mut self, addr: &ucs_sock_addr_t) -> &mut ParamsBuilder {
+    pub fn sockaddr(&mut self, addr: &crate::ep::SockAddr) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR as u64;
         // SAFETY: builder storage is initialized and the sockaddr is copied.
         unsafe {
-            (*self.uninit_handle.as_mut_ptr()).sockaddr = *addr;
+            (*self.uninit_handle.as_mut_ptr()).sockaddr = addr.to_ffi();
         }
         self
     }

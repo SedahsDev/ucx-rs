@@ -183,13 +183,13 @@ impl Ep {
                 name,
                 local_sockaddr: mask
                     .contains(EpAttrFields::LOCAL_SOCKADDR)
-                    .then_some(attr.local_sockaddr),
+                    .then_some(SockAddrStorage::from(attr.local_sockaddr)),
                 remote_sockaddr: mask
                     .contains(EpAttrFields::REMOTE_SOCKADDR)
-                    .then_some(attr.remote_sockaddr),
+                    .then_some(SockAddrStorage::from(attr.remote_sockaddr)),
                 transports: mask
                     .contains(EpAttrFields::TRANSPORTS)
-                    .then_some(attr.transports),
+                    .then_some(Transports::from(attr.transports)),
                 user_data: mask
                     .contains(EpAttrFields::USER_DATA)
                     .then_some(attr.user_data),
