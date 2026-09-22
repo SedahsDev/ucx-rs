@@ -6,6 +6,7 @@
 use crate::context::Context;
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::os::fd::RawFd;
@@ -54,7 +55,7 @@ impl MemHandle {
         context: &Context,
         mem: &'a mut [u8],
         flags: u64,
-    ) -> Result<MemHandleGuard<'a>, ucs_status_t> {
+    ) -> Result<MemHandleGuard<'a>, Status> {
         let flags = u32::try_from(flags).map_err(|_| ucs_status_t::UCS_ERR_INVALID_PARAM)?;
         let mut params = MemMapParamsBuilder::new();
         params.address_slice(mem).flags(flags);
@@ -68,7 +69,7 @@ impl MemHandle {
     pub fn map(
         context: &Context,
         params: &mut MemMapParamsBuilder,
-    ) -> Result<MemHandle, ucs_status_t> {
+    ) -> Result<MemHandle, Status> {
         let built = params.build();
         let mut memh: ucp_mem_h = std::ptr::null_mut();
         let result =
@@ -83,7 +84,7 @@ impl MemHandle {
     }
 
     /// Query attributes of this memory handle.
-    pub fn query(&self) -> Result<MemAttr, ucs_status_t> {
+    pub fn query(&self) -> Result<MemAttr, Status> {
         let mut attr: ucp_mem_attr_t = unsafe { std::mem::zeroed() };
         let result = status_to_result(unsafe { ucp_mem_query(self.handle, &mut attr) });
         match result {
@@ -93,7 +94,7 @@ impl MemHandle {
     }
 
     /// Give advice about how the application will access the memory region.
-    pub fn advise(&self, params: &mut MemAdviseParamsBuilder) -> Result<(), ucs_status_t> {
+    pub fn advise(&self, params: &mut MemAdviseParamsBuilder) -> Result<(), Status> {
         let mut built = params.build();
         status_to_result(unsafe { ucp_mem_advise(self.context, self.handle, &mut built.handle) })
     }
@@ -316,7 +317,7 @@ pub struct MemhPackParams {
 pub fn pack_memh(
     memh: &MemHandle,
     params: &mut MemhPackParamsBuilder,
-) -> Result<PackedMemhBuffer, ucs_status_t> {
+) -> Result<PackedMemhBuffer, Status> {
     let built = params.build();
     let mut buffer: *mut std::os::raw::c_void = std::ptr::null_mut();
     let mut length: usize = 0;
@@ -381,7 +382,7 @@ impl Drop for PackedMemhBuffer {
 /// This works on all memory domains (including `self`, `sysv`, `posix`) unlike
 /// `ucp_memh_pack` which requires the memory domain to support `pack_rkey`.
 /// The returned buffer is automatically released when dropped.
-pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedRkeyBuffer, ucs_status_t> {
+pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedRkeyBuffer, Status> {
     let mut buffer: *mut std::os::raw::c_void = std::ptr::null_mut();
     let mut size: usize = 0;
     let result = status_to_result(unsafe {
@@ -414,7 +415,7 @@ impl PackedRkeyBuffer {
     fn from_raw_parts(
         buffer: *mut std::os::raw::c_void,
         size: usize,
-    ) -> Result<Self, ucs_status_t> {
+    ) -> Result<Self, Status> {
         let payload = unsafe { std::slice::from_raw_parts(buffer as *const u8, size) };
         let payload_len = u32::try_from(size).map_err(|_| ucs_status_t::UCS_ERR_OUT_OF_RANGE)?;
         let mut framed = Vec::with_capacity(4 + size);
@@ -513,7 +514,7 @@ mod tests {
 
     #[test]
     fn map_slice_signature_keeps_guard_borrowed() {
-        let _: for<'a> fn(&Context, &'a mut [u8], u64) -> Result<MemHandleGuard<'a>, ucs_status_t> =
+        let _: for<'a> fn(&Context, &'a mut [u8], u64) -> Result<MemHandleGuard<'a>, Status> =
             MemHandle::map_slice;
     }
 }

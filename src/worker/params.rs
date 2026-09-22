@@ -1,6 +1,7 @@
 use crate::ffi::*;
 use bitflags::bitflags;
 use crate::status_to_result;
+use crate::Status;
 use std::ffi::CString;
 
 bitflags! {
@@ -19,7 +20,7 @@ bitflags! {
 pub unsafe fn worker_set_am_recv_handler_nbx(
     worker: ucp_worker_h,
     param: &ucp_am_handler_param_t,
-) -> Result<(), ucs_status_t> {
+) -> Result<(), Status> {
     status_to_result(ucp_worker_set_am_recv_handler(worker, param))
 }
 

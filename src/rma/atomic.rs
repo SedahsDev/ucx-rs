@@ -3,6 +3,7 @@ use crate::ffi::*;
 use crate::RequestParam;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ pub unsafe fn put_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_put_nbx(
         ep.handle,
         buffer,
@@ -44,7 +45,7 @@ pub unsafe fn get_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_get_nbx(
         ep.handle,
         buffer,
@@ -69,7 +70,7 @@ pub unsafe fn atomic_op_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
         opcode,
@@ -113,7 +114,7 @@ pub unsafe fn atomic_fetch_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
         opcode,
@@ -135,7 +136,7 @@ pub unsafe fn atomic_fetch_nbx(
 pub unsafe fn ep_rkey_unpack(
     ep: &Ep,
     rkey_buffer: *const std::os::raw::c_void,
-) -> Result<RemoteKey, ucs_status_t> {
+) -> Result<RemoteKey, Status> {
     let mut rkey: ucp_rkey_h = std::ptr::null_mut();
     status_to_result(ucp_ep_rkey_unpack(ep.handle, rkey_buffer, &mut rkey)).map(|()| RemoteKey {
         handle: rkey,
@@ -157,9 +158,9 @@ pub unsafe fn ep_rkey_unpack(
 pub unsafe fn rkey_ptr(
     rkey: &RemoteKey,
     raddr: u64,
-) -> Result<*mut std::os::raw::c_void, ucs_status_t> {
+) -> Result<*mut std::os::raw::c_void, Status> {
     if rkey.handle.is_null() {
-        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
     }
     let mut addr: *mut std::os::raw::c_void = std::ptr::null_mut();
     status_to_result(ucp_rkey_ptr(rkey.handle, raddr, &mut addr)).map(|()| addr)
@@ -192,7 +193,7 @@ pub unsafe fn atomic_fadd32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -218,7 +219,7 @@ pub unsafe fn atomic_fadd64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -244,7 +245,7 @@ pub unsafe fn atomic_fswap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -270,7 +271,7 @@ pub unsafe fn atomic_fswap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -298,7 +299,7 @@ pub unsafe fn atomic_fcswap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
@@ -327,7 +328,7 @@ pub unsafe fn atomic_fcswap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
@@ -352,7 +353,7 @@ pub unsafe fn atomic_add32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -376,7 +377,7 @@ pub unsafe fn atomic_add64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -400,7 +401,7 @@ pub unsafe fn atomic_swap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -424,7 +425,7 @@ pub unsafe fn atomic_swap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -450,7 +451,7 @@ pub unsafe fn atomic_fxor32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -476,7 +477,7 @@ pub unsafe fn atomic_fxor64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -500,7 +501,7 @@ pub unsafe fn atomic_xor32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -524,7 +525,7 @@ pub unsafe fn atomic_xor64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -558,13 +559,13 @@ mod tests {
         let payload = [0x12, 0x34, 0xab, 0xcd];
         let framed = frame_rkey_payload(&payload).unwrap();
         assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
-        let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, ucs_status_t> = RemoteKey::unpack;
+        let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, Status> = RemoteKey::unpack;
         let _ = unpack;
     }
 
     #[test]
     fn remote_key_compare_api_signature() {
-        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey, &'a Worker) -> Result<bool, ucs_status_t> =
+        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey, &'a Worker) -> Result<bool, Status> =
             RemoteKey::compare;
     }
 
@@ -589,7 +590,7 @@ mod tests {
 
         assert_eq!(
             first.compare(&second, &worker),
-            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
         );
         std::mem::forget(worker);
     }
@@ -604,7 +605,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> = Ep::amo_fadd64;
+        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fadd64;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -612,7 +613,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> = Ep::amo_fxor64;
+        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fxor64;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -620,7 +621,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> = Ep::amo_fswap64;
+        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fswap64;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -629,7 +630,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, ucs_status_t> = Ep::amo_fcswap64;
+        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fcswap64;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -637,7 +638,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> = Ep::amo_fadd32;
+        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fadd32;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -645,7 +646,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> = Ep::amo_fxor32;
+        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fxor32;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -653,7 +654,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> = Ep::amo_fswap32;
+        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fswap32;
         let _: for<'w, 'a> fn(
             &Ep,
             &'w Worker,
@@ -662,7 +663,7 @@ mod tests {
             u64,
             &RemoteKey,
             &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, ucs_status_t> = Ep::amo_fcswap32;
+        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fcswap32;
     }
 
     /// Test with invalid rkey — this segfaults on some UCX versions instead of
@@ -691,7 +692,7 @@ mod tests {
     /// Structural test: verify rkey_ptr function exists in FFI.
     #[test]
     fn test_rkey_ptr_signature() {
-        let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], ucs_status_t> =
+        let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], Status> =
             RemoteKey::rkey_ptr;
         // Verify the FFI function is accessible — just check it compiles
         extern "C" {

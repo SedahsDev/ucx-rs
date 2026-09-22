@@ -3,6 +3,7 @@ use crate::ep::Ep;
 use crate::ffi::*;
 use crate::memh::MemHandle;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use std::marker::PhantomData;
@@ -35,7 +36,7 @@ impl<'w, 'a, T> FetchAmoRequest<'w, 'a, T> {
     pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
         self.request.take()
     }
-    pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
+    pub fn check_finished(&self) -> Result<bool, Status> {
         self.request
             .as_ref()
             .map_or(Ok(true), crate::Request::check_finished)
@@ -110,7 +111,7 @@ pub struct RemoteKey {
     pub(crate) worker_alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
-fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
+fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, Status> {
     let payload_len =
         u32::try_from(payload.len()).map_err(|_| ucs_status_t::UCS_ERR_OUT_OF_RANGE)?;
     let mut framed = Vec::with_capacity(4 + payload.len());
@@ -119,13 +120,13 @@ fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
     Ok(framed)
 }
 
-fn unframe_rkey_payload(buffer: &[u8]) -> Result<&[u8], ucs_status_t> {
+fn unframe_rkey_payload(buffer: &[u8]) -> Result<&[u8], Status> {
     if buffer.len() < 4 {
-        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
     }
     let payload_len = u32::from_le_bytes(buffer[..4].try_into().unwrap()) as usize;
     if payload_len != buffer.len() - 4 {
-        return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+        return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
     }
     Ok(&buffer[4..])
 }
@@ -135,7 +136,7 @@ impl RemoteKey {
     ///
     /// The wire format is exactly `[4-byte little-endian payload length][payload]`.
     /// The payload is the opaque byte sequence returned by UCX's `ucp_rkey_pack`.
-    pub fn pack(context: &Context, memh: &MemHandle) -> Result<Vec<u8>, ucs_status_t> {
+    pub fn pack(context: &Context, memh: &MemHandle) -> Result<Vec<u8>, Status> {
         let mut buffer = std::ptr::null_mut();
         let mut size = 0usize;
         status_to_result(unsafe {
@@ -148,7 +149,7 @@ impl RemoteKey {
     }
 
     /// Unpack `[4-byte little-endian payload length][opaque UCX payload]`.
-    pub fn unpack(ep: &Ep, rkey_buffer: &[u8]) -> Result<RemoteKey, ucs_status_t> {
+    pub fn unpack(ep: &Ep, rkey_buffer: &[u8]) -> Result<RemoteKey, Status> {
         let payload = unframe_rkey_payload(rkey_buffer)?;
         let mut rkey: ucp_rkey_h = std::ptr::null_mut();
         status_to_result(unsafe {
@@ -170,11 +171,11 @@ impl RemoteKey {
     /// UCX RMA/AMO while the slice is borrowed are outside Rust's aliasing model;
     /// synchronize externally and do not hold overlapping `&mut` references
     /// across such operations.
-    pub fn rkey_ptr(&mut self, remote_addr: u64, len: usize) -> Result<&mut [u8], ucs_status_t> {
+    pub fn rkey_ptr(&mut self, remote_addr: u64, len: usize) -> Result<&mut [u8], Status> {
         let mut addr = std::ptr::null_mut();
         status_to_result(unsafe { ucp_rkey_ptr(self.handle, remote_addr, &mut addr) })?;
         if addr.is_null() {
-            return Err(ucs_status_t::UCS_ERR_INVALID_ADDR);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_ADDR));
         }
         Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
     }
@@ -187,13 +188,13 @@ impl RemoteKey {
 
     /// Compare this key with another key belonging to the same worker.
     /// UCX returns zero when the keys refer to the same memory region.
-    pub fn compare(&self, other: &RemoteKey, worker: &Worker) -> Result<bool, ucs_status_t> {
+    pub fn compare(&self, other: &RemoteKey, worker: &Worker) -> Result<bool, Status> {
         if !self.worker_alive.load(Ordering::Acquire)
             || !other.worker_alive.load(Ordering::Acquire)
             || !Arc::ptr_eq(&self.worker_alive, &other.worker_alive)
             || !Arc::ptr_eq(&self.worker_alive, &worker.alive)
         {
-            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         let params = ucp_rkey_compare_params_t { field_mask: 0 };
         let mut result = 0;

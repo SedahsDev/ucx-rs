@@ -4,6 +4,7 @@ use crate::ffi::*;
 use crate::Request;
 use crate::RequestParam;
 use crate::status_ptr_to_result;
+use crate::Status;
 
 use super::RemoteKey;
 
@@ -21,7 +22,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -41,7 +42,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
@@ -73,7 +74,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -102,7 +103,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
@@ -124,7 +125,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -145,7 +146,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -166,7 +167,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -187,7 +188,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -208,7 +209,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -230,7 +231,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         let operand = [expected, replacement];
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -254,7 +255,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -275,7 +276,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -296,7 +297,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -317,7 +318,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -338,7 +339,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -360,7 +361,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         let operand = [expected, replacement];
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -386,7 +387,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u64,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -411,7 +412,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u64,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -436,7 +437,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u64,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -462,7 +463,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u64,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
         let operand = [compare, swap];
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
@@ -488,7 +489,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u32,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -513,7 +514,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u32,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -538,7 +539,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u32,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -564,7 +565,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         reply: &'a mut u32,
-    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, ucs_status_t> {
+    ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
         let operand = [expected, swap];
         let param = RequestParam::fetch_params(reply);
         status_ptr_to_result(unsafe {

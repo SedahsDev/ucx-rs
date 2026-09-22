@@ -17,16 +17,16 @@ unsafe extern "C" fn receive(
     _data: *mut c_void,
     _length: usize,
     _param: *const ucx_sys::ucp_am_recv_param_t,
-) -> ucx_sys::ucs_status_t {
+) -> ucx_sys::am::ucs_status_t {
     if arg.is_null() || header.is_null() || header_length == 0 {
-        return ucx_sys::ucs_status_t::UCS_ERR_INVALID_PARAM;
+        return ucx_sys::am::ucs_status_t::UCS_ERR_INVALID_PARAM;
     }
     // SAFETY: UCX supplies a valid header for this callback; arg points to the
     // one-byte buffer retained by main until the callback has run.
     unsafe {
         *(arg as *mut u8) = *(header as *const u8);
     }
-    ucx_sys::ucs_status_t::UCS_OK
+    ucx_sys::am::ucs_status_t::UCS_OK
 }
 
 fn wait(worker: &ucx_sys::worker::Worker, request: Request) {

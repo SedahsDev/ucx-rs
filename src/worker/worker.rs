@@ -4,6 +4,7 @@ use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::Request;
 use crate::RequestParam;
 use crate::worker::address::*;
@@ -103,7 +104,7 @@ mod tests {
             .expect("worker create");
         assert!(matches!(
             MtWorker::new(worker),
-            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
         ));
     }
 
@@ -163,7 +164,7 @@ unsafe impl Sync for MtWorker {}
 impl MtWorker {
     /// Wrap a worker only when UCX reports a thread-safe worker mode.
     #[allow(clippy::arc_with_non_send_sync)]
-    pub fn new(worker: Worker) -> Result<Self, ucs_status_t> {
+    pub fn new(worker: Worker) -> Result<Self, Status> {
         let mode = worker
             .query(WorkerAttrFields::THREAD_MODE)?
             .thread_mode
@@ -171,7 +172,7 @@ impl MtWorker {
         if mode != ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED
             && mode != ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
         {
-            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         Ok(Self {
             inner: Arc::new(MtWorkerInner {
@@ -209,32 +210,32 @@ impl MtWorker {
         self.lock().progress()
     }
 
-    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, Status> {
         self.lock().flush(params)
     }
 
     /// Apply worker-wide UCX ordering to operations issued before this call.
-    pub fn fence(&self) -> Result<(), ucs_status_t> {
+    pub fn fence(&self) -> Result<(), Status> {
         self.lock().fence()
     }
 
-    pub fn wait(&self) -> Result<(), ucs_status_t> {
+    pub fn wait(&self) -> Result<(), Status> {
         self.lock().wait()
     }
-    pub fn arm(&self) -> Result<(), ucs_status_t> {
+    pub fn arm(&self) -> Result<(), Status> {
         self.lock().arm()
     }
-    pub fn signal(&self) -> Result<(), ucs_status_t> {
+    pub fn signal(&self) -> Result<(), Status> {
         self.lock().signal()
     }
-    pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
+    pub fn get_efd(&self) -> Result<i32, Status> {
         self.lock().get_efd()
     }
     pub fn cancel_request(&self, request: &mut Request) {
         self.lock().cancel_request(request)
     }
 
-    pub fn wait_request(&self, request: &Request) -> Result<bool, ucs_status_t> {
+    pub fn wait_request(&self, request: &Request) -> Result<bool, Status> {
         const MAX_ROUNDS: usize = 1_000_000;
         for _ in 0..MAX_ROUNDS {
             match request.check_finished() {
@@ -248,11 +249,11 @@ impl MtWorker {
         Ok(false)
     }
 
-    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, ucs_status_t> {
+    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, Status> {
         self.lock().create_ep(ep_params)
     }
 
-    pub fn pack_address(&self) -> Result<Vec<u8>, ucs_status_t> {
+    pub fn pack_address(&self) -> Result<Vec<u8>, Status> {
         self.lock().pack_address().map(|address| address.to_vec())
     }
 }
@@ -284,7 +285,7 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    pub(crate) fn new(context: &mut Context, params: &Params) -> Result<Worker, ucs_status_t> {
+    pub(crate) fn new(context: &mut Context, params: &Params) -> Result<Worker, Status> {
         let mut worker: ucp_worker_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {
@@ -302,7 +303,7 @@ impl Worker {
         }
     }
 
-    pub fn pack_address(&self) -> Result<WorkerAddress<'_>, ucs_status_t> {
+    pub fn pack_address(&self) -> Result<WorkerAddress<'_>, Status> {
         let mut address: *mut ucp_address_t = std::ptr::null_mut();
         let mut size: usize = 0;
 
@@ -369,7 +370,7 @@ impl Worker {
     /// ```
     ///
     /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
-    pub fn wait_request(&self, request: &Request) -> Result<bool, ucs_status_t> {
+    pub fn wait_request(&self, request: &Request) -> Result<bool, Status> {
         const MAX_ROUNDS: usize = 1_000_000;
         for _ in 0..MAX_ROUNDS {
             match request.check_finished() {
@@ -383,7 +384,7 @@ impl Worker {
         Ok(false)
     }
 
-    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, ucs_status_t> {
+    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, Status> {
         Ep::new(ep_params, self)
     }
 
@@ -407,7 +408,7 @@ impl Worker {
     /// [`Self::arm`] plus [`Self::get_efd`] to wake it from other threads.
     ///
     /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
-    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -421,7 +422,7 @@ impl Worker {
         data_desc: NonNull<std::ffi::c_void>,
         buffer: &mut [u8],
         params: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_am_recv_data_nbx(
                 self.handle,
@@ -439,7 +440,7 @@ impl Worker {
     }
 
     /// Worker fence — ensures ordering of operations.
-    pub fn fence(&self) -> Result<(), ucs_status_t> {
+    pub fn fence(&self) -> Result<(), Status> {
         crate::status_to_result(unsafe { ucp_worker_fence(self.handle) })
     }
 
@@ -447,7 +448,7 @@ impl Worker {
     ///
     /// In the single-threaded model, progress the worker, arm it, then poll or
     /// epoll [`Self::get_efd`] and call [`Self::wait`]. Repeat after wakeup.
-    pub fn arm(&self) -> Result<(), ucs_status_t> {
+    pub fn arm(&self) -> Result<(), Status> {
         crate::status_to_result(unsafe { ucp_worker_arm(self.handle) })
     }
 
@@ -455,7 +456,7 @@ impl Worker {
     ///
     /// Pair this with [`Self::arm`] and a progress loop; it blocks for a UCX
     /// event but does not perform worker progress itself.
-    pub fn wait(&self) -> Result<(), ucs_status_t> {
+    pub fn wait(&self) -> Result<(), Status> {
         crate::status_to_result(unsafe { ucp_worker_wait(self.handle) })
     }
 
@@ -468,7 +469,7 @@ impl Worker {
     }
 
     /// Signal the worker to wake up from [`Self::wait`].
-    pub fn signal(&self) -> Result<(), ucs_status_t> {
+    pub fn signal(&self) -> Result<(), Status> {
         // SAFETY: self.handle is a live worker handle.
         crate::status_to_result(unsafe { ucp_worker_signal(self.handle) })
     }
@@ -477,7 +478,7 @@ impl Worker {
     ///
     /// Poll or epoll this fd after [`Self::arm`], then call [`Self::wait`] and
     /// resume the single-threaded progress loop when it becomes readable.
-    pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
+    pub fn get_efd(&self) -> Result<i32, Status> {
         let mut fd: std::os::raw::c_int = -1;
         crate::status_to_result(unsafe { ucp_worker_get_efd(self.handle, &mut fd) }).map(|()| fd)
     }
@@ -491,7 +492,7 @@ impl Worker {
     /// - UCP_WORKER_ATTR_FIELD_MAX_AM_HEADER = 8
     /// - UCP_WORKER_ATTR_FIELD_NAME = 16
     /// - UCP_WORKER_ATTR_FIELD_MAX_INFO_STRING = 32
-    pub fn query(&self, mask: WorkerAttrFields) -> Result<WorkerAttr, ucs_status_t> {
+    pub fn query(&self, mask: WorkerAttrFields) -> Result<WorkerAttr, Status> {
         // SAFETY: UCX fills only fields selected by the documented mask.
         let mut attr: ucp_worker_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = mask.bits();

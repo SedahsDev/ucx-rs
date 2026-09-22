@@ -1,7 +1,11 @@
 use crate::ep::Ep;
 use crate::ffi::*;
+
+/// Re-exported for C callback signatures that must name the raw status type.
+pub use crate::ffi::ucs_status_t;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
@@ -81,7 +85,7 @@ impl Worker {
         id: u32,
         flags: CbFlags,
         handler: F,
-    ) -> Result<(), ucs_status_t>
+    ) -> Result<(), Status>
     where
         F: FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static,
     {
@@ -107,7 +111,7 @@ impl Worker {
     /// the thread calling `Worker::progress()`, or UCX-internal progress under
     /// MULTI. Do not block or call back into the same worker; hop heavy work to
     /// an application thread or channel. See `THREADING.md` section 4.
-    pub fn am_register(&self, am_param: &HandlerParams) -> Result<(), ucs_status_t> {
+    pub fn am_register(&self, am_param: &HandlerParams) -> Result<(), Status> {
         status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &am_param.handle) })
     }
 }
@@ -120,7 +124,7 @@ impl Ep {
         header: &[u8],
         data: &[u8],
         params: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_am_send_nbx(
                 self.handle,
@@ -259,7 +263,7 @@ mod tests {
         std::ptr::NonNull<std::ffi::c_void>,
         &mut [u8],
         &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t>;
+    ) -> Result<Option<Request>, Status>;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {

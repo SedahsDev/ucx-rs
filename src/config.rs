@@ -6,6 +6,7 @@
 use crate::context::ConfigError;
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use std::ffi::CStr;
 use std::os::fd::RawFd;
 
@@ -73,7 +74,7 @@ pub struct ContextAttr {
 pub unsafe fn context_query(
     context: ucp_context_h,
     mask: u64,
-) -> Result<ContextAttr, ucs_status_t> {
+) -> Result<ContextAttr, Status> {
     let mut attr: ucp_context_attr = std::mem::zeroed();
     attr.field_mask = mask;
     status_to_result(ucp_context_query(context, &mut attr)).map(|()| {

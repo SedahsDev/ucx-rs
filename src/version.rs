@@ -5,6 +5,7 @@
 
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use std::ffi::CStr;
 
 /// Get the UCX library version.
@@ -35,7 +36,7 @@ pub struct LibAttr {
 }
 
 /// Query library-wide attributes.
-pub fn lib_query() -> Result<LibAttr, ucs_status_t> {
+pub fn lib_query() -> Result<LibAttr, Status> {
     let mut attr: ucp_lib_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL;
     status_to_result(unsafe { ucp_lib_query(&mut attr) }).map(|()| LibAttr {
@@ -52,8 +53,8 @@ pub fn lib_query() -> Result<LibAttr, ucs_status_t> {
 ///
 /// # Safety
 /// This function always returns an error. Provided for API compatibility only.
-pub unsafe fn init_raw() -> Result<ucp_context_h, ucs_status_t> {
-    Err(ucs_status_t::UCS_ERR_UNSUPPORTED)
+pub unsafe fn init_raw() -> Result<ucp_context_h, Status> {
+    Err(Status(ucs_status_t::UCS_ERR_UNSUPPORTED))
 }
 
 #[cfg(test)]
