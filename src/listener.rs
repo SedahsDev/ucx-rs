@@ -112,9 +112,9 @@ impl ParamsBuilder {
         Self { params }
     }
 
-    pub fn sockaddr(mut self, addr: ucs_sock_addr_t) -> Self {
+    pub fn sockaddr(mut self, addr: &crate::ep::SockAddr) -> Self {
         self.params.field_mask |= UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
-        self.params.sockaddr = addr;
+        self.params.sockaddr = addr.to_ffi();
         self
     }
 
@@ -174,8 +174,8 @@ impl Listener {
     /// a handler; hop heavy work to an application thread or channel. See
     /// `THREADING.md` section 4.
     pub fn create(worker: &Worker, addr: &SocketAddr) -> Result<Self, Status> {
-        let (_storage, sockaddr) = socket_address(addr);
-        let params = ParamsBuilder::new().sockaddr(sockaddr).build();
+        let sockaddr = crate::ep::SockAddr::new(addr);
+        let params = ParamsBuilder::new().sockaddr(&sockaddr).build();
         let mut handle = ptr::null_mut();
         // `storage` keeps the address backing memory alive through the call;
         // UCX copies the address as part of listener creation.
@@ -228,12 +228,12 @@ impl Listener {
             handle: Mutex::new(0),
             conn_handler: Some(Mutex::new(Box::new(handler))),
         });
-        let (_storage, sockaddr) = socket_address(addr);
+        let sockaddr = crate::ep::SockAddr::new(addr);
         // SAFETY: the callback and its Arc-backed argument are retained by
         // the returned listener until after UCX listener destruction.
         let params = unsafe {
             ParamsBuilder::new()
-                .sockaddr(sockaddr)
+                .sockaddr(&sockaddr)
                 .conn_handler(Some(conn_trampoline), Arc::as_ptr(&state) as *mut _)
                 .build()
         };
