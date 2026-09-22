@@ -13,4 +13,4 @@ pub use atomic::*;
 
 /// Re-export the remote key handle type for external callers.
 #[allow(non_camel_case_types)]
-pub type ucp_rkey_h = crate::ffi::ucp_rkey_h;
+pub(crate) type ucp_rkey_h = crate::ffi::ucp_rkey_h;

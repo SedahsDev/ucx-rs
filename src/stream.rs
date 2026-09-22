@@ -3,7 +3,7 @@
 //! Wraps `ucp_stream_send_nbx`, `ucp_stream_recv_nbx`, `ucp_stream_worker_poll`,
 //! `ucp_stream_recv_data_nb`, `ucp_stream_recv_request_test`, and `ucp_stream_data_release`.
 
-use crate::ep::Ep;
+use crate::ep::{Ep, EpHandle};
 use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
@@ -20,14 +20,14 @@ use std::ptr::NonNull;
 /// this type never takes ownership of it and therefore cannot close the endpoint.
 #[derive(Debug, Copy, Clone)]
 pub struct StreamPollEvent {
-    ep: ucp_ep_h,
+    ep: EpHandle,
     user_data: *mut std::ffi::c_void,
     flags: u32,
 }
 
 impl StreamPollEvent {
-    /// Return the borrowed UCX endpoint handle reported by the poll (internal).
-    pub(crate) fn ep_handle(&self) -> ucp_ep_h {
+    /// Return the borrowed UCX endpoint handle reported by the poll.
+    pub fn ep_handle(&self) -> EpHandle {
         self.ep
     }
 
@@ -169,7 +169,7 @@ impl Worker {
         Ok(poll_eps
             .into_iter()
             .map(|entry| StreamPollEvent {
-                ep: entry.ep,
+                ep: EpHandle(entry.ep),
                 user_data: entry.user_data,
                 flags: entry.flags,
             })
@@ -222,12 +222,12 @@ pub unsafe fn stream_recv_nbx(
 /// Caller must ensure `poll_eps` is valid for `max_eps` elements.
 #[deprecated(since = "0.1.0", note = "Use Worker::stream_poll() instead")]
 pub unsafe fn stream_worker_poll(
-    worker: ucp_worker_h,
+    worker: &crate::worker::Worker,
     poll_eps: *mut ucp_stream_poll_ep_t,
     max_eps: usize,
     flags: u32,
 ) -> isize {
-    ucp_stream_worker_poll(worker, poll_eps, max_eps, flags)
+    ucp_stream_worker_poll(worker.handle, poll_eps, max_eps, flags)
 }
 
 /// Receive stream data with automatic buffer allocation.
@@ -266,8 +266,8 @@ pub unsafe fn stream_recv_request_test(
 ///
 /// # Safety
 /// Caller must ensure `data` was obtained from `stream_recv_data_nb`.
-pub unsafe fn stream_data_release(ep: ucp_ep_h, data: *mut std::os::raw::c_void) {
-    ucp_stream_data_release(ep, data);
+pub unsafe fn stream_data_release(ep: EpHandle, data: *mut std::os::raw::c_void) {
+    ucp_stream_data_release(ep.0, data);
 }
 
 #[cfg(test)]

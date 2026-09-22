@@ -107,7 +107,7 @@ pub(crate) fn fetch_amo_result<'w, 'a, T>(
 /// The rkey is automatically destroyed when dropped.
 pub struct RemoteKey {
     pub(crate) handle: ucp_rkey_h,
-    worker_alive: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) worker_alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn frame_rkey_payload(payload: &[u8]) -> Result<Vec<u8>, ucs_status_t> {
@@ -181,7 +181,7 @@ impl RemoteKey {
 
     /// Get the raw rkey handle.
     #[inline]
-    pub fn as_raw(&self) -> ucp_rkey_h {
+    pub(crate) fn as_raw(&self) -> ucp_rkey_h {
         self.handle
     }
 
