@@ -181,7 +181,7 @@ impl RemoteKey {
 
     /// Get the raw rkey handle.
     #[inline]
-    pub fn as_raw(&self) -> ucp_rkey_h {
+    pub(crate) fn as_raw(&self) -> ucp_rkey_h {
         self.handle
     }
 
