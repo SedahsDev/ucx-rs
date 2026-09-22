@@ -34,10 +34,26 @@ pub struct Ep {
     pub(crate) worker_alive: Arc<AtomicBool>,
 }
 
+/// Native Rust wrapper for the raw `ucp_ep_h` handle.
+#[derive(Debug, Clone, Copy)]
+pub struct EpHandle(pub(crate) ucp_ep_h);
+
+impl From<ucp_ep_h> for EpHandle {
+    fn from(handle: ucp_ep_h) -> Self {
+        EpHandle(handle)
+    }
+}
+
+impl From<EpHandle> for ucp_ep_h {
+    fn from(handle: EpHandle) -> Self {
+        handle.0
+    }
+}
+
 impl Ep {
     /// Expose the raw UCP endpoint handle for FFI callers.
-    pub fn handle(&self) -> ucp_ep_h {
-        self.handle
+    pub fn handle(&self) -> EpHandle {
+        EpHandle(self.handle)
     }
 
     /// Print endpoint diagnostics to `fd`. Invalid descriptors are ignored.
