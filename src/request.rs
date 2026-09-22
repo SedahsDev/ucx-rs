@@ -1,6 +1,7 @@
 use crate::ffi::*;
 use crate::status::status_from_ptr;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker;
 use std::ptr::NonNull;
 
@@ -22,7 +23,7 @@ pub struct Request {
 pub struct RequestState {
     /// `Ok(())` means the request completed successfully; `Err` contains the
     /// UCX status returned by `ucp_request_test` (including `UCS_INPROGRESS`).
-    pub status: Result<(), ucs_status_t>,
+    pub status: Result<(), Status>,
 }
 
 impl Drop for Request {
@@ -73,14 +74,14 @@ impl Request {
     /// Returns `Ok(true)` completed, `Ok(false)` in progress, `Err` on failure.
     /// Returns `Ok(true)` if the request was already freed/cancelled.
     #[inline]
-    pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
+    pub fn check_finished(&self) -> Result<bool, Status> {
         let Some(h) = self.handle else {
             return Ok(true);
         };
         let status = unsafe { ucp_request_check_status(h.as_ptr()) };
         let status_ptr = status as isize as usize as ucs_status_ptr_t;
         if status_ptr_is_err(status_ptr) {
-            return Err(status_from_ptr(status_ptr));
+            return Err(crate::Status::from(status_from_ptr(status_ptr)));
         }
         Ok(status == ucs_status_t::UCS_OK)
     }
@@ -170,7 +171,7 @@ impl Request {
 
 // UCX uses `ucs_status_ptr_t` for nonblocking operations: the result is either
 // an immediate status, a request pointer, or an error. This helper maps those
-// outcomes to `Result<Option<Request>, ucs_status_t>`. A status-pointer API
+// outcomes to `Result<Option<Request>, Status>`. A status-pointer API
 // never returns `UCS_INPROGRESS`; an incomplete operation returns a request
 // pointer instead, while callers observe that status through plain
 // `ucs_status_t` APIs such as `ucp_request_check_status`.
@@ -368,14 +369,14 @@ pub unsafe fn request_alloc(worker: &crate::worker::Worker) -> Request {
 pub unsafe fn request_query(
     request: *mut std::os::raw::c_void,
     mask: u64,
-) -> Result<RequestAttr, ucs_status_t> {
+) -> Result<RequestAttr, Status> {
     let mut attr: ucp_request_attr_t = std::mem::zeroed();
     attr.field_mask = mask;
     status_to_result(ucp_request_query(request, &mut attr)).map(|()| RequestAttr {
         status: if mask & 4 != 0 {
-            attr.status
+            Status::from(attr.status)
         } else {
-            ucs_status_t::UCS_OK
+            Status::from(ucs_status_t::UCS_OK)
         },
     })
 }
@@ -383,7 +384,7 @@ pub unsafe fn request_query(
 /// Request attribute result.
 #[derive(Debug, Clone)]
 pub struct RequestAttr {
-    pub status: ucs_status_t,
+    pub status: Status,
 }
 
 #[cfg(test)]
@@ -479,7 +480,7 @@ mod tests {
         let is_completed: fn(&Request) -> bool = Request::is_completed;
         let test: fn(&Request) -> RequestState = Request::test;
         let release: fn(Request) = Request::release;
-        let check_finished: fn(&Request) -> Result<bool, ucs_status_t> = Request::check_finished;
+        let check_finished: fn(&Request) -> Result<bool, Status> = Request::check_finished;
         let _ = (is_completed, test, release, check_finished);
     }
 

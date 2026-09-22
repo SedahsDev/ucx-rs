@@ -1,6 +1,41 @@
 use crate::ffi::*;
 use crate::request::Request;
 
+/// Native error type wrapping a UCX status code.
+///
+/// This is the public error type for the crate. It wraps the raw
+/// `ucs_status_t` so consumers never name the bindgen type directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Status(pub(crate) ucs_status_t);
+
+impl Status {
+    /// The raw UCX status code.
+    pub(crate) fn to_ffi(self) -> ucs_status_t {
+        self.0
+    }
+
+    /// Whether this status represents an error (negative UCX status).
+    pub fn is_err(self) -> bool {
+        (self.0 as i8) < 0
+    }
+}
+
+impl From<ucs_status_t> for Status {
+    fn from(status: ucs_status_t) -> Self {
+        Status(status)
+    }
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UCX status {:?}", self.0)
+    }
+}
+
+impl std::error::Error for Status {}
+
+
+
 /// Translates a UCX status pointer into an immediate result, request, or error.
 ///
 /// # Invariant
@@ -20,9 +55,9 @@ use crate::request::Request;
 /// `src/ucp/core/ucp_request.inl` and `src/ucs/type/status.h` in the new UCX
 /// version first.
 #[inline]
-pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, ucs_status_t> {
+pub(crate) fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, Status> {
     if status_ptr_is_err(ptr) {
-        return Err(status_from_ptr(ptr));
+        return Err(Status::from(status_from_ptr(ptr)));
     }
     // Invariant guard: see doc note above. UCS_INPROGRESS must never arrive
     // through a status_ptr; treat any future violation loudly in debug builds.
@@ -40,10 +75,10 @@ pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, uc
 }
 
 #[inline]
-pub fn status_to_result(status: ucs_status_t) -> Result<(), ucs_status_t> {
+pub(crate) fn status_to_result(status: ucs_status_t) -> Result<(), Status> {
     // Per ucs/type/status.h, UCS_ERR_* values are negative and success values are non-negative.
     if status_value_is_err(status) {
-        return Err(status);
+        return Err(Status::from(status));
     }
     Ok(())
 }
@@ -59,7 +94,7 @@ fn status_value_is_err(status: ucs_status_t) -> bool {
 }
 
 #[inline]
-pub fn status_from_ptr(ptr: ucs_status_ptr_t) -> ucs_status_t {
+pub(crate) fn status_from_ptr(ptr: ucs_status_ptr_t) -> ucs_status_t {
     let status = ptr as isize as i32;
     match status {
         -1 => ucs_status_t::UCS_ERR_NO_MESSAGE,
@@ -153,7 +188,7 @@ mod status_tests {
     fn status_ptr_to_result_decodes_error() {
         assert!(matches!(
             status_ptr_to_result(ucs_status_t::UCS_ERR_NO_MEMORY as usize as ucs_status_ptr_t),
-            Err(ucs_status_t::UCS_ERR_NO_MEMORY)
+            Err(Status(ucs_status_t::UCS_ERR_NO_MEMORY))
         ));
     }
 

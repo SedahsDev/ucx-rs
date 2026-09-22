@@ -19,6 +19,7 @@ pub use params::*;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::RemoteWorkerAddress;
 use crate::worker::Worker;
 use std::sync::atomic::AtomicBool;
@@ -64,7 +65,7 @@ impl Ep {
         });
     }
 
-    pub fn new(ep_params: Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
+    pub fn new(ep_params: Params, worker: &Worker) -> Result<Ep, Status> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
             status_to_result(unsafe { ucp_ep_create(worker.handle, &ep_params.handle, &mut ep) });
@@ -90,7 +91,7 @@ impl Ep {
     pub fn flush(
         &self,
         params: &crate::RequestParam,
-    ) -> Result<Option<crate::Request>, ucs_status_t> {
+    ) -> Result<Option<crate::Request>, Status> {
         status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -113,7 +114,7 @@ impl Ep {
     /// while operations are pending. [`Ep::close`] is recommended for normal
     /// graceful teardown; `ucp_ep_close_nb` replaces this deprecated UCX API.
     /// The returned request, when present, is owned by the caller.
-    pub fn disconnect_nb(self) -> Result<Option<crate::Request>, ucs_status_t> {
+    pub fn disconnect_nb(self) -> Result<Option<crate::Request>, Status> {
         let this = std::mem::ManuallyDrop::new(self);
         if !this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(None);
@@ -133,13 +134,13 @@ impl Ep {
     ///
     /// `ucp_ep_modify_nb` is an upstream deprecated compatibility API declared
     /// in `ucp_compat.h`.
-    pub fn modify(&self, params: &ModifyParams) -> Result<Option<crate::Request>, ucs_status_t> {
+    pub fn modify(&self, params: &ModifyParams) -> Result<Option<crate::Request>, Status> {
         // SAFETY: self.handle is a live endpoint and params owns initialized storage.
         status_ptr_to_result(unsafe { ucp_ep_modify_nb(self.handle, &params.handle) })
     }
 
     /// Estimate the time needed to send a message of `message_size` bytes.
-    pub fn evaluate_perf(&self, message_size: usize) -> Result<EpPerf, ucs_status_t> {
+    pub fn evaluate_perf(&self, message_size: usize) -> Result<EpPerf, Status> {
         // SAFETY: UCX fills the initialized attribute structure according to its mask.
         let mut attr: ucp_ep_evaluate_perf_attr_t = unsafe { std::mem::zeroed() };
         attr.field_mask = ucp_ep_perf_attr_field::UCP_EP_PERF_ATTR_FIELD_ESTIMATED_TIME as u64;
@@ -163,7 +164,7 @@ impl Ep {
     /// - UCP_EP_ATTR_FIELD_REMOTE_SOCKADDR = 4
     /// - UCP_EP_ATTR_FIELD_TRANSPORTS = 8
     /// - UCP_EP_ATTR_FIELD_USER_DATA = 16
-    pub fn query(&self, mask: EpAttrFields) -> Result<EpAttr, ucs_status_t> {
+    pub fn query(&self, mask: EpAttrFields) -> Result<EpAttr, Status> {
         // SAFETY: UCX fills the initialized attribute structure according to its mask.
         let mut attr: ucp_ep_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = mask.bits();
@@ -201,7 +202,7 @@ impl Ep {
     /// progressing the associated worker. If close times out, it returns
     /// `Err(UCS_ERR_TIMED_OUT)` after leaking the in-flight close request; the
     /// endpoint must be recreated before it is used again.
-    pub fn close(self, worker: &Worker, flags: u32) -> Result<(), ucs_status_t> {
+    pub fn close(self, worker: &Worker, flags: u32) -> Result<(), Status> {
         let this = std::mem::ManuallyDrop::new(self);
         // SAFETY: UCX request parameter structs are valid when zeroed.
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
@@ -227,7 +228,7 @@ impl Ep {
             }
             // Do not free a request that may still be in flight.
             std::mem::forget(request);
-            return Err(ucs_status_t::UCS_ERR_TIMED_OUT);
+            return Err(Status(ucs_status_t::UCS_ERR_TIMED_OUT));
         }
         Ok(())
     }
@@ -262,14 +263,14 @@ mod tests {
 
     #[test]
     fn test_endpoint_flush_api_signature() {
-        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, ucs_status_t> =
+        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, Status> =
             Ep::flush;
     }
 
     #[test]
     fn endpoint_issue_37_api_signatures() {
-        let _: fn(&Ep, &ModifyParams) -> Result<Option<crate::Request>, ucs_status_t> = Ep::modify;
-        let _: fn(&Ep, usize) -> Result<EpPerf, ucs_status_t> = Ep::evaluate_perf;
+        let _: fn(&Ep, &ModifyParams) -> Result<Option<crate::Request>, Status> = Ep::modify;
+        let _: fn(&Ep, usize) -> Result<EpPerf, Status> = Ep::evaluate_perf;
     }
 
     #[test]
@@ -343,13 +344,13 @@ mod tests {
 
     #[test]
     fn close_api_has_worker_signature() {
-        let _close: fn(Ep, &Worker, u32) -> Result<(), ucs_status_t> = Ep::close;
+        let _close: fn(Ep, &Worker, u32) -> Result<(), Status> = Ep::close;
     }
 
     #[test]
     fn teardown_api_has_expected_signatures() {
         let _: fn(Ep) = Ep::destroy;
-        let _: fn(Ep) -> Result<Option<crate::Request>, ucs_status_t> = Ep::disconnect_nb;
+        let _: fn(Ep) -> Result<Option<crate::Request>, Status> = Ep::disconnect_nb;
     }
 
     #[test]

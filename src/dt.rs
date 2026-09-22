@@ -6,6 +6,7 @@
 
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 
 /// UCP contiguous data type class, sourced from bindgen.
 pub const UCP_DATATYPE_CONTIG: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t;
@@ -40,7 +41,7 @@ pub fn dt_make_iov() -> ucp_datatype_t {
 pub unsafe fn dt_create_generic(
     ops: &ucp_generic_dt_ops,
     context: *mut std::os::raw::c_void,
-) -> Result<ucp_datatype_t, ucs_status_t> {
+) -> Result<ucp_datatype_t, Status> {
     let mut datatype: ucp_datatype_t = 0;
     status_to_result(ucp_dt_create_generic(ops, context, &mut datatype)).map(|()| datatype)
 }
@@ -66,7 +67,7 @@ pub struct DataTypeAttr {
 }
 
 /// Query data type attributes.
-pub fn dt_query(datatype: ucp_datatype_t, mask: u64) -> Result<DataTypeAttr, ucs_status_t> {
+pub fn dt_query(datatype: ucp_datatype_t, mask: u64) -> Result<DataTypeAttr, Status> {
     let mut attr: ucp_datatype_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
     status_to_result(unsafe { ucp_dt_query(datatype, &mut attr) }).map(|()| DataTypeAttr {

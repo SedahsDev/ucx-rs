@@ -1,5 +1,6 @@
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use std::ptr::NonNull;
 
@@ -23,7 +24,7 @@ pub struct WorkerAttr {
 /// Query worker address attributes.
 ///
 /// Field mask: UCP_WORKER_ADDRESS_ATTR_FIELD_UID = 1
-pub fn address_query(address: *const ucp_address_t) -> Result<u64, ucs_status_t> {
+pub fn address_query(address: *const ucp_address_t) -> Result<u64, Status> {
     let mut attr: ucp_worker_address_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = 1; // UCP_WORKER_ADDRESS_ATTR_FIELD_UID
     crate::status_to_result(unsafe { ucp_worker_address_query(address as *mut _, &mut attr) })

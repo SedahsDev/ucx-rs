@@ -1,5 +1,6 @@
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker;
 use crate::worker::Worker;
 use bitflags::bitflags;
@@ -8,7 +9,7 @@ use std::ffi::CString;
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     Nul(std::ffi::NulError),
-    Ucs(ucs_status_t),
+    Ucs(crate::Status),
 }
 
 impl From<std::ffi::NulError> for ConfigError {
@@ -224,18 +225,18 @@ impl ParamsBuilder {
 
 impl Context {
     /// Initializes a context; at least one non-empty feature is required.
-    pub fn new(config: &Config, params: &Params) -> Result<Context, ucs_status_t> {
+    pub fn new(config: &Config, params: &Params) -> Result<Context, Status> {
         if params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_FEATURES as u64 == 0
             || params.handle.features == 0
         {
-            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         if !params.mt_workers_shared
             || params.handle.field_mask & ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED as u64
                 == 0
             || params.handle.mt_workers_shared == 0
         {
-            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         let mut context: ucp_context_h = std::ptr::null_mut();
 
@@ -257,7 +258,7 @@ impl Context {
     pub fn worker_create<'a>(
         &'a mut self,
         params: &'a worker::Params,
-    ) -> Result<Worker, ucs_status_t> {
+    ) -> Result<Worker, Status> {
         Worker::new(self, params)
     }
 
@@ -303,7 +304,7 @@ mod tests {
 
     #[test]
     fn worker_create_requires_exclusive_context_access() {
-        let _: fn(&mut Context, &worker::Params) -> Result<Worker, ucs_status_t> = Worker::new;
+        let _: fn(&mut Context, &worker::Params) -> Result<Worker, Status> = Worker::new;
     }
 
     #[test]
@@ -312,7 +313,7 @@ mod tests {
         let params = ParamsBuilder::new().mt_workers_shared(1).build();
         assert!(matches!(
             Context::new(&config, &params),
-            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
         ));
     }
 
@@ -322,7 +323,7 @@ mod tests {
         let params = ParamsBuilder::new().features(Flags::Tag).build();
         assert!(matches!(
             Context::new(&config, &params),
-            Err(ucs_status_t::UCS_ERR_INVALID_PARAM)
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
         ));
     }
 }

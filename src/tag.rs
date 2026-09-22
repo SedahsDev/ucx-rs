@@ -2,6 +2,7 @@ use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
@@ -14,7 +15,7 @@ impl Ep {
         data: &[u8],
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_send_nbx(
                 self.handle,
@@ -32,7 +33,7 @@ impl Ep {
     /// Guarantees remote delivery before the request completes. If the send
     /// completes immediately, the result contains an inert `Request` whose
     /// drop is a no-op and whose `check_finished()` returns `Ok(true)`.
-    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Request, ucs_status_t> {
+    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Request, Status> {
         let result = status_ptr_to_result(unsafe {
             ucp_tag_send_sync_nbx(
                 self.handle,
@@ -67,7 +68,7 @@ impl Ep {
         len: usize,
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_send_nbx(self.handle, ptr as _, len, tag, &param.handle)
         })
@@ -128,7 +129,7 @@ impl Worker {
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_recv_nbx(
                 self.handle,
@@ -160,7 +161,7 @@ impl Worker {
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_recv_nbx(self.handle, ptr as _, len, tag, mask, &param.handle)
         })
@@ -188,7 +189,7 @@ impl Worker {
         data: &mut [u8],
         message: &MessageHandle,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         if !message.removed {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
@@ -207,11 +208,11 @@ impl Worker {
 fn map_tag_recv_test_status(
     status: ucs_status_t,
     info: std::mem::MaybeUninit<ucp_tag_recv_info_t>,
-) -> Result<Option<TagInfo>, ucs_status_t> {
+) -> Result<Option<TagInfo>, Status> {
     match status {
         ucs_status_t::UCS_OK => Ok(Some(TagInfo::from_ffi(unsafe { info.assume_init() }))),
         ucs_status_t::UCS_INPROGRESS => Ok(None),
-        _ => Err(status),
+        _ => Err(crate::Status::from(status)),
     }
 }
 
@@ -225,7 +226,7 @@ impl Request {
     ///
     /// Callers should not use this method after the request has completed and the
     /// request has been freed.
-    pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, ucs_status_t> {
+    pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, Status> {
         let Some(h) = self.handle else {
             return Ok(None);
         };
@@ -282,7 +283,7 @@ mod tests {
 
     #[test]
     fn tag_send_sync_api_signature() {
-        let _: fn(&Ep, &[u8], u64) -> Result<Request, ucs_status_t> = Ep::tag_send_sync;
+        let _: fn(&Ep, &[u8], u64) -> Result<Request, Status> = Ep::tag_send_sync;
     }
 
     #[test]
@@ -319,7 +320,7 @@ mod tests {
             std::mem::MaybeUninit::uninit(),
         );
 
-        assert!(matches!(result, Err(ucs_status_t::UCS_ERR_IO_ERROR)));
+        assert!(matches!(result, Err(Status(ucs_status_t::UCS_ERR_IO_ERROR))));
     }
 
     /// Exercises the real UCX completion path with a self-endpoint tag exchange.

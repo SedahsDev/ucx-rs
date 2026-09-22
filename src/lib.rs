@@ -42,7 +42,7 @@ use crate::ffi::*;
 // `Builder::memory_type`, runtime thread-mode setup). Without re-exporting them, downstream crates
 // cannot name a type they are required to pass — the compiler reports `enum ... is private` even
 // though the method taking it is `pub`. Re-export rather than widening `ffi` to `pub`.
-pub use crate::ffi::{ucp_am_recv_param_t, ucs_memory_type_t, ucs_status_t, ucs_thread_mode_t};
+pub use crate::ffi::{ucp_am_recv_param_t, ucs_memory_type_t, ucs_thread_mode_t};
 
 pub mod am;
 pub mod config;
@@ -62,7 +62,6 @@ pub mod status;
 
 pub use request::*;
 pub use status::*;
-pub use status::status_from_ptr;
 
 use std::ffi::CString;
 use std::ptr::NonNull;

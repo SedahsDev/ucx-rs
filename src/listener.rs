@@ -3,6 +3,7 @@
 use crate::ep::SockAddrStorage;
 use crate::ffi::*;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use bitflags::bitflags;
 use libc::{sockaddr_in, sockaddr_in6};
@@ -172,7 +173,7 @@ impl Listener {
     /// progress under MULTI. Never block or call back into the same worker from
     /// a handler; hop heavy work to an application thread or channel. See
     /// `THREADING.md` section 4.
-    pub fn create(worker: &Worker, addr: &SocketAddr) -> Result<Self, ucs_status_t> {
+    pub fn create(worker: &Worker, addr: &SocketAddr) -> Result<Self, Status> {
         let (_storage, sockaddr) = socket_address(addr);
         let params = ParamsBuilder::new().sockaddr(sockaddr).build();
         let mut handle = ptr::null_mut();
@@ -193,7 +194,7 @@ impl Listener {
     pub fn create_with_params(
         worker: &Worker,
         params: &ParamsBuilder,
-    ) -> Result<Self, ucs_status_t> {
+    ) -> Result<Self, Status> {
         let params = params.clone_params();
         let mut handle = ptr::null_mut();
         status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) }).map(
@@ -219,7 +220,7 @@ impl Listener {
         worker: &Worker,
         addr: &SocketAddr,
         handler: F,
-    ) -> Result<Self, ucs_status_t>
+    ) -> Result<Self, Status>
     where
         F: FnMut(ConnRequest) + Send + 'static,
     {
@@ -258,7 +259,7 @@ impl Listener {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) as ucp_listener_h
     }
 
-    pub fn query(&self) -> Result<ListenerAttr, ucs_status_t> {
+    pub fn query(&self) -> Result<ListenerAttr, Status> {
         // SAFETY: zeroed C POD, then UCX fills the requested field.
         let mut attr = unsafe { MaybeUninit::<ucp_listener_attr>::zeroed().assume_init() };
         attr.field_mask = ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR as u64;
@@ -272,7 +273,7 @@ impl Listener {
     }
 
     /// Reject a connection request, consuming its single-use handle.
-    pub fn reject(&self, request: ConnRequest) -> Result<(), ucs_status_t> {
+    pub fn reject(&self, request: ConnRequest) -> Result<(), Status> {
         // SAFETY: request is a live handle delivered by UCX to the callback.
         status_to_result(unsafe { ucp_listener_reject(self.as_raw(), request.handle) })
     }
@@ -334,7 +335,7 @@ impl ConnRequest {
         self.handle
     }
     /// Reject this connection request, consuming its single-use handle.
-    pub fn reject(self, listener: &Listener) -> Result<(), ucs_status_t> {
+    pub fn reject(self, listener: &Listener) -> Result<(), Status> {
         listener.reject(self)
     }
     /// Reject this callback-delivered request using its originating listener.
@@ -342,17 +343,17 @@ impl ConnRequest {
     /// dropped. If the callback raced listener creation before its handle was
     /// published, UCX cannot safely reject the request and invalid-param is
     /// returned instead of dereferencing a null handle.
-    pub fn reject_owned(self) -> Result<(), ucs_status_t> {
+    pub fn reject_owned(self) -> Result<(), Status> {
         let listener = match self.state.handle.lock() {
             Ok(listener) => *listener as ucp_listener_h,
-            Err(_) => return Err(ucs_status_t::UCS_ERR_INVALID_PARAM),
+            Err(_) => return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM)),
         };
         if listener.is_null() {
-            return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         status_to_result(unsafe { ucp_listener_reject(listener, self.handle) })
     }
-    pub fn query(&self, fields: ConnRequestFields) -> Result<ConnRequestAttr, ucs_status_t> {
+    pub fn query(&self, fields: ConnRequestFields) -> Result<ConnRequestAttr, Status> {
         // SAFETY: zeroed C POD, then UCX fills exactly the requested fields.
         let mut attr = unsafe { MaybeUninit::<ucp_conn_request_attr>::zeroed().assume_init() };
         attr.field_mask = fields.bits();
@@ -384,7 +385,7 @@ pub struct ConnRequestAttr {
 pub unsafe fn conn_request_query(
     conn_request: ucp_conn_request_h,
     fields: ConnRequestFields,
-) -> Result<ConnRequestAttr, ucs_status_t> {
+) -> Result<ConnRequestAttr, Status> {
     ConnRequest::from_raw(conn_request).query(fields)
 }
 

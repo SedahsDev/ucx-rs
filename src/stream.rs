@@ -8,6 +8,7 @@ use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
+use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
@@ -51,7 +52,7 @@ impl Request {
     /// for `Ok` results, as specified by UCX. The request remains owned by this
     /// value in all cases. This method must only be used with a request returned
     /// by [`Ep::stream_recv`].
-    pub fn stream_recv_test(&self) -> Result<usize, ucs_status_t> {
+    pub fn stream_recv_test(&self) -> Result<usize, Status> {
         let request = self.handle.ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
         let mut length = 0usize;
         status_to_result(unsafe { ucp_stream_recv_request_test(request.as_ptr(), &mut length) })
@@ -98,7 +99,7 @@ impl Ep {
     ///
     /// `None` means no data is currently available. The returned guard releases
     /// the UCX buffer when dropped.
-    pub fn stream_recv_data(&self) -> Result<Option<StreamData<'_>>, ucs_status_t> {
+    pub fn stream_recv_data(&self) -> Result<Option<StreamData<'_>>, Status> {
         let mut length = 0usize;
         // SAFETY: self.handle is a live endpoint and length is writable.
         let ptr = unsafe { ucp_stream_recv_data_nb(self.handle, &mut length) };
@@ -106,7 +107,7 @@ impl Ep {
             return Ok(None);
         }
         if status_ptr_is_err(ptr) {
-            return Err(crate::status_from_ptr(ptr));
+            return Err(crate::Status::from(crate::status_from_ptr(ptr)));
         }
         Ok(Some(StreamData {
             ep: self,
@@ -120,7 +121,7 @@ impl Ep {
         &self,
         data: &[u8],
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, Status> {
         status_ptr_to_result(unsafe {
             ucp_stream_send_nbx(self.handle, data.as_ptr() as _, data.len(), &param.handle)
         })
@@ -133,7 +134,7 @@ impl Ep {
         &self,
         buf: &mut [u8],
         param: &RequestParam,
-    ) -> Result<(Option<Request>, usize), ucs_status_t> {
+    ) -> Result<(Option<Request>, usize), Status> {
         let mut length: usize = 0;
         let res = status_ptr_to_result(unsafe {
             ucp_stream_recv_nbx(
@@ -154,14 +155,14 @@ impl Worker {
     /// Each returned endpoint handle is borrowed from UCX and must not be
     /// closed by the caller. UCX may invalidate the handle after the next
     /// worker progress or stream poll operation.
-    pub fn stream_poll(&self, max_eps: usize) -> Result<Vec<StreamPollEvent>, ucs_status_t> {
+    pub fn stream_poll(&self, max_eps: usize) -> Result<Vec<StreamPollEvent>, Status> {
         let mut poll_eps = vec![unsafe { std::mem::zeroed() }; max_eps];
         let count =
             unsafe { ucp_stream_worker_poll(self.handle, poll_eps.as_mut_ptr(), max_eps, 0) };
         if count < 0 {
-            return Err(crate::status_from_ptr(
+            return Err(crate::Status::from(crate::status_from_ptr(
                 count as isize as usize as ucs_status_ptr_t,
-            ));
+            )));
         }
         let count = count as usize;
         debug_assert!(count <= max_eps);
@@ -187,7 +188,7 @@ pub unsafe fn stream_send_nbx(
     buffer: *const std::os::raw::c_void,
     count: usize,
     param: &RequestParam,
-) -> Result<Option<Request>, ucs_status_t> {
+) -> Result<Option<Request>, Status> {
     status_ptr_to_result(ucp_stream_send_nbx(ep, buffer, count, &param.handle))
 }
 
@@ -204,7 +205,7 @@ pub unsafe fn stream_recv_nbx(
     count: usize,
     length: *mut usize,
     param: &RequestParam,
-) -> Result<Option<Request>, ucs_status_t> {
+) -> Result<Option<Request>, Status> {
     status_ptr_to_result(ucp_stream_recv_nbx(
         ep,
         buffer,
@@ -240,13 +241,13 @@ pub unsafe fn stream_worker_poll(
 pub unsafe fn stream_recv_data_nb(
     ep: ucp_ep_h,
     length: *mut usize,
-) -> Result<Option<*mut std::os::raw::c_void>, ucs_status_t> {
+) -> Result<Option<*mut std::os::raw::c_void>, Status> {
     let ptr = ucp_stream_recv_data_nb(ep, length);
     if ptr.is_null() {
         return Ok(None);
     }
     if status_ptr_is_err(ptr) {
-        return Err(crate::status_from_ptr(ptr));
+        return Err(crate::Status::from(crate::status_from_ptr(ptr)));
     }
     Ok(Some(ptr))
 }
@@ -258,7 +259,7 @@ pub unsafe fn stream_recv_data_nb(
 pub unsafe fn stream_recv_request_test(
     request: *mut std::os::raw::c_void,
     length: *mut usize,
-) -> Result<(), ucs_status_t> {
+) -> Result<(), Status> {
     status_to_result(ucp_stream_recv_request_test(request, length))
 }
 
@@ -332,7 +333,7 @@ mod tests {
 
         // Do not call stream_recv on a bare self-EP: UCX requires a connected
         // stream peer and dereferences uninitialized stream state otherwise.
-        let _: fn(&Ep, &mut [u8], &RequestParam) -> Result<(Option<Request>, usize), ucs_status_t> =
+        let _: fn(&Ep, &mut [u8], &RequestParam) -> Result<(Option<Request>, usize), Status> =
             Ep::stream_recv;
     }
 
@@ -340,9 +341,9 @@ mod tests {
     #[test]
     fn test_stream_poll_signature() {
         let (_ctx, _worker) = setup_worker();
-        let _: fn(&Worker, usize) -> Result<Vec<StreamPollEvent>, ucs_status_t> =
+        let _: fn(&Worker, usize) -> Result<Vec<StreamPollEvent>, Status> =
             Worker::stream_poll;
-        let _: fn(&Request) -> Result<usize, ucs_status_t> = Request::stream_recv_test;
+        let _: fn(&Request) -> Result<usize, Status> = Request::stream_recv_test;
         let _: unsafe extern "C" fn(ucp_ep_h, *mut std::os::raw::c_void) = ucp_stream_data_release;
     }
 
@@ -357,12 +358,12 @@ mod tests {
 
     #[test]
     fn test_stream_request_completion_signature() {
-        let _: fn(&Request) -> Result<usize, ucs_status_t> = Request::stream_recv_test;
+        let _: fn(&Request) -> Result<usize, Status> = Request::stream_recv_test;
     }
 
     #[test]
     fn test_stream_recv_data_signature() {
-        let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, ucs_status_t> =
+        let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, Status> =
             Ep::stream_recv_data;
     }
 }
