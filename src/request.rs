@@ -350,8 +350,8 @@ impl RequestParamBuilder {
 ///
 /// # Safety
 /// The returned request must be freed with `Request::from_raw().free()` or similar.
-pub unsafe fn request_alloc(worker: ucp_worker_h) -> Request {
-    let ptr = ucp_request_alloc(worker);
+pub unsafe fn request_alloc(worker: &crate::worker::Worker) -> Request {
+    let ptr = ucp_request_alloc(worker.handle);
     Request::from_raw(ptr)
 }
 
