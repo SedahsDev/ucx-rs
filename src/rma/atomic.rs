@@ -5,6 +5,7 @@ use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
 use crate::Request;
+use std::sync::Arc;
 
 use super::{RemoteKey, FetchAmoRequest};
 
@@ -14,19 +15,19 @@ use super::{RemoteKey, FetchAmoRequest};
 /// # Safety
 /// Caller must ensure `buffer` is valid for `count` bytes and `rkey` is valid.
 pub unsafe fn put_nbx(
-    ep: ucp_ep_h,
+    ep: &Ep,
     buffer: *const std::os::raw::c_void,
     count: usize,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     status_ptr_to_result(ucp_put_nbx(
-        ep,
+        ep.handle,
         buffer,
         count,
         remote_addr,
-        rkey,
+        rkey.handle,
         &param.handle,
     ))
 }
@@ -37,19 +38,19 @@ pub unsafe fn put_nbx(
 /// # Safety
 /// Caller must ensure `buffer` has space for `count` bytes and `rkey` is valid.
 pub unsafe fn get_nbx(
-    ep: ucp_ep_h,
+    ep: &Ep,
     buffer: *mut std::os::raw::c_void,
     count: usize,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     status_ptr_to_result(ucp_get_nbx(
-        ep,
+        ep.handle,
         buffer,
         count,
         remote_addr,
-        rkey,
+        rkey.handle,
         &param.handle,
     ))
 }
@@ -61,21 +62,21 @@ pub unsafe fn get_nbx(
 /// Caller must ensure `ep` is a valid endpoint and `operand` points to valid memory.
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_op_nbx(
-    ep: ucp_ep_h,
+    ep: &Ep,
     opcode: ucp_atomic_op_t,
     buffer: *const std::os::raw::c_void,
     count: usize,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     status_ptr_to_result(ucp_atomic_op_nbx(
-        ep,
+        ep.handle,
         opcode,
         buffer,
         count,
         remote_addr,
-        rkey,
+        rkey.handle,
         &param.handle,
     ))
 }
@@ -104,22 +105,22 @@ pub unsafe fn atomic_op_nbx(
 /// has space for the result, and `rkey` is valid.
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_fetch_nbx(
-    ep: ucp_ep_h,
+    ep: &Ep,
     opcode: ucp_atomic_op_t,
     operand: *const std::os::raw::c_void,
     _reply_buffer: *mut std::os::raw::c_void,
     count: usize,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     status_ptr_to_result(ucp_atomic_op_nbx(
-        ep,
+        ep.handle,
         opcode,
         operand,
         count,
         remote_addr,
-        rkey,
+        rkey.handle,
         &param.handle,
     ))
 }
@@ -132,11 +133,14 @@ pub unsafe fn atomic_fetch_nbx(
 /// # Safety
 /// Caller must ensure `rkey_buffer` is valid and `ep` is a valid endpoint handle.
 pub unsafe fn ep_rkey_unpack(
-    ep: ucp_ep_h,
+    ep: &Ep,
     rkey_buffer: *const std::os::raw::c_void,
-) -> Result<ucp_rkey_h, ucs_status_t> {
+) -> Result<RemoteKey, ucs_status_t> {
     let mut rkey: ucp_rkey_h = std::ptr::null_mut();
-    status_to_result(ucp_ep_rkey_unpack(ep, rkey_buffer, &mut rkey)).map(|()| rkey)
+    status_to_result(ucp_ep_rkey_unpack(ep.handle, rkey_buffer, &mut rkey)).map(|()| RemoteKey {
+        handle: rkey,
+        worker_alive: Arc::clone(&ep.worker_alive),
+    })
 }
 
 #[deprecated = "No safe replacement — use with caution"]
@@ -151,14 +155,14 @@ pub unsafe fn ep_rkey_unpack(
 /// null rkey handles — it will segfault instead of returning an error. Always
 /// use [`RemoteKey::remote_ptr`] for safe access.
 pub unsafe fn rkey_ptr(
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     raddr: u64,
 ) -> Result<*mut std::os::raw::c_void, ucs_status_t> {
-    if rkey.is_null() {
+    if rkey.handle.is_null() {
         return Err(ucs_status_t::UCS_ERR_INVALID_PARAM);
     }
     let mut addr: *mut std::os::raw::c_void = std::ptr::null_mut();
-    status_to_result(ucp_rkey_ptr(rkey, raddr, &mut addr)).map(|()| addr)
+    status_to_result(ucp_rkey_ptr(rkey.handle, raddr, &mut addr)).map(|()| addr)
 }
 
 #[deprecated = "Use RemoteKey RAII wrapper instead (auto-destroy on drop)"]
@@ -166,8 +170,8 @@ pub unsafe fn rkey_ptr(
 ///
 /// # Safety
 /// Caller must ensure `rkey` is a valid, non-duplicate remote key handle.
-pub unsafe fn rkey_destroy(rkey: ucp_rkey_h) {
-    ucp_rkey_destroy(rkey);
+pub unsafe fn rkey_destroy(rkey: &RemoteKey) {
+    ucp_rkey_destroy(rkey.handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,11 +186,11 @@ pub unsafe fn rkey_destroy(rkey: ucp_rkey_h) {
 /// Caller must ensure `operand` points to a valid u32, `reply_buffer` has space for u32,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fadd32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     _reply_buffer: *mut u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -208,11 +212,11 @@ pub unsafe fn atomic_fadd32(
 /// Caller must ensure `operand` points to a valid u64, `reply_buffer` has space for u64,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fadd64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     _reply_buffer: *mut u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -234,11 +238,11 @@ pub unsafe fn atomic_fadd64(
 /// Caller must ensure `operand` points to a valid u32, `reply_buffer` has space for u32,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fswap32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     _reply_buffer: *mut u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -260,11 +264,11 @@ pub unsafe fn atomic_fswap32(
 /// Caller must ensure `operand` points to a valid u64, `reply_buffer` has space for u64,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fswap64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     _reply_buffer: *mut u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -287,12 +291,12 @@ pub unsafe fn atomic_fswap64(
 /// # Safety
 /// Caller must ensure `reply_buffer` has space for u32 and `rkey` is valid.
 pub unsafe fn atomic_fcswap32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     expected: u32,
     replacement: u32,
     _reply_buffer: *mut u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     let operand = [expected, replacement];
@@ -316,12 +320,12 @@ pub unsafe fn atomic_fcswap32(
 /// # Safety
 /// Caller must ensure `reply_buffer` has space for u64 and `rkey` is valid.
 pub unsafe fn atomic_fcswap64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     expected: u64,
     replacement: u64,
     _reply_buffer: *mut u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     let operand = [expected, replacement];
@@ -343,10 +347,10 @@ pub unsafe fn atomic_fcswap64(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_add32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -367,10 +371,10 @@ pub unsafe fn atomic_add32(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_add64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -391,10 +395,10 @@ pub unsafe fn atomic_add64(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_swap32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -415,10 +419,10 @@ pub unsafe fn atomic_swap32(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_swap64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -440,11 +444,11 @@ pub unsafe fn atomic_swap64(
 /// Caller must ensure `operand` is valid, `reply_buffer` has space for u32,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fxor32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     _reply_buffer: *mut u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -466,11 +470,11 @@ pub unsafe fn atomic_fxor32(
 /// Caller must ensure `operand` is valid, `reply_buffer` has space for u64,
 /// and `rkey` is valid.
 pub unsafe fn atomic_fxor64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     _reply_buffer: *mut u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -491,10 +495,10 @@ pub unsafe fn atomic_fxor64(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_xor32(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u32,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -515,10 +519,10 @@ pub unsafe fn atomic_xor32(
 /// # Safety
 /// Caller must ensure `rkey` is valid.
 pub unsafe fn atomic_xor64(
-    ep: ucp_ep_h,
+    ep: &Ep,
     operand: u64,
     remote_addr: u64,
-    rkey: ucp_rkey_h,
+    rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, ucs_status_t> {
     atomic_op_nbx(
@@ -692,7 +696,7 @@ mod tests {
         // Verify the FFI function is accessible — just check it compiles
         extern "C" {
             fn ucp_rkey_ptr(
-                rkey: ucp_rkey_h,
+                rkey: &RemoteKey,
                 raddr: u64,
                 addr_p: *mut *mut std::os::raw::c_void,
             ) -> ucs_status_t;
