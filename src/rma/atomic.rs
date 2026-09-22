@@ -10,6 +10,34 @@ use std::sync::Arc;
 
 use super::{RemoteKey, FetchAmoRequest};
 
+/// Rust-native atomic operation selector.
+/// Mirrors the C `ucp_atomic_op_t` discriminants so it maps 1:1 to the FFI enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AtomicOp {
+    Add,
+    Swap,
+    CSwap,
+    And,
+    Or,
+    Xor,
+}
+
+impl AtomicOp {
+    /// Convert to the C `ucp_atomic_op_t` value.
+    pub(crate) fn to_ffi(self) -> ucp_atomic_op_t {
+        match self {
+            AtomicOp::Add => ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+            AtomicOp::Swap => ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+            AtomicOp::CSwap => ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+            AtomicOp::And => ucp_atomic_op_t::UCP_ATOMIC_OP_AND,
+            AtomicOp::Or => ucp_atomic_op_t::UCP_ATOMIC_OP_OR,
+            AtomicOp::Xor => ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+        }
+    }
+}
+
+
 #[deprecated = "Use Ep::rma_put() instead"]
 /// Put data to a remote memory location.
 ///
@@ -64,7 +92,7 @@ pub unsafe fn get_nbx(
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_op_nbx(
     ep: &Ep,
-    opcode: ucp_atomic_op_t,
+    opcode: AtomicOp,
     buffer: *const std::os::raw::c_void,
     count: usize,
     remote_addr: u64,
@@ -73,7 +101,7 @@ pub unsafe fn atomic_op_nbx(
 ) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
-        opcode,
+        opcode.to_ffi(),
         buffer,
         count,
         remote_addr,
@@ -96,7 +124,7 @@ pub unsafe fn atomic_op_nbx(
 ///     .reply_buffer(&mut reply as *mut _ as *mut std::os::raw::c_void)
 ///     .build();
 /// unsafe {
-///     rma::atomic_fetch_nbx(ep, ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+///     rma::atomic_fetch_nbx(ep, rma::AtomicOp::Add,
 ///         &operand as *const _ as *const _, 8, remote_addr, rkey, &param);
 /// }
 /// ```
@@ -107,7 +135,7 @@ pub unsafe fn atomic_op_nbx(
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn atomic_fetch_nbx(
     ep: &Ep,
-    opcode: ucp_atomic_op_t,
+    opcode: AtomicOp,
     operand: *const std::os::raw::c_void,
     _reply_buffer: *mut std::os::raw::c_void,
     count: usize,
@@ -117,7 +145,7 @@ pub unsafe fn atomic_fetch_nbx(
 ) -> Result<Option<crate::Request>, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
-        opcode,
+        opcode.to_ffi(),
         operand,
         count,
         remote_addr,
@@ -196,7 +224,7 @@ pub unsafe fn atomic_fadd32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+        AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -222,7 +250,7 @@ pub unsafe fn atomic_fadd64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+        AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
@@ -248,7 +276,7 @@ pub unsafe fn atomic_fswap32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+        AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -274,7 +302,7 @@ pub unsafe fn atomic_fswap64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+        AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
@@ -303,7 +331,7 @@ pub unsafe fn atomic_fcswap32(
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+        AtomicOp::CSwap,
         operand.as_ptr() as *const std::os::raw::c_void,
         std::mem::size_of::<[u32; 2]>(),
         remote_addr,
@@ -332,7 +360,7 @@ pub unsafe fn atomic_fcswap64(
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
+        AtomicOp::CSwap,
         operand.as_ptr() as *const std::os::raw::c_void,
         std::mem::size_of::<[u64; 2]>(),
         remote_addr,
@@ -356,7 +384,7 @@ pub unsafe fn atomic_add32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+        AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -380,7 +408,7 @@ pub unsafe fn atomic_add64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
+        AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
@@ -404,7 +432,7 @@ pub unsafe fn atomic_swap32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+        AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -428,7 +456,7 @@ pub unsafe fn atomic_swap64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
+        AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
@@ -454,7 +482,7 @@ pub unsafe fn atomic_fxor32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+        AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -480,7 +508,7 @@ pub unsafe fn atomic_fxor64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+        AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
@@ -504,7 +532,7 @@ pub unsafe fn atomic_xor32(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+        AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u32>(),
         remote_addr,
@@ -528,7 +556,7 @@ pub unsafe fn atomic_xor64(
 ) -> Result<Option<crate::Request>, Status> {
     atomic_op_nbx(
         ep,
-        ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
+        AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
         std::mem::size_of::<u64>(),
         remote_addr,
