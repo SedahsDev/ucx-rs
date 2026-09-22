@@ -9,10 +9,10 @@ use crate::status_to_result;
 use crate::Status;
 
 /// UCP contiguous data type class, sourced from bindgen.
-pub const UCP_DATATYPE_CONTIG: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_CONTIG as ucp_datatype_t;
+pub const UCP_DATATYPE_CONTIG: u64 = ucp_dt_type::UCP_DATATYPE_CONTIG as u64;
 
 /// UCP I/O vector data type class, sourced from bindgen.
-pub const UCP_DATATYPE_IOV: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_IOV as ucp_datatype_t;
+pub const UCP_DATATYPE_IOV: u64 = ucp_dt_type::UCP_DATATYPE_IOV as u64;
 
 /// Create a contiguous data type with the given element size (in bytes).
 /// Equivalent to the C macro `ucp_dt_make_contig(elem_size)`.
@@ -20,15 +20,14 @@ pub const UCP_DATATYPE_IOV: ucp_datatype_t = ucp_dt_type::UCP_DATATYPE_IOV as uc
 /// The encoding is `(elem_size << UCP_DATATYPE_SHIFT) | UCP_DATATYPE_CONTIG`.
 /// Element size 0 is preserved, matching the C macro and producing the class-only value.
 #[must_use]
-pub fn dt_make_contig(elem_size: usize) -> ucp_datatype_t {
-    ((elem_size as ucp_datatype_t) << ucp_dt_type::UCP_DATATYPE_SHIFT as ucp_datatype_t)
-        | UCP_DATATYPE_CONTIG
+pub fn dt_make_contig(elem_size: usize) -> u64 {
+    ((elem_size as u64) << ucp_dt_type::UCP_DATATYPE_SHIFT as u64) | UCP_DATATYPE_CONTIG
 }
 
 /// Create an I/O vector data type.
 /// Equivalent to the C macro `ucp_dt_make_iov()`.
 #[must_use]
-pub fn dt_make_iov() -> ucp_datatype_t {
+pub fn dt_make_iov() -> u64 {
     UCP_DATATYPE_IOV
 }
 
@@ -41,15 +40,15 @@ pub fn dt_make_iov() -> ucp_datatype_t {
 pub unsafe fn dt_create_generic(
     ops: &ucp_generic_dt_ops,
     context: *mut std::os::raw::c_void,
-) -> Result<ucp_datatype_t, Status> {
+) -> Result<u64, Status> {
     let mut datatype: ucp_datatype_t = 0;
-    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype)).map(|()| datatype)
+    status_to_result(ucp_dt_create_generic(ops, context, &mut datatype)).map(|()| datatype as u64)
 }
 
 /// Destroy a user-defined data type.
-pub fn dt_destroy(datatype: ucp_datatype_t) {
+pub fn dt_destroy(datatype: u64) {
     unsafe {
-        ucp_dt_destroy(datatype);
+        ucp_dt_destroy(datatype as ucp_datatype_t);
     }
 }
 
@@ -67,10 +66,10 @@ pub struct DataTypeAttr {
 }
 
 /// Query data type attributes.
-pub fn dt_query(datatype: ucp_datatype_t, mask: u64) -> Result<DataTypeAttr, Status> {
+pub fn dt_query(datatype: u64, mask: u64) -> Result<DataTypeAttr, Status> {
     let mut attr: ucp_datatype_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
-    status_to_result(unsafe { ucp_dt_query(datatype, &mut attr) }).map(|()| DataTypeAttr {
+    status_to_result(unsafe { ucp_dt_query(datatype as ucp_datatype_t, &mut attr) }).map(|()| DataTypeAttr {
         packed_size: attr.packed_size,
         buffer: attr.buffer,
         count: attr.count,

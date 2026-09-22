@@ -313,10 +313,10 @@ impl RequestParamBuilder {
     }
 
     #[inline]
-    pub fn datatype(&mut self, dt: ucp_datatype_t) -> &mut Self {
+    pub fn datatype(&mut self, dt: u64) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.datatype = dt;
+        params.datatype = dt as ucp_datatype_t;
         self
     }
 
