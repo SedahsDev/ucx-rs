@@ -242,12 +242,12 @@ impl Request {
 /// Caller must ensure `buffer` is valid for `count` bytes.
 #[deprecated(since = "0.1.0", note = "Use Ep::tag_send_sync() instead")]
 pub unsafe fn tag_send_sync_nbx(
-    ep: ucp_ep_h,
+    ep: &crate::ep::Ep,
     buffer: *const std::os::raw::c_void,
     count: usize,
-    tag: ucp_tag_t,
+    tag: u64,
 ) -> crate::Request {
-    let ptr = ucp_tag_send_sync_nbx(ep, buffer, count, tag, std::ptr::null());
+    let ptr = ucp_tag_send_sync_nbx(ep.handle, buffer, count, tag, std::ptr::null());
     crate::Request::from_raw(ptr)
 }
 
@@ -256,13 +256,13 @@ pub unsafe fn tag_send_sync_nbx(
 /// # Safety
 /// Caller must ensure `buffer` has space for `count` elements of `datatype`.
 pub unsafe fn tag_msg_recv_nb(
-    worker: ucp_worker_h,
+    worker: &crate::worker::Worker,
     buffer: *mut std::os::raw::c_void,
     count: usize,
     datatype: u64,
     message: ucp_tag_message_h,
 ) -> crate::Request {
-    let ptr = ucp_tag_msg_recv_nb(worker, buffer, count, datatype as ucp_datatype_t, message, None);
+    let ptr = ucp_tag_msg_recv_nb(worker.handle, buffer, count, datatype as ucp_datatype_t, message, None);
     crate::Request::from_raw(ptr)
 }
 

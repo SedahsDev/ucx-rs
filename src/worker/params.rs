@@ -1,4 +1,6 @@
+use crate::am::HandlerParams;
 use crate::ffi::*;
+use crate::worker::Worker;
 use bitflags::bitflags;
 use crate::status_to_result;
 use crate::Status;
@@ -18,10 +20,10 @@ bitflags! {
 /// # Safety
 /// Caller must ensure `worker` is valid and the handler param is properly constructed.
 pub unsafe fn worker_set_am_recv_handler_nbx(
-    worker: ucp_worker_h,
-    param: &ucp_am_handler_param_t,
+    worker: &Worker,
+    param: &HandlerParams,
 ) -> Result<(), Status> {
-    status_to_result(ucp_worker_set_am_recv_handler(worker, param))
+    status_to_result(ucp_worker_set_am_recv_handler(worker.handle, &param.handle))
 }
 
 impl ParamsBuilder {

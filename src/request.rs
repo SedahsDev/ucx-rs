@@ -1,3 +1,12 @@
+
+/// Native alias for the send-completion callback.
+/// Mirrors the C signature (raw request/status params are unavoidable for a C callback).
+pub type SendCallback = Option<unsafe extern "C" fn(
+    request: *mut std::os::raw::c_void,
+    status: ucs_status_t,
+    user_data: *mut std::os::raw::c_void,
+)>;
+
 use crate::ffi::*;
 use crate::status::status_from_ptr;
 use crate::status_to_result;
@@ -321,7 +330,7 @@ impl RequestParamBuilder {
     }
 
     #[inline]
-    pub fn send_callback(&mut self, cb: ucp_send_nbx_callback_t) -> &mut Self {
+    pub fn send_callback(&mut self, cb: SendCallback) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.cb.send = cb;

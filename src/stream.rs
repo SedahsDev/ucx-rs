@@ -4,6 +4,11 @@
 //! `ucp_stream_recv_data_nb`, `ucp_stream_recv_request_test`, and `ucp_stream_data_release`.
 
 use crate::ep::{Ep, EpHandle};
+
+/// Native name for the UCX stream-poll entry struct.
+/// Renamed so consumers never name the bindgen `ucp_stream_poll_ep_t` directly.
+pub use crate::ffi::ucp_stream_poll_ep as StreamPollEp;
+
 use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
@@ -184,12 +189,12 @@ impl Worker {
 /// Caller must ensure `buffer` is valid for `count` bytes.
 #[deprecated(since = "0.1.0", note = "Use Ep::stream_send() instead")]
 pub unsafe fn stream_send_nbx(
-    ep: ucp_ep_h,
+    ep: &crate::ep::Ep,
     buffer: *const std::os::raw::c_void,
     count: usize,
     param: &RequestParam,
 ) -> Result<Option<Request>, Status> {
-    status_ptr_to_result(ucp_stream_send_nbx(ep, buffer, count, &param.handle))
+    status_ptr_to_result(ucp_stream_send_nbx(ep.handle, buffer, count, &param.handle))
 }
 
 /// Receive data on a stream.
@@ -200,14 +205,14 @@ pub unsafe fn stream_send_nbx(
 /// Caller must ensure `buffer` has space for `count` bytes.
 #[deprecated(since = "0.1.0", note = "Use Ep::stream_recv() instead")]
 pub unsafe fn stream_recv_nbx(
-    ep: ucp_ep_h,
+    ep: &crate::ep::Ep,
     buffer: *mut std::os::raw::c_void,
     count: usize,
     length: *mut usize,
     param: &RequestParam,
 ) -> Result<Option<Request>, Status> {
     status_ptr_to_result(ucp_stream_recv_nbx(
-        ep,
+        ep.handle,
         buffer,
         count,
         length,
@@ -224,7 +229,7 @@ pub unsafe fn stream_recv_nbx(
 #[deprecated(since = "0.1.0", note = "Use Worker::stream_poll() instead")]
 pub unsafe fn stream_worker_poll(
     worker: &crate::worker::Worker,
-    poll_eps: *mut ucp_stream_poll_ep_t,
+    poll_eps: *mut StreamPollEp,
     max_eps: usize,
     flags: u32,
 ) -> isize {
@@ -239,10 +244,10 @@ pub unsafe fn stream_worker_poll(
 /// # Safety
 /// The returned data pointer must be released with `stream_data_release`.
 pub unsafe fn stream_recv_data_nb(
-    ep: ucp_ep_h,
+    ep: &crate::ep::Ep,
     length: *mut usize,
 ) -> Result<Option<*mut std::os::raw::c_void>, Status> {
-    let ptr = ucp_stream_recv_data_nb(ep, length);
+    let ptr = ucp_stream_recv_data_nb(ep.handle, length);
     if ptr.is_null() {
         return Ok(None);
     }
