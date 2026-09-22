@@ -36,6 +36,10 @@ impl MemHandle {
     /// Query attributes of this memory handle.
     pub fn query(&self) -> Result<MemAttr, ucs_status_t> {
         let mut attr: ucp_mem_attr_t = unsafe { std::mem::zeroed() };
+        // Request address, length, and memory type so UCX fills them in.
+        attr.field_mask = ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_ADDRESS as u64
+            | ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_LENGTH as u64
+            | ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_MEM_TYPE as u64;
         let result = status_to_result(unsafe { ucp_mem_query(self.handle, &mut attr) });
         match result {
             Ok(()) => Ok(MemAttr { handle: attr }),
