@@ -78,7 +78,8 @@ mod tests {
 
     #[test]
     fn test_config_modify() {
-        let config_ptr = Config::read("", "").expect("config read");
+        let config = Config::read("", "").expect("config read");
+        let config_ptr = config.handle();
         assert!(!config_ptr.is_null(), "config pointer is null");
 
         // UCX 1.20.1 requires uppercase config key names (matching env var names

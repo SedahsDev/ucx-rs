@@ -274,31 +274,27 @@ mod tests {
 
     #[test]
     fn test_amrecvcb_signature_ok() {
-        let result = unsafe {
-            dummy_am_cb(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                0,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        };
+        let result = dummy_am_cb(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
         assert_eq!(result, ucs_status_t::UCS_OK);
     }
 
     #[test]
     fn test_amrecvcb_signature_error() {
-        let result = unsafe {
-            am_cb_return_error(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                0,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        };
+        let result = am_cb_return_error(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
         assert_eq!(result, ucs_status_t::UCS_ERR_INVALID_PARAM);
     }
 

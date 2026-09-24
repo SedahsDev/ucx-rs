@@ -28,20 +28,24 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn read(name: &str, file: &str) -> Result<*mut ucp_config_t, ucs_status_t> {
+    pub fn read(name: &str, file: &str) -> Result<Config, ucs_status_t> {
         let mut config: *mut ucp_config_t = std::ptr::null_mut();
         let c_name = CString::new(name).unwrap();
         let c_file = CString::new(file).unwrap();
         status_to_result(unsafe { ucp_config_read(c_name.as_ptr(), c_file.as_ptr(), &mut config) })
-            .unwrap();
-        Ok(config)
+            .map(|()| Config { handle: config })
+    }
+
+    /// Get the raw config handle (for testing purposes).
+    #[cfg(test)]
+    pub fn handle(&self) -> *mut ucp_config_t {
+        self.handle
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
-        let config = Config::read("", "").unwrap();
-        Config { handle: config }
+        Config::read("", "").unwrap()
     }
 }
 
@@ -204,6 +208,9 @@ impl Drop for Context {
         unsafe { ucp_cleanup(self.handle) };
     }
 }
+
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
 
 #[cfg(test)]
 mod tests {
@@ -505,7 +512,8 @@ mod tests {
 
     #[test]
     fn test_context_config_read() {
-        let config_ptr = Config::read("", "").expect("config read");
+        let config = Config::read("", "").expect("config read");
+        let config_ptr = config.handle();
         assert!(!config_ptr.is_null(), "config pointer should not be null");
     }
 
