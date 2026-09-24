@@ -16,8 +16,91 @@ pub mod tag;
 pub mod version;
 pub mod worker;
 
+// Re-export FFI types for use in public API
+pub use crate::ffi::{
+    ucs_status_t, ucp_datatype_t, ucp_config_t, ucp_worker_params_t, ucp_am_handler_param_t,
+    ucp_listener_attr, ucp_ep_h, ucp_worker_h, ucp_context_h, ucp_mem_h, ucp_rkey_h,
+    ucp_generic_dt_ops, ucp_datatype_attr, ucp_dt_create_generic, ucp_dt_destroy, ucp_dt_query,
+};
+
 use std::ffi::CString;
 use std::ptr::NonNull;
+
+/// UCX error codes as a native Rust type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    Ok,
+    ErrGeneric,
+    ErrNoMem,
+    ErrOrg,
+    ErrNotSupported,
+    ErrInvalidArg,
+    ErrBusy,
+    ErrExceeded,
+    ErrInProgress,
+    ErrTimeout,
+    ErrNoRoute,
+    ErrSocketFailure,
+    ErrAccess,
+    ErrProtoMismatch,
+    ErrNoResource,
+    ErrFailFast,
+    ErrBadParameter,
+    ErrMessageTruncated,
+    ErrNotConfigured,
+    ErrProcedureNotFound,
+    ErrRequest,
+    ErrTooManyErrors,
+    ErrNotReachable,
+    ErrDisconnected,
+    ErrNoProbe,
+    ErrWouldBlock,
+    ErrIo,
+    ErrProtocol,
+    ErrNoAddr,
+    ErrTimeoutElapsed,
+    ErrTransport,
+    ErrCanceled,
+    ErrUnreachable,
+    ErrUnavailable,
+    ErrUnsupported,
+    ErrBadAddress,
+    ErrTooManySets,
+    ErrFileAlreadyExists,
+    ErrTooManyFilesOpen,
+    ErrFile,
+    ErrLast,
+}
+
+impl ErrorCode {
+    fn from_ucs_status(status: ffi::ucs_status_t) -> Self {
+        match status {
+            ffi::ucs_status_t::UCS_OK => ErrorCode::Ok,
+            ffi::ucs_status_t::UCS_ERR_NO_RESOURCE => ErrorCode::ErrNoResource,
+            ffi::ucs_status_t::UCS_ERR_IO_ERROR => ErrorCode::ErrIo,
+            ffi::ucs_status_t::UCS_ERR_NO_MEMORY => ErrorCode::ErrNoMem,
+            ffi::ucs_status_t::UCS_ERR_INVALID_PARAM => ErrorCode::ErrInvalidArg,
+            ffi::ucs_status_t::UCS_ERR_UNREACHABLE => ErrorCode::ErrUnreachable,
+            ffi::ucs_status_t::UCS_ERR_INVALID_ADDR => ErrorCode::ErrBadAddress,
+            ffi::ucs_status_t::UCS_ERR_NOT_IMPLEMENTED => ErrorCode::ErrNotSupported,
+            ffi::ucs_status_t::UCS_ERR_MESSAGE_TRUNCATED => ErrorCode::ErrMessageTruncated,
+            ffi::ucs_status_t::UCS_ERR_NO_PROGRESS => ErrorCode::ErrNoProbe,
+            ffi::ucs_status_t::UCS_ERR_BUFFER_TOO_SMALL => ErrorCode::ErrExceeded,
+            ffi::ucs_status_t::UCS_ERR_NO_ELEM => ErrorCode::ErrGeneric,
+            ffi::ucs_status_t::UCS_ERR_BUSY => ErrorCode::ErrBusy,
+            ffi::ucs_status_t::UCS_ERR_CANCELED => ErrorCode::ErrCanceled,
+            ffi::ucs_status_t::UCS_ERR_ALREADY_EXISTS => ErrorCode::ErrFileAlreadyExists,
+            ffi::ucs_status_t::UCS_ERR_OUT_OF_RANGE => ErrorCode::ErrExceeded,
+            ffi::ucs_status_t::UCS_ERR_TIMED_OUT => ErrorCode::ErrTimeout,
+            ffi::ucs_status_t::UCS_ERR_EXCEEDS_LIMIT => ErrorCode::ErrExceeded,
+            ffi::ucs_status_t::UCS_ERR_UNSUPPORTED => ErrorCode::ErrUnsupported,
+            ffi::ucs_status_t::UCS_ERR_REJECTED => ErrorCode::ErrNotSupported,
+            ffi::ucs_status_t::UCS_ERR_NOT_CONNECTED => ErrorCode::ErrDisconnected,
+            ffi::ucs_status_t::UCS_ERR_LAST => ErrorCode::ErrLast,
+            _ => ErrorCode::ErrGeneric,
+        }
+    }
+}
 
 // UCX request backed by a ucs_status_ptr_t that is non-null and not an error, thus is a request pointer
 pub struct Request {
@@ -35,10 +118,7 @@ impl Request {
     #[inline]
     pub fn new(request_handle: *mut std::os::raw::c_void) -> Option<Request> {
         let request = NonNull::<::std::os::raw::c_void>::new(request_handle);
-        match request {
-            None => None,
-            Some(x) => Some(Request { handle: x }),
-        }
+        request.map(|x| Request { handle: x })
     }
 
     /// Create a Request from a raw pointer, assuming the pointer is valid and non-null.
@@ -54,12 +134,12 @@ impl Request {
 
     // check an outstanding request. Returns an error if the request had an error, returns false if the request is not completed, returns true if the request is completed
     #[inline]
-    pub fn check_finished(&self) -> Result<bool, ucs_status_t> {
+    pub fn check_finished(&self) -> Result<bool, ErrorCode> {
         let status = unsafe { ucp_request_check_status(self.handle.as_ptr()) };
-        if status as usize >= ucs_status_t::UCS_ERR_LAST as usize {
-            return Err(unsafe { std::mem::transmute(status as i8) });
+        if (status as i64) < 0 {
+            return Err(ErrorCode::from_ucs_status(status));
         }
-        Ok(status == ucs_status_t::UCS_OK)
+        Ok(status as i32 == ucs_status_t::UCS_OK as i32)
     }
 }
 
@@ -77,21 +157,19 @@ impl Request {
 // produces extremely efficient assembly
 
 #[inline]
-pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, ucs_status_t> {
+pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, ErrorCode> {
     // This is equivlent to the UCS_PTR_IS_ERR() macro.
     if ptr as usize >= ucs_status_t::UCS_ERR_LAST as usize {
-        // The transmute() function is how you access C style memory magic. This function will
-        // take the intput pointer and then translate it into i8 and then rust will turn the i8
-        // into the proper ucs_status_t.
-        return Err(unsafe { std::mem::transmute(ptr as i8) });
+        let status = unsafe { std::mem::transmute::<i8, ffi::ucs_status_t>(ptr as i8) };
+        return Err(ErrorCode::from_ucs_status(status));
     }
     Ok(Request::new(ptr))
 }
 
 #[inline]
-pub fn status_to_result(status: ucs_status_t) -> Result<(), ucs_status_t> {
-    if (status as i8) < 0 {
-        return Err(status);
+pub fn status_to_result(status: ucs_status_t) -> Result<(), ErrorCode> {
+    if (status as i64) < 0 {
+        return Err(ErrorCode::from_ucs_status(status));
     }
     Ok(())
 }
@@ -104,6 +182,12 @@ pub struct RequestParam {
 pub struct RequestParamBuilder {
     uninit_handle: std::mem::MaybeUninit<ucp_request_param_t>,
     field_mask: u32,
+}
+
+impl Default for RequestParamBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestParamBuilder {
@@ -171,11 +255,9 @@ impl RequestParamBuilder {
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         params.op_attr_mask = self.field_mask;
 
-        let ucp_param = RequestParam {
+        RequestParam {
             handle: unsafe { self.uninit_handle.assume_init() },
-        };
-
-        ucp_param
+        }
     }
 }
 
@@ -188,26 +270,28 @@ pub unsafe fn request_alloc(worker: ucp_worker_h) -> Request {
     Request::from_raw(ptr)
 }
 
-/// Field masks for ucp_request_attr_t.
+/// Query request attributes.
+///
+/// Field masks for ucp_request_attr_t:
 /// - UCP_REQUEST_ATTR_FIELD_INFO_STRING = 1
 /// - UCP_REQUEST_ATTR_FIELD_INFO_STRING_SIZE = 2
 /// - UCP_REQUEST_ATTR_FIELD_STATUS = 4
 /// - UCP_REQUEST_ATTR_FIELD_MEM_TYPE = 8
-
-/// Query request attributes.
 ///
 /// # Safety
 /// Caller must ensure `request` is a valid request pointer.
 pub unsafe fn request_query(
     request: *mut std::os::raw::c_void,
     mask: u64,
-) -> Result<RequestAttr, ucs_status_t> {
+) -> Result<RequestAttr, ErrorCode> {
     let mut attr: ucp_request_attr_t = std::mem::zeroed();
     attr.field_mask = mask;
-    status_to_result(ucp_request_query(request, &mut attr)).map(|()| {
-        RequestAttr {
-            status: if mask & 4 != 0 { attr.status } else { ucs_status_t::UCS_OK },
-        }
+    status_to_result(ucp_request_query(request, &mut attr)).map(|()| RequestAttr {
+        status: if mask & 4 != 0 {
+            attr.status
+        } else {
+            ucs_status_t::UCS_OK
+        },
     })
 }
 
@@ -273,7 +357,7 @@ mod tests {
             .build();
 
         let worker_features = worker::ParamsBuilder::new()
-            .thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_MULTI)
+            .thread_mode(worker::ThreadMode::Multi)
             .build();
 
         let context = Context::new(&context::Config::default(), &params).unwrap();
@@ -283,7 +367,7 @@ mod tests {
         let addr = RemoteWorkerAddress::new(packed_addr.to_vec());
 
         let ep_param = ep::ParamsBuilder::new().address(&addr).build();
-        let ep = worker.create_ep(&ep_param).unwrap();
+        let ep = worker.create_ep(ep_param).unwrap();
         // If we don't drop this than the compiler complains about how the
         // worker is borrowed in the packed_addr.
         drop(packed_addr);
@@ -323,8 +407,7 @@ mod tests {
             .ep
             .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
             .unwrap();
-        if req.is_some() {
-            let req = req.unwrap();
+        if let Some(req) = req {
             while !req.check_finished().unwrap() {
                 comms.worker.progress();
             }
