@@ -35,7 +35,7 @@ pub struct LibAttr {
 }
 
 /// Query library-wide attributes.
-pub fn lib_query() -> Result<LibAttr, ucs_status_t> {
+pub fn lib_query() -> Result<_, crate::ErrorCode> {
     let mut attr: ucp_lib_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL;
     status_to_result(unsafe { ucp_lib_query(&mut attr) }).map(|()| LibAttr {
@@ -49,7 +49,7 @@ pub fn lib_query() -> Result<LibAttr, ucs_status_t> {
     since = "0.1.0",
     note = "ucp_init removed in UCX 1.18; use Context::init_default() or Context::new()"
 )]
-pub unsafe fn init_raw() -> Result<ucp_context_h, ucs_status_t> {
+pub unsafe fn init_raw() -> Result<_, crate::ErrorCode> {
     Err(ucs_status_t::UCS_ERR_UNSUPPORTED)
 }
 

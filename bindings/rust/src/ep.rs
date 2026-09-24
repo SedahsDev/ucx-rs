@@ -19,13 +19,13 @@ impl Ep {
         self.handle
     }
 
-    pub fn new(ep_params: &Params, worker: &Worker) -> Result<Ep, ucs_status_t> {
+    pub fn new(ep_params: &Params, worker: &Worker) -> Result<Ep, crate::ErrorCode> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
             status_to_result(unsafe { ucp_ep_create(worker.handle, &ep_params.handle, &mut ep) });
         match result {
             Ok(()) => Ok(Ep { handle: ep }),
-            Err(ucs_status_t) => Err(ucs_status_t),
+            Err(e) => Err(e),
         }
     }
 
@@ -45,7 +45,7 @@ impl Ep {
     /// - UCP_EP_ATTR_FIELD_REMOTE_SOCKADDR = 4
     /// - UCP_EP_ATTR_FIELD_TRANSPORTS = 8
     /// - UCP_EP_ATTR_FIELD_USER_DATA = 16
-    pub fn query(&self, mask: u64) -> Result<EpAttr, ucs_status_t> {
+    pub fn query(&self, mask: u64) -> Result<EpAttr, crate::ErrorCode> {
         let mut attr: ucp_ep_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = mask;
         crate::status_to_result(unsafe { ucp_ep_query(self.handle, &mut attr) }).map(|()| {

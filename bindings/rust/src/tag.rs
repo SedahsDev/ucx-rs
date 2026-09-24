@@ -14,7 +14,7 @@ impl Ep {
         data: &[u8],
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_tag_send_nbx(
                 self.handle,
@@ -74,7 +74,7 @@ impl Worker {
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_tag_recv_nbx(
                 self.handle,
@@ -109,7 +109,7 @@ impl Worker {
         data: &mut [u8],
         message: &MessageHandle,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         if !message.removed {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
@@ -126,7 +126,7 @@ impl Worker {
 }
 
 impl Request {
-    pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, ucs_status_t> {
+    pub fn tag_recv_test(&mut self) -> Result<_, crate::ErrorCode> {
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::uninit();
         let status = unsafe { ucp_tag_recv_request_test(self.handle.as_mut(), info.as_mut_ptr()) };
         match status {

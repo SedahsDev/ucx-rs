@@ -19,7 +19,7 @@ impl MemHandle {
     pub fn map(
         context: &Context,
         params: &mut MemMapParamsBuilder,
-    ) -> Result<MemHandle, ucs_status_t> {
+    ) -> Result<PackedMemhBuffer, crate::ErrorCode> {
         let built = params.build();
         let mut memh: ucp_mem_h = std::ptr::null_mut();
         let result =
@@ -29,22 +29,22 @@ impl MemHandle {
                 context: context.handle,
                 handle: memh,
             }),
-            Err(e) => Err(e),
+            Err(e) => Err(crate::ErrorCode::from_ucs_status(e)),
         }
     }
 
     /// Query attributes of this memory handle.
-    pub fn query(&self) -> Result<MemAttr, ucs_status_t> {
+    pub fn query(&self) -> Result<MemAttr, crate::ErrorCode> {
         let mut attr: ucp_mem_attr_t = unsafe { std::mem::zeroed() };
         let result = status_to_result(unsafe { ucp_mem_query(self.handle, &mut attr) });
         match result {
             Ok(()) => Ok(MemAttr { handle: attr }),
-            Err(e) => Err(e),
+            Err(e) => Err(crate::ErrorCode::from_ucs_status(e)),
         }
     }
 
     /// Give advice about how the application will access the memory region.
-    pub fn advise(&self, params: &mut MemAdviseParamsBuilder) -> Result<(), ucs_status_t> {
+    pub fn advise(&self, params: &mut MemAdviseParamsBuilder) -> Result<(), crate::ErrorCode> {
         let mut built = params.build();
         status_to_result(unsafe { ucp_mem_advise(self.context, self.handle, &mut built.handle) })
     }
@@ -237,7 +237,7 @@ pub struct MemhPackParams {
 pub fn pack_memh(
     memh: &MemHandle,
     params: &mut MemhPackParamsBuilder,
-) -> Result<PackedMemhBuffer, ucs_status_t> {
+) -> Result<PackedMemhBuffer, crate::ErrorCode> {
     let built = params.build();
     let mut buffer: *mut std::os::raw::c_void = std::ptr::null_mut();
     let mut length: usize = 0;
@@ -246,7 +246,7 @@ pub fn pack_memh(
     });
     match result {
         Ok(()) => Ok(PackedMemhBuffer { buffer, length }),
-        Err(e) => Err(e),
+        Err(e) => Err(crate::ErrorCode::from_ucs_status(e)),
     }
 }
 
@@ -302,14 +302,14 @@ impl Drop for PackedMemhBuffer {
 /// This works on all memory domains (including `self`, `sysv`, `posix`) unlike
 /// `ucp_memh_pack` which requires the memory domain to support `pack_rkey`.
 /// The returned buffer is automatically released when dropped.
-pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedRkeyBuffer, ucs_status_t> {
+pub fn pack_rkey(context: &Context, memh: &MemHandle) -> Result<PackedMemhBuffer, crate::ErrorCode> {
     let mut buffer: *mut std::os::raw::c_void = std::ptr::null_mut();
     let mut size: usize = 0;
     let result =
         status_to_result(unsafe { ucp_rkey_pack(context.handle, memh.handle, &mut buffer, &mut size) });
     match result {
         Ok(()) => Ok(PackedRkeyBuffer { buffer, size }),
-        Err(e) => Err(e),
+        Err(e) => Err(crate::ErrorCode::from_ucs_status(e)),
     }
 }
 

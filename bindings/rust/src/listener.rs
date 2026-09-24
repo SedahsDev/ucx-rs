@@ -27,7 +27,7 @@ impl Listener {
     pub unsafe fn create(
         worker: ucp_worker_h,
         sockaddr: *const ucs_sock_addr_t,
-    ) -> Result<Self, ucs_status_t> {
+    ) -> Result<_, crate::ErrorCode> {
         let mut listener: ucp_listener_h = std::ptr::null_mut();
         let mut params: ucp_listener_params = unsafe { std::mem::zeroed() };
         params.field_mask = UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
@@ -36,7 +36,7 @@ impl Listener {
     }
 
     /// Query listener attributes.
-    pub fn query(&self) -> Result<ListenerAttr, ucs_status_t> {
+    pub fn query(&self) -> Result<ListenerAttr, crate::ErrorCode> {
         let mut attr: ucp_listener_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = 1; // UCP_LISTENER_ATTR_FIELD_SOCKADDR
         status_to_result(unsafe { ucp_listener_query(self.handle, &mut attr) }).map(|()| ListenerAttr {
@@ -45,7 +45,7 @@ impl Listener {
     }
 
     /// Reject a connection request.
-    pub fn reject(&self, conn_request: ucp_conn_request_h) -> Result<(), ucs_status_t> {
+    pub fn reject(&self, conn_request: ucp_conn_request_h) -> Result<(), crate::ErrorCode> {
         status_to_result(unsafe { ucp_listener_reject(self.handle, conn_request) })
     }
 }
@@ -72,7 +72,7 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = 2;
 pub fn conn_request_query(
     conn_request: ucp_conn_request_h,
     mask: u64,
-) -> Result<ConnRequestAttr, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     let mut attr: ucp_conn_request_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
     status_to_result(unsafe { ucp_conn_request_query(conn_request, &mut attr) }).map(|()| ConnRequestAttr {

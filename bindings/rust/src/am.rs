@@ -18,7 +18,7 @@ type AmRecvCb = unsafe extern "C" fn(
 
 impl Worker {
     #[inline]
-    pub fn am_register(&self, am_param: &HandlerParams) -> Result<(), ucs_status_t> {
+    pub fn am_register(&self, am_param: &HandlerParams) -> Result<(), crate::ErrorCode> {
         status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &am_param.handle) })
     }
 }
@@ -31,7 +31,7 @@ impl Ep {
         header: &[u8],
         data: &[u8],
         params: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_am_send_nbx(
                 self.handle,

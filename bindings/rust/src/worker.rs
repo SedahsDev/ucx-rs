@@ -31,7 +31,7 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    pub(crate) fn new(context: &Context, params: &Params) -> Result<Worker, ucs_status_t> {
+    pub(crate) fn new(context: &Context, params: &Params) -> Result<_, crate::ErrorCode> {
         let mut worker: ucp_worker_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {
@@ -39,11 +39,11 @@ impl Worker {
         });
         match result {
             Ok(()) => Ok(Worker { handle: worker }),
-            Err(ucs_status_t) => Err(ucs_status_t),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn pack_address(&self) -> Result<WorkerAddress, ucs_status_t> {
+    pub fn pack_address(&self) -> Result<_, crate::ErrorCode> {
         let mut address: *mut ucp_address_t = std::ptr::null_mut();
         let mut size: usize = 0;
 
@@ -56,7 +56,7 @@ impl Worker {
                 parent: self,
                 size: size,
             }),
-            Err(ucs_status_t) => Err(ucs_status_t),
+            Err(e) => Err(e),
         }
     }
 
@@ -66,7 +66,7 @@ impl Worker {
         progress > 0
     }
 
-    pub fn create_ep(&self, ep_params: &ep::Params) -> Result<Ep, ucs_status_t> {
+    pub fn create_ep(&self, ep_params: &ep::Params) -> Result<_, crate::ErrorCode> {
         return Ep::new(&ep_params, &self);
     }
 
@@ -74,7 +74,7 @@ impl Worker {
         unsafe { ucp_request_cancel(self.handle, request.handle.as_mut()) };
     }
 
-    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -87,17 +87,17 @@ impl Worker {
     }
 
     /// Worker fence — ensures ordering of operations.
-    pub fn fence(&self) -> Result<(), ucs_status_t> {
+    pub fn fence(&self) -> Result<(), crate::ErrorCode> {
         crate::status_to_result(unsafe { ucp_worker_fence(self.handle) })
     }
 
     /// Arm the worker for asynchronous completion.
-    pub fn arm(&self) -> Result<(), ucs_status_t> {
+    pub fn arm(&self) -> Result<(), crate::ErrorCode> {
         crate::status_to_result(unsafe { ucp_worker_arm(self.handle) })
     }
 
     /// Wait for an asynchronous event on the worker.
-    pub fn wait(&self) -> Result<(), ucs_status_t> {
+    pub fn wait(&self) -> Result<(), crate::ErrorCode> {
         crate::status_to_result(unsafe { ucp_worker_wait(self.handle) })
     }
 
@@ -115,7 +115,7 @@ impl Worker {
     }
 
     /// Get the event file descriptor for the worker.
-    pub fn get_efd(&self) -> Result<i32, ucs_status_t> {
+    pub fn get_efd(&self) -> Result<_, crate::ErrorCode> {
         let mut fd: std::os::raw::c_int = -1;
         crate::status_to_result(unsafe { ucp_worker_get_efd(self.handle, &mut fd) }).map(|()| fd)
     }
@@ -129,7 +129,7 @@ impl Worker {
     /// - UCP_WORKER_ATTR_FIELD_MAX_AM_HEADER = 8
     /// - UCP_WORKER_ATTR_FIELD_NAME = 16
     /// - UCP_WORKER_ATTR_FIELD_MAX_INFO_STRING = 32
-    pub fn query(&self, mask: u64) -> Result<WorkerAttr, ucs_status_t> {
+    pub fn query(&self, mask: u64) -> Result<_, crate::ErrorCode> {
         let mut attr: ucp_worker_attr = unsafe { std::mem::zeroed() };
         attr.field_mask = mask;
         crate::status_to_result(unsafe { ucp_worker_query(self.handle, &mut attr) }).map(|()| {
@@ -158,7 +158,7 @@ pub struct WorkerAttr {
 /// Query worker address attributes.
 ///
 /// Field mask: UCP_WORKER_ADDRESS_ATTR_FIELD_UID = 1
-pub fn address_query(address: *const ucp_address_t) -> Result<u64, ucs_status_t> {
+pub fn address_query(address: *const ucp_address_t) -> Result<_, crate::ErrorCode> {
     let mut attr: ucp_worker_address_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = 1; // UCP_WORKER_ADDRESS_ATTR_FIELD_UID
     crate::status_to_result(unsafe { ucp_worker_address_query(address as *mut _, &mut attr) }).map(|()| {
@@ -222,7 +222,7 @@ bitflags! {
 pub unsafe fn worker_set_am_recv_handler_nbx(
     worker: ucp_worker_h,
     param: &ucp_am_handler_param_t,
-) -> Result<(), ucs_status_t> {
+) -> Result<(), crate::ErrorCode> {
     status_to_result(ucp_worker_set_am_recv_handler(worker, param))
 }
 

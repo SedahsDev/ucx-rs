@@ -13,7 +13,7 @@ use crate::RequestParam;
 
 impl Ep {
     /// Send data on a stream (safe wrapper).
-    pub fn stream_send(&self, data: &[u8], param: &RequestParam) -> Result<Option<Request>, ucs_status_t> {
+    pub fn stream_send(&self, data: &[u8], param: &RequestParam) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_stream_send_nbx(self.handle, data.as_ptr() as _, data.len(), &param.handle)
         })
@@ -22,7 +22,7 @@ impl Ep {
     /// Receive data on a stream (safe wrapper).
     ///
     /// Returns the actual number of bytes received.
-    pub fn stream_recv(&self, buf: &mut [u8], param: &RequestParam) -> Result<(Option<Request>, usize), ucs_status_t> {
+    pub fn stream_recv(&self, buf: &mut [u8], param: &RequestParam) -> Result<_, crate::ErrorCode> {
         let mut length: usize = 0;
         let res = status_ptr_to_result(unsafe {
             ucp_stream_recv_nbx(self.handle, buf.as_mut_ptr() as _, buf.len(), &mut length, &param.handle)
@@ -53,7 +53,7 @@ pub unsafe fn stream_send_nbx(
     buffer: *const std::os::raw::c_void,
     count: usize,
     param: &RequestParam,
-) -> Result<Option<Request>, ucs_status_t> {
+) -> Result<Option<Request>, crate::ErrorCode> {
     status_ptr_to_result(ucp_stream_send_nbx(ep, buffer, count, &param.handle))
 }
 
@@ -70,7 +70,7 @@ pub unsafe fn stream_recv_nbx(
     count: usize,
     length: *mut usize,
     param: &RequestParam,
-) -> Result<Option<Request>, ucs_status_t> {
+) -> Result<Option<Request>, crate::ErrorCode> {
     status_ptr_to_result(ucp_stream_recv_nbx(
         ep,
         buffer,
@@ -106,7 +106,7 @@ pub unsafe fn stream_worker_poll(
 pub unsafe fn stream_recv_data_nb(
     ep: ucp_ep_h,
     length: *mut usize,
-) -> Result<Option<Request>, ucs_status_t> {
+) -> Result<Option<Request>, crate::ErrorCode> {
     status_ptr_to_result(ucp_stream_recv_data_nb(ep, length))
 }
 
@@ -117,7 +117,7 @@ pub unsafe fn stream_recv_data_nb(
 pub unsafe fn stream_recv_request_test(
     request: *mut std::os::raw::c_void,
     length: *mut usize,
-) -> Result<(), ucs_status_t> {
+) -> Result<(), crate::ErrorCode> {
     status_to_result(ucp_stream_recv_request_test(request, length))
 }
 

@@ -12,7 +12,7 @@ pub unsafe fn config_modify(
     config: *mut ucp_config_t,
     name: &str,
     value: &str,
-) -> Result<(), ucs_status_t> {
+) -> Result<(), crate::ErrorCode> {
     let cname = std::ffi::CString::new(name).expect("config name");
     let cvalue = std::ffi::CString::new(value).expect("config value");
     status_to_result(ucp_config_modify(config, cname.as_ptr(), cvalue.as_ptr()))
@@ -37,7 +37,7 @@ pub struct ContextAttr {
 pub unsafe fn context_query(
     context: ucp_context_h,
     mask: u64,
-) -> Result<ContextAttr, ucs_status_t> {
+) -> Result<ContextAttr, crate::ErrorCode> {
     let mut attr: ucp_context_attr = std::mem::zeroed();
     attr.field_mask = mask;
     status_to_result(ucp_context_query(context, &mut attr)).map(|()| {

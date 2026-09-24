@@ -22,7 +22,7 @@ pub struct RemoteKey {
 
 impl RemoteKey {
     /// Unpack a remote key from a packed buffer on this endpoint.
-    pub fn unpack(ep: &Ep, rkey_buffer: &[u8]) -> Result<RemoteKey, ucs_status_t> {
+    pub fn unpack(ep: &Ep, rkey_buffer: &[u8]) -> Result<RemoteKey, crate::ErrorCode> {
         let mut rkey: ucp_rkey_h = std::ptr::null_mut();
         status_to_result(unsafe {
             ucp_ep_rkey_unpack(ep.handle, rkey_buffer.as_ptr() as *const _, &mut rkey)
@@ -58,7 +58,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -78,7 +78,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
@@ -100,7 +100,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -121,7 +121,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -142,7 +142,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -163,7 +163,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -184,7 +184,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -206,7 +206,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         let operand = [expected, replacement];
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -230,7 +230,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -251,7 +251,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -272,7 +272,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -293,7 +293,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -314,7 +314,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -336,7 +336,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         let operand = [expected, replacement];
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -361,7 +361,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -383,7 +383,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -405,7 +405,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
@@ -428,7 +428,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, ucs_status_t> {
+    ) -> Result<Option<Request>, crate::ErrorCode> {
         let operand = [expected, replacement];
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
@@ -456,7 +456,7 @@ pub unsafe fn put_nbx(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     status_ptr_to_result(ucp_put_nbx(
         ep,
         buffer,
@@ -479,7 +479,7 @@ pub unsafe fn get_nbx(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     status_ptr_to_result(ucp_get_nbx(
         ep,
         buffer,
@@ -503,7 +503,7 @@ pub unsafe fn atomic_op_nbx(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep,
         opcode,
@@ -546,7 +546,7 @@ pub unsafe fn atomic_fetch_nbx(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep,
         opcode,
@@ -568,7 +568,7 @@ pub unsafe fn atomic_fetch_nbx(
 pub unsafe fn ep_rkey_unpack(
     ep: ucp_ep_h,
     rkey_buffer: *const std::os::raw::c_void,
-) -> Result<ucp_rkey_h, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     let mut rkey: ucp_rkey_h = std::ptr::null_mut();
     status_to_result(ucp_ep_rkey_unpack(ep, rkey_buffer, &mut rkey)).map(|()| rkey)
 }
@@ -583,7 +583,7 @@ pub unsafe fn ep_rkey_unpack(
 pub unsafe fn rkey_ptr(
     rkey: ucp_rkey_h,
     raddr: u64,
-) -> Result<*mut std::os::raw::c_void, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     let mut addr: *mut std::os::raw::c_void = std::ptr::null_mut();
     status_to_result(ucp_rkey_ptr(rkey, raddr, &mut addr)).map(|()| addr)
 }
@@ -614,7 +614,7 @@ pub unsafe fn atomic_fadd32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -639,7 +639,7 @@ pub unsafe fn atomic_fadd64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -664,7 +664,7 @@ pub unsafe fn atomic_fswap32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -689,7 +689,7 @@ pub unsafe fn atomic_fswap64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -716,7 +716,7 @@ pub unsafe fn atomic_fcswap32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
@@ -744,7 +744,7 @@ pub unsafe fn atomic_fcswap64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     let operand = [expected, replacement];
     atomic_op_nbx(
         ep,
@@ -768,7 +768,7 @@ pub unsafe fn atomic_add32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -791,7 +791,7 @@ pub unsafe fn atomic_add64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
@@ -814,7 +814,7 @@ pub unsafe fn atomic_swap32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -837,7 +837,7 @@ pub unsafe fn atomic_swap64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
@@ -862,7 +862,7 @@ pub unsafe fn atomic_fxor32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -887,7 +887,7 @@ pub unsafe fn atomic_fxor64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -910,7 +910,7 @@ pub unsafe fn atomic_xor32(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
@@ -933,7 +933,7 @@ pub unsafe fn atomic_xor64(
     remote_addr: u64,
     rkey: ucp_rkey_h,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, ucs_status_t> {
+) -> Result<_, crate::ErrorCode> {
     atomic_op_nbx(
         ep,
         ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,

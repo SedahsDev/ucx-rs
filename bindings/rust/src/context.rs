@@ -28,7 +28,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn read(name: &str, file: &str) -> Result<*mut ucp_config_t, ucs_status_t> {
+    pub fn read(name: &str, file: &str) -> Result<Config, crate::ErrorCode> {
         let mut config: *mut ucp_config_t = std::ptr::null_mut();
         let c_name = CString::new(name).unwrap();
         let c_file = CString::new(file).unwrap();
@@ -165,7 +165,7 @@ impl ParamsBuilder {
 }
 
 impl Context {
-    pub fn new(config: &Config, params: &Params) -> Result<Context, ucs_status_t> {
+    pub fn new(config: &Config, params: &Params) -> Result<Context, crate::ErrorCode> {
         let mut context: ucp_context_h = std::ptr::null_mut();
 
         let result = status_to_result(unsafe {
@@ -179,11 +179,11 @@ impl Context {
         });
         match result {
             Ok(()) => Ok(Context { handle: context }),
-            Err(ucs_status_t) => Err(ucs_status_t),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn worker_create<'a>(&'a self, params: &'a worker::Params) -> Result<Worker, ucs_status_t> {
+    pub fn worker_create<'a>(&'a self, params: &'a worker::Params) -> Result<_, crate::ErrorCode> {
         Worker::new(self, params)
     }
 }
