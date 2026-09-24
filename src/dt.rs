@@ -16,15 +16,21 @@ pub const UCP_DATATYPE_IOV: ucp_datatype_t = 2;
 /// Create a contiguous data type with the given element size (in bytes).
 /// Equivalent to the C macro `ucp_dt_make_contig(elem_size)`.
 ///
-/// The encoding packs the element size into the datatype handle.
-/// Element size 0 is treated as 1.
+/// The C macro encodes the element size as follows:
+/// - Size 0 is treated as 1
+/// - Size 1 returns `UCP_DATATYPE_CONTIG` (0)
+/// - Other sizes return `(elem_size << UCP_DATATYPE_SHIFT) | UCP_DATATYPE_CONTIG`
+///   where `UCP_DATATYPE_SHIFT = 3` and `UCP_DATATYPE_CONTIG = 0`.
 #[must_use]
 pub fn dt_make_contig(elem_size: usize) -> ucp_datatype_t {
+    const UCP_DATATYPE_SHIFT: u64 = 3;
+    const UCP_DATATYPE_CONTIG: u64 = 0;
     let size = if elem_size == 0 { 1 } else { elem_size };
+
     if size == 1 {
-        0 // UCP_DATATYPE_CONTIG for size 1
+        UCP_DATATYPE_CONTIG
     } else {
-        ((size - 1) as u64) | (1u64 << 16)
+        ((size as u64) << UCP_DATATYPE_SHIFT) | UCP_DATATYPE_CONTIG
     }
 }
 
