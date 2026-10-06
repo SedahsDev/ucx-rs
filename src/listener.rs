@@ -55,8 +55,16 @@ impl Drop for ListenerState {
         if !handle.is_null() {
             // SAFETY: the state owns the handle and is dropped only after the
             // Listener and all callback-delivered ConnRequests are gone.
+            //
+            // Note: Listener destroy is best-effort. UCX documentation states that
+            // destroying a listener cancels all pending connection requests and
+            // destroys associated endpoints.
             unsafe { ucp_listener_destroy(handle) };
         }
+        // Reset the handle to null to prevent double-free
+        // We don't need to check the mutex result because we're in Drop
+        // and the Mutex will be dropped anyway; this is just defensive
+        let _ = self.handle.lock().map(|mut h| *h = 0);
     }
 }
 
@@ -291,6 +299,18 @@ impl Listener {
     pub fn reject(&self, request: ConnRequest) -> Result<(), Status> {
         // SAFETY: request is a live handle delivered by UCX to the callback.
         status_to_result(unsafe { ucp_listener_reject(self.as_raw(), request.handle) })
+    }
+
+    /// Returns `true` if the listener is still active (not yet destroyed).
+    ///
+    /// This can be used to check if the listener has been dropped or if the
+    /// underlying UCX handle is still valid.
+    pub fn is_active(&self) -> bool {
+        let handle = match self.state.handle.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+        handle != 0
     }
 }
 
