@@ -99,9 +99,21 @@ impl Worker {
             .arg(Arc::as_ptr(&handler) as *mut std::ffi::c_void)
             .build();
         status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &params.handle) })?;
-        // UCX has no unregister operation. Keep replaced handlers alive until
-        // worker destruction because UCX may still dispatch an in-flight
-        // callback using the previous opaque argument.
+        // UCX has no unregister/unset operation for AM handlers. Keep replaced handlers
+        // alive until worker destruction because UCX may still dispatch an in-flight
+        // callback using the previous opaque argument (`arg` pointer).
+        //
+        // Cleanup strategy (Issue #100):
+        // - When a new handler is registered, the old `AmHandler` Arc is pushed to
+        //   `Worker::am_handlers` vector and retained.
+        // - The old handler's memory remains valid because the UCX callback pointer
+        //   still references it; dropping it prematurely would cause use-after-free.
+        // - When the worker is destroyed via `ucp_worker_destroy`, UCX will eventually
+        //   destroy all pending callbacks. By then, all Rust-side `AmHandler` instances
+        //   are still alive and will be dropped safely when `Worker`'s Drop impl
+        //   destroys the `am_handlers` vector.
+        //
+        // This ensures no dangling callbacks and no FFI leaks.
         self.am_handlers.push(handler);
         Ok(())
     }
