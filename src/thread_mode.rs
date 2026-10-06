@@ -3,8 +3,6 @@
 //! This wraps the `ucs_thread_mode_t` FFI type and provides a safe,
 //! idiomatic Rust interface.
 
-use crate::status::Status;
-
 /// Thread mode for UCX worker operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ThreadMode {
@@ -14,29 +12,31 @@ pub enum ThreadMode {
     Serialized,
     /// Multi-threaded access allowed.
     Multi,
+    /// A value UCX returned that this build's enum does not name.
+    Unknown,
 }
 
-impl From<ThreadMode> for crate::ffi::ucs_thread_mode_t {
-    fn from(mode: ThreadMode) -> Self {
-        match mode {
+impl ThreadMode {
+    /// Convert to the raw FFI thread mode. `Unknown` maps to the last known
+    /// variant so the conversion stays total.
+    pub(crate) const fn to_ffi(self) -> crate::ffi::ucs_thread_mode_t {
+        match self {
             ThreadMode::Single => crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE,
             ThreadMode::Serialized => crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED,
-            ThreadMode::Multi => crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_MULTI,
+            ThreadMode::Multi | ThreadMode::Unknown => {
+                crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
+            }
         }
     }
-}
 
-impl TryFrom<crate::ffi::ucs_thread_mode_t> for ThreadMode {
-    type Error = crate::Status;
-
-    fn try_from(mode: crate::ffi::ucs_thread_mode_t) -> Result<Self, Self::Error> {
-        match mode {
-            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE => Ok(ThreadMode::Single),
-            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED => Ok(ThreadMode::Serialized),
-            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_MULTI => Ok(ThreadMode::Multi),
-            _ => Err(Status::from_raw(
-                crate::ffi::ucs_status_t::UCS_ERR_INVALID_PARAM,
-            )),
+    /// Convert from the raw FFI thread mode. Unknown values map to
+    /// [`ThreadMode::Unknown`].
+    pub(crate) fn from_ffi(raw: crate::ffi::ucs_thread_mode_t) -> Self {
+        match raw {
+            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE => ThreadMode::Single,
+            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED => ThreadMode::Serialized,
+            crate::ffi::ucs_thread_mode_t::UCS_THREAD_MODE_MULTI => ThreadMode::Multi,
+            _ => ThreadMode::Unknown,
         }
     }
 }

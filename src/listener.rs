@@ -4,22 +4,18 @@ use crate::ep::SockAddrStorage;
 
 /// Native alias for the listener accept callback.
 /// Mirrors the C signature (raw ep handle is unavoidable for a C callback).
-pub type AcceptHandlerCb = Option<unsafe extern "C" fn(
-    ep: ucp_ep_h,
-    arg: *mut std::os::raw::c_void,
-)>;
+pub type AcceptHandlerCb =
+    Option<unsafe extern "C" fn(ep: ucp_ep_h, arg: *mut std::os::raw::c_void)>;
 
 /// Native alias for the listener connection-request callback.
 /// Mirrors the C signature (raw conn-request handle is unavoidable for a C callback).
-pub type ConnHandlerCb = Option<unsafe extern "C" fn(
-    conn_request: ucp_conn_request_h,
-    arg: *mut std::os::raw::c_void,
-)>;
+pub type ConnHandlerCb =
+    Option<unsafe extern "C" fn(conn_request: ucp_conn_request_h, arg: *mut std::os::raw::c_void)>;
 
 use crate::ffi::*;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
+use crate::Status;
 use bitflags::bitflags;
 use libc::{sockaddr_in, sockaddr_in6};
 use std::mem::MaybeUninit;
@@ -115,9 +111,18 @@ pub struct ParamsBuilder {
     params: ucp_listener_params,
 }
 
-/// Compatibility name for code that treats listener parameters as a value.
-pub type ListenerParams = ParamsBuilder;
 pub type ListenerParamsBuilder = ParamsBuilder;
+
+/// Built listener parameters, ready for [`Listener::create_with_params`].
+pub struct ListenerParams {
+    params: ucp_listener_params,
+}
+
+impl std::fmt::Debug for ListenerParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListenerParams").finish_non_exhaustive()
+    }
+}
 
 impl ParamsBuilder {
     pub fn new() -> Self {
@@ -164,8 +169,10 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn build(self) -> ucp_listener_params {
-        self.params
+    pub fn build(self) -> ListenerParams {
+        ListenerParams {
+            params: self.params,
+        }
     }
 }
 
@@ -194,8 +201,9 @@ impl Listener {
         let mut handle = ptr::null_mut();
         // `storage` keeps the address backing memory alive through the call;
         // UCX copies the address as part of listener creation.
-        let result =
-            status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) });
+        let result = status_to_result(unsafe {
+            ucp_listener_create(worker.handle, &params.params, &mut handle)
+        });
         result.map(|()| Self {
             state: Arc::new(ListenerState {
                 handle: Mutex::new(handle as usize),
@@ -206,20 +214,15 @@ impl Listener {
 
     /// Create a listener from explicitly-built parameters. Callback execution
     /// follows the progress-context rules documented on [`Self::create`].
-    pub fn create_with_params(
-        worker: &Worker,
-        params: &ParamsBuilder,
-    ) -> Result<Self, Status> {
-        let params = params.clone_params();
+    pub fn create_with_params(worker: &Worker, params: &ListenerParams) -> Result<Self, Status> {
         let mut handle = ptr::null_mut();
-        status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) }).map(
-            |()| Self {
+        status_to_result(unsafe { ucp_listener_create(worker.handle, &params.params, &mut handle) })
+            .map(|()| Self {
                 state: Arc::new(ListenerState {
                     handle: Mutex::new(handle as usize),
                     conn_handler: None,
                 }),
-            },
-        )
+            })
     }
 
     /// Create a listener with a safe connection callback. The callback runs in
@@ -253,8 +256,9 @@ impl Listener {
                 .build()
         };
         let mut handle = ptr::null_mut();
-        match status_to_result(unsafe { ucp_listener_create(worker.handle, &params, &mut handle) })
-        {
+        match status_to_result(unsafe {
+            ucp_listener_create(worker.handle, &params.params, &mut handle)
+        }) {
             Ok(()) => {
                 *state
                     .handle
@@ -291,12 +295,6 @@ impl Listener {
     pub fn reject(&self, request: ConnRequest) -> Result<(), Status> {
         // SAFETY: request is a live handle delivered by UCX to the callback.
         status_to_result(unsafe { ucp_listener_reject(self.as_raw(), request.handle) })
-    }
-}
-
-impl ParamsBuilder {
-    fn clone_params(&self) -> ucp_listener_params {
-        self.params
     }
 }
 

@@ -3,8 +3,6 @@
 //! This wraps the `ucs_memory_type_t` FFI type and provides a safe,
 //! idiomatic Rust interface.
 
-use crate::status::Status;
-
 /// Memory type for memory registration and operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryType {
@@ -26,11 +24,16 @@ pub enum MemoryType {
     ZeDevice,
     /// Intel oneAPI ZE managed memory.
     ZeManaged,
+    /// A value UCX returned that this build's enum does not name; UCX may
+    /// report unknown or new memory types at runtime.
+    Unknown,
 }
 
-impl From<MemoryType> for crate::ffi::ucs_memory_type_t {
-    fn from(mt: MemoryType) -> Self {
-        match mt {
+impl MemoryType {
+    /// Convert to the raw FFI memory type. `Unknown` maps to the last known
+    /// variant so the conversion stays total.
+    pub(crate) const fn to_ffi(self) -> crate::ffi::ucs_memory_type_t {
+        match self {
             MemoryType::Host => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_HOST,
             MemoryType::Cuda => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA,
             MemoryType::CudaManaged => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA_MANAGED,
@@ -39,28 +42,26 @@ impl From<MemoryType> for crate::ffi::ucs_memory_type_t {
             MemoryType::Rdma => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_RDMA,
             MemoryType::ZeHost => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_HOST,
             MemoryType::ZeDevice => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_DEVICE,
-            MemoryType::ZeManaged => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED,
+            MemoryType::ZeManaged | MemoryType::Unknown => {
+                crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED
+            }
         }
     }
-}
 
-impl TryFrom<crate::ffi::ucs_memory_type_t> for MemoryType {
-    type Error = crate::Status;
-
-    fn try_from(mt: crate::ffi::ucs_memory_type_t) -> Result<Self, Self::Error> {
-        match mt {
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_HOST => Ok(MemoryType::Host),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA => Ok(MemoryType::Cuda),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA_MANAGED => Ok(MemoryType::CudaManaged),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ROCM => Ok(MemoryType::Rocm),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ROCM_MANAGED => Ok(MemoryType::RocmManaged),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_RDMA => Ok(MemoryType::Rdma),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_HOST => Ok(MemoryType::ZeHost),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_DEVICE => Ok(MemoryType::ZeDevice),
-            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED => Ok(MemoryType::ZeManaged),
-            _ => Err(Status::from_raw(
-                crate::ffi::ucs_status_t::UCS_ERR_INVALID_PARAM,
-            )),
+    /// Convert from the raw FFI memory type. Unknown values map to
+    /// [`MemoryType::Unknown`].
+    pub(crate) fn from_ffi(raw: crate::ffi::ucs_memory_type_t) -> Self {
+        match raw {
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_HOST => MemoryType::Host,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA => MemoryType::Cuda,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA_MANAGED => MemoryType::CudaManaged,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ROCM => MemoryType::Rocm,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ROCM_MANAGED => MemoryType::RocmManaged,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_RDMA => MemoryType::Rdma,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_HOST => MemoryType::ZeHost,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_DEVICE => MemoryType::ZeDevice,
+            crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED => MemoryType::ZeManaged,
+            _ => MemoryType::Unknown,
         }
     }
 }

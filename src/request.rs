@@ -1,17 +1,18 @@
-
 /// Native alias for the send-completion callback.
 /// Mirrors the C signature (raw request/status params are unavoidable for a C callback).
-pub type SendCallback = Option<unsafe extern "C" fn(
-    request: *mut std::os::raw::c_void,
-    status: ucs_status_t,
-    user_data: *mut std::os::raw::c_void,
-)>;
+pub type SendCallback = Option<
+    unsafe extern "C" fn(
+        request: *mut std::os::raw::c_void,
+        status: ucs_status_t,
+        user_data: *mut std::os::raw::c_void,
+    ),
+>;
 
 use crate::ffi::*;
 use crate::status::status_from_ptr;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker;
+use crate::Status;
 use std::ptr::NonNull;
 
 /// UCX non-blocking request handle (`ucs_status_ptr_t` that is a real request).
@@ -338,10 +339,10 @@ impl RequestParamBuilder {
     }
 
     #[inline]
-    pub fn memory_type(&mut self, mt: ucs_memory_type_t) -> &mut Self {
+    pub fn memory_type(&mut self, mt: crate::MemoryType) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.memory_type = mt;
+        params.memory_type = mt.to_ffi();
         self
     }
 
@@ -454,7 +455,7 @@ mod tests {
             .build();
 
         let worker_features = worker::ParamsBuilder::new()
-            .thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_MULTI)
+            .thread_mode(crate::ThreadMode::Multi)
             .build();
 
         let mut context = Context::new(
@@ -557,4 +558,3 @@ impl RequestAttrFields {
         (self.0 & other.0) == other.0
     }
 }
-

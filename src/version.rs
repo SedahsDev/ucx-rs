@@ -32,7 +32,7 @@ pub const UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL: u64 = 1;
 /// Library attributes queried via `lib_query()`.
 #[derive(Debug, Clone)]
 pub struct LibAttr {
-    pub max_thread_level: ucs_thread_mode_t,
+    pub max_thread_level: crate::ThreadMode,
 }
 
 /// Query library-wide attributes.
@@ -40,7 +40,7 @@ pub fn lib_query() -> Result<LibAttr, Status> {
     let mut attr: ucp_lib_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = UCP_LIB_ATTR_FIELD_MAX_THREAD_LEVEL;
     status_to_result(unsafe { ucp_lib_query(&mut attr) }).map(|()| LibAttr {
-        max_thread_level: attr.max_thread_level,
+        max_thread_level: crate::ThreadMode::from_ffi(attr.max_thread_level),
     })
 }
 

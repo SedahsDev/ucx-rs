@@ -8,30 +8,27 @@
 
 pub mod attr;
 pub mod modify;
-pub mod perf;
 pub mod params;
+pub mod perf;
 
 pub use attr::*;
 pub use modify::*;
-pub use perf::*;
 pub use params::*;
-
+pub use perf::*;
 
 /// Native alias for the endpoint error-handler callback.
 /// Mirrors the C signature; the raw handle/status params are unavoidable for a
 /// C callback invoked by UCX. Consumers name `ErrHandlerCb`, not `ucp_err_handler_cb_t`.
-pub type ErrHandlerCb = Option<unsafe extern "C" fn(
-    arg: *mut std::os::raw::c_void,
-    ep: ucp_ep_h,
-    status: ucs_status_t,
-)>;
+pub type ErrHandlerCb = Option<
+    unsafe extern "C" fn(arg: *mut std::os::raw::c_void, ep: ucp_ep_h, status: ucs_status_t),
+>;
 
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::RemoteWorkerAddress;
 use crate::worker::Worker;
+use crate::Status;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -98,10 +95,7 @@ impl Ep {
     /// undefined behavior in a non-MT build or `UCS_THREAD_MODE_SINGLE`. See
     /// `THREADING.md` §2.1. Prefer one thread to own each worker's progress
     /// loop, using `Worker::arm()` and `Worker::get_efd()` for wakeups.
-    pub fn flush(
-        &self,
-        params: &crate::RequestParam,
-    ) -> Result<Option<crate::Request>, Status> {
+    pub fn flush(&self, params: &crate::RequestParam) -> Result<Option<crate::Request>, Status> {
         status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -304,9 +298,7 @@ mod tests {
     #[test]
     fn params_builder_sets_error_handling_mode() {
         let mut builder = ParamsBuilder::new();
-        let params = builder
-            .err_mode(ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER)
-            .build();
+        let params = builder.err_mode(crate::ErrorHandlerMode::Peer).build();
 
         assert_ne!(
             params.handle.field_mask

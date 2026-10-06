@@ -69,10 +69,12 @@ pub struct DataTypeAttr {
 pub fn dt_query(datatype: u64, mask: u64) -> Result<DataTypeAttr, Status> {
     let mut attr: ucp_datatype_attr = unsafe { std::mem::zeroed() };
     attr.field_mask = mask;
-    status_to_result(unsafe { ucp_dt_query(datatype as ucp_datatype_t, &mut attr) }).map(|()| DataTypeAttr {
-        packed_size: attr.packed_size,
-        buffer: attr.buffer,
-        count: attr.count,
+    status_to_result(unsafe { ucp_dt_query(datatype as ucp_datatype_t, &mut attr) }).map(|()| {
+        DataTypeAttr {
+            packed_size: attr.packed_size,
+            buffer: attr.buffer,
+            count: attr.count,
+        }
     })
 }
 

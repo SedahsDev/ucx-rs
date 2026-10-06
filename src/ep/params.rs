@@ -41,7 +41,10 @@ impl ParamsBuilder {
         }
     }
 
-    pub fn address(&mut self, worker_address: &crate::worker::RemoteWorkerAddress) -> &mut ParamsBuilder {
+    pub fn address(
+        &mut self,
+        worker_address: &crate::worker::RemoteWorkerAddress,
+    ) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
         let (address, _) = worker_address.get_handle();
@@ -76,10 +79,10 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn err_mode(&mut self, mode: ucp_err_handling_mode_t) -> &mut ParamsBuilder {
+    pub fn err_mode(&mut self, mode: crate::ErrorHandlerMode) -> &mut ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.err_mode = mode;
+        params.err_mode = mode.to_ffi();
         self
     }
 

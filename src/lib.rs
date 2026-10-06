@@ -39,23 +39,20 @@ mod threading_assert;
 use crate::ffi::*;
 
 pub mod am;
-pub mod am_params;
 pub mod config;
 pub mod context;
 pub mod dt;
 pub mod ep;
 pub mod error_handler_mode;
 pub mod listener;
-pub mod listener_params;
 pub mod memh;
 pub mod memory_type;
 pub mod rma;
 pub mod stream;
 pub mod tag;
+pub mod thread_mode;
 pub mod version;
 pub mod worker;
-pub mod worker_params;
-pub mod thread_mode;
 
 pub mod request;
 pub mod status;
@@ -64,12 +61,9 @@ pub use request::*;
 pub use status::*;
 
 // Re-export wrapped types
-pub use am_params::{AmHandlerParams, AmHandlerParamsBuilder};
 pub use error_handler_mode::ErrorHandlerMode;
 pub use memory_type::MemoryType;
 pub use thread_mode::ThreadMode;
-pub use listener_params::ListenerParamsBuilder;
-pub use worker_params::WorkerParamsBuilder;
 
 use std::ffi::CString;
 use std::ptr::NonNull;

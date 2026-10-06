@@ -4,12 +4,12 @@ use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
-use crate::Request;
-use crate::RequestParam;
 use crate::worker::address::*;
 use crate::worker::params::*;
+use crate::Request;
+use crate::RequestParam;
 use crate::RequestParamBuilder;
+use crate::Status;
 use bitflags::bitflags;
 use std::ffi::CString;
 use std::ptr::NonNull;
@@ -74,7 +74,7 @@ mod tests {
             Context::new(&Config::read("", "").expect("config read"), &context_params)
                 .expect("context create");
         let mut worker_params = ParamsBuilder::new();
-        worker_params.thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED);
+        worker_params.thread_mode(crate::ThreadMode::Serialized);
         let worker_params = worker_params.build();
         let worker = context
             .worker_create(&worker_params)
@@ -98,7 +98,7 @@ mod tests {
             Context::new(&Config::read("", "").expect("config read"), &context_params)
                 .expect("context create");
         let mut params = ParamsBuilder::new();
-        params.thread_mode(ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE);
+        params.thread_mode(crate::ThreadMode::Single);
         let worker = context
             .worker_create(&params.build())
             .expect("worker create");
@@ -169,9 +169,10 @@ impl MtWorker {
             .query(WorkerAttrFields::THREAD_MODE)?
             .thread_mode
             .ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
-        if mode != ucs_thread_mode_t::UCS_THREAD_MODE_SERIALIZED
-            && mode != ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
-        {
+        if !matches!(
+            mode,
+            crate::ThreadMode::Serialized | crate::ThreadMode::Multi
+        ) {
             return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
         }
         Ok(Self {
@@ -511,7 +512,7 @@ impl Worker {
             WorkerAttr {
                 thread_mode: mask
                     .contains(WorkerAttrFields::THREAD_MODE)
-                    .then_some(attr.thread_mode),
+                    .then(|| crate::ThreadMode::from_ffi(attr.thread_mode)),
                 address: mask
                     .contains(WorkerAttrFields::ADDRESS)
                     .then_some(WorkerAddressAttr {
@@ -552,4 +553,3 @@ impl std::fmt::Debug for CpuSet {
         formatter.debug_struct("CpuSet").finish_non_exhaustive()
     }
 }
-

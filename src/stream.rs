@@ -13,10 +13,10 @@ use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
+use crate::Status;
 use std::ptr::NonNull;
 
 /// One endpoint reported ready by [`Worker::stream_poll`].
@@ -346,8 +346,7 @@ mod tests {
     #[test]
     fn test_stream_poll_signature() {
         let (_ctx, _worker) = setup_worker();
-        let _: fn(&Worker, usize) -> Result<Vec<StreamPollEvent>, Status> =
-            Worker::stream_poll;
+        let _: fn(&Worker, usize) -> Result<Vec<StreamPollEvent>, Status> = Worker::stream_poll;
         let _: fn(&Request) -> Result<usize, Status> = Request::stream_recv_test;
         let _: unsafe extern "C" fn(ucp_ep_h, *mut std::os::raw::c_void) = ucp_stream_data_release;
     }
@@ -368,7 +367,6 @@ mod tests {
 
     #[test]
     fn test_stream_recv_data_signature() {
-        let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, Status> =
-            Ep::stream_recv_data;
+        let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, Status> = Ep::stream_recv_data;
     }
 }

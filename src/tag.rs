@@ -2,10 +2,10 @@ use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
+use crate::Status;
 use bitflags::bitflags;
 
 impl Ep {
@@ -262,7 +262,14 @@ pub unsafe fn tag_msg_recv_nb(
     datatype: u64,
     message: ucp_tag_message_h,
 ) -> crate::Request {
-    let ptr = ucp_tag_msg_recv_nb(worker.handle, buffer, count, datatype as ucp_datatype_t, message, None);
+    let ptr = ucp_tag_msg_recv_nb(
+        worker.handle,
+        buffer,
+        count,
+        datatype as ucp_datatype_t,
+        message,
+        None,
+    );
     crate::Request::from_raw(ptr)
 }
 
@@ -320,7 +327,10 @@ mod tests {
             std::mem::MaybeUninit::uninit(),
         );
 
-        assert!(matches!(result, Err(Status(ucs_status_t::UCS_ERR_IO_ERROR))));
+        assert!(matches!(
+            result,
+            Err(Status(ucs_status_t::UCS_ERR_IO_ERROR))
+        ));
     }
 
     /// Exercises the real UCX completion path with a self-endpoint tag exchange.

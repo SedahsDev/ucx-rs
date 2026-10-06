@@ -1,9 +1,9 @@
 use crate::ep::Ep;
-use crate::worker::Worker;
 use crate::ffi::*;
+use crate::status_ptr_to_result;
+use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
-use crate::status_ptr_to_result;
 use crate::Status;
 
 use super::RemoteKey;
