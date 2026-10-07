@@ -1,14 +1,14 @@
 use crate::ep::Ep;
 use crate::ffi::*;
-use crate::RequestParam;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
+use crate::RequestParam;
+use crate::Status;
 use std::sync::Arc;
 
-use super::{RemoteKey, FetchAmoRequest};
+use super::{FetchAmoRequest, RemoteKey};
 
 /// Rust-native atomic operation selector.
 /// Mirrors the C `ucp_atomic_op_t` discriminants so it maps 1:1 to the FFI enum.
@@ -36,7 +36,6 @@ impl AtomicOp {
         }
     }
 }
-
 
 #[deprecated = "Use Ep::rma_put() instead"]
 /// Put data to a remote memory location.
@@ -183,10 +182,7 @@ pub unsafe fn ep_rkey_unpack(
 /// **IMPORTANT:** The underlying UCX C function `ucp_rkey_ptr` does not validate
 /// null rkey handles — it will segfault instead of returning an error. Always
 /// use [`RemoteKey::remote_ptr`] for safe access.
-pub unsafe fn rkey_ptr(
-    rkey: &RemoteKey,
-    raddr: u64,
-) -> Result<*mut std::os::raw::c_void, Status> {
+pub unsafe fn rkey_ptr(rkey: &RemoteKey, raddr: u64) -> Result<*mut std::os::raw::c_void, Status> {
     if rkey.handle.is_null() {
         return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
     }

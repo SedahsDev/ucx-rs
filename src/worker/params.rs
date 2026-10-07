@@ -1,9 +1,9 @@
 use crate::am::HandlerParams;
 use crate::ffi::*;
-use crate::worker::Worker;
-use bitflags::bitflags;
 use crate::status_to_result;
+use crate::worker::Worker;
 use crate::Status;
+use bitflags::bitflags;
 use std::ffi::CString;
 
 bitflags! {
@@ -37,10 +37,10 @@ impl ParamsBuilder {
         }
     }
 
-    pub fn thread_mode(&mut self, thread_mode: ucs_thread_mode_t) -> &mut ParamsBuilder {
+    pub fn thread_mode(&mut self, thread_mode: crate::ThreadMode) -> &mut ParamsBuilder {
         self.field_mask |= ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.thread_mode = thread_mode;
+        params.thread_mode = thread_mode.to_ffi();
         self
     }
 

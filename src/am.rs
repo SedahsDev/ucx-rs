@@ -5,10 +5,10 @@ use crate::ffi::*;
 pub use crate::ffi::{ucp_am_recv_param_t, ucs_status_t};
 use crate::status_ptr_to_result;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
+use crate::Status;
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 

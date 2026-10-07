@@ -34,8 +34,6 @@ impl std::fmt::Display for Status {
 
 impl std::error::Error for Status {}
 
-
-
 /// Translates a UCX status pointer into an immediate result, request, or error.
 ///
 /// # Invariant

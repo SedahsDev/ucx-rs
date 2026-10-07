@@ -1,7 +1,7 @@
 use crate::ffi::*;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker::Worker;
+use crate::Status;
 use std::ptr::NonNull;
 
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub struct WorkerAddressAttr {
 /// Worker query attribute result. Fields are present only when requested.
 #[derive(Debug, Clone)]
 pub struct WorkerAttr {
-    pub thread_mode: Option<ucs_thread_mode_t>,
+    pub thread_mode: Option<crate::ThreadMode>,
     pub address: Option<WorkerAddressAttr>,
     pub address_flags: Option<u32>,
     pub max_am_header: Option<usize>,

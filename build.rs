@@ -178,6 +178,8 @@ int main() {
         );
     }
 
-    println!("cargo:warning=UCX version {}.{}.{} is within supported range ({}.{}, {}.{})",
-             major, minor, parts[2], MIN_MAJOR, MIN_MINOR, MAX_MAJOR, MAX_MINOR);
+    println!(
+        "cargo:warning=UCX version {}.{}.{} is within supported range ({}.{}, {}.{})",
+        major, minor, parts[2], MIN_MAJOR, MIN_MINOR, MAX_MAJOR, MAX_MINOR
+    );
 }

@@ -38,22 +38,19 @@ mod ffi;
 mod threading_assert;
 use crate::ffi::*;
 
-// Enumerations that appear in this crate's *public* signatures (`MemMapParamsBuilder::memory_type`,
-// `Builder::memory_type`, runtime thread-mode setup). Without re-exporting them, downstream crates
-// cannot name a type they are required to pass — the compiler reports `enum ... is private` even
-// though the method taking it is `pub`. Re-export rather than widening `ffi` to `pub`.
-pub use crate::ffi::{ucs_memory_type_t, ucs_thread_mode_t};
-
 pub mod am;
 pub mod config;
 pub mod context;
 pub mod dt;
 pub mod ep;
+pub mod error_handler_mode;
 pub mod listener;
 pub mod memh;
+pub mod memory_type;
 pub mod rma;
 pub mod stream;
 pub mod tag;
+pub mod thread_mode;
 pub mod version;
 pub mod worker;
 
@@ -62,6 +59,11 @@ pub mod status;
 
 pub use request::*;
 pub use status::*;
+
+// Re-export wrapped types
+pub use error_handler_mode::ErrorHandlerMode;
+pub use memory_type::MemoryType;
+pub use thread_mode::ThreadMode;
 
 use std::ffi::CString;
 use std::ptr::NonNull;

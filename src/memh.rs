@@ -66,10 +66,7 @@ impl MemHandle {
     }
 
     /// Map or register memory with the given parameters.
-    pub fn map(
-        context: &Context,
-        params: &mut MemMapParamsBuilder,
-    ) -> Result<MemHandle, Status> {
+    pub fn map(context: &Context, params: &mut MemMapParamsBuilder) -> Result<MemHandle, Status> {
         let built = params.build();
         let mut memh: ucp_mem_h = std::ptr::null_mut();
         let result =
@@ -179,10 +176,10 @@ impl MemMapParamsBuilder {
     }
 
     /// Set memory type.
-    pub fn memory_type(&mut self, mem_type: ucs_memory_type_t) -> &mut Self {
+    pub fn memory_type(&mut self, mem_type: crate::MemoryType) -> &mut Self {
         self.field_mask |= ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.memory_type = mem_type;
+        params.memory_type = mem_type.to_ffi();
         self
     }
 
@@ -412,10 +409,7 @@ pub struct PackedRkeyBuffer {
 }
 
 impl PackedRkeyBuffer {
-    fn from_raw_parts(
-        buffer: *mut std::os::raw::c_void,
-        size: usize,
-    ) -> Result<Self, Status> {
+    fn from_raw_parts(buffer: *mut std::os::raw::c_void, size: usize) -> Result<Self, Status> {
         let payload = unsafe { std::slice::from_raw_parts(buffer as *const u8, size) };
         let payload_len = u32::try_from(size).map_err(|_| ucs_status_t::UCS_ERR_OUT_OF_RANGE)?;
         let mut framed = Vec::with_capacity(4 + size);
@@ -492,8 +486,8 @@ impl MemAttr {
 
     /// Get the memory type.
     #[inline]
-    pub fn mem_type(&self) -> ucs_memory_type_t {
-        self.mem_type
+    pub fn mem_type(&self) -> crate::MemoryType {
+        crate::MemoryType::from_ffi(self.mem_type)
     }
 }
 

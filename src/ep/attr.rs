@@ -92,17 +92,23 @@ impl SockAddr {
                     },
                     sin_zero: [0; 8],
                 };
-                SockAddr { storage: SocketStorage::V4(Box::new(sin)) }
+                SockAddr {
+                    storage: SocketStorage::V4(Box::new(sin)),
+                }
             }
             std::net::SocketAddr::V6(v6) => {
                 let sin6 = sockaddr_in6 {
                     sin6_family: libc::AF_INET6 as _,
                     sin6_port: v6.port().to_be(),
                     sin6_flowinfo: v6.flowinfo().to_be(),
-                    sin6_addr: libc::in6_addr { s6_addr: v6.ip().octets() },
+                    sin6_addr: libc::in6_addr {
+                        s6_addr: v6.ip().octets(),
+                    },
                     sin6_scope_id: v6.scope_id(),
                 };
-                SockAddr { storage: SocketStorage::V6(Box::new(sin6)) }
+                SockAddr {
+                    storage: SocketStorage::V6(Box::new(sin6)),
+                }
             }
         }
     }

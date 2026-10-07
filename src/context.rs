@@ -1,8 +1,8 @@
 use crate::ffi::*;
 use crate::status_to_result;
-use crate::Status;
 use crate::worker;
 use crate::worker::Worker;
+use crate::Status;
 use bitflags::bitflags;
 use std::ffi::CString;
 
@@ -255,10 +255,7 @@ impl Context {
         }
     }
 
-    pub fn worker_create<'a>(
-        &'a mut self,
-        params: &'a worker::Params,
-    ) -> Result<Worker, Status> {
+    pub fn worker_create<'a>(&'a mut self, params: &'a worker::Params) -> Result<Worker, Status> {
         Worker::new(self, params)
     }
 

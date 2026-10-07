@@ -62,7 +62,7 @@ pub const UCP_CONTEXT_ATTR_FIELD_NAME: u64 = 8;
 #[derive(Debug, Clone)]
 pub struct ContextAttr {
     pub request_size: usize,
-    pub thread_mode: ucs_thread_mode_t,
+    pub thread_mode: crate::ThreadMode,
     pub memory_types: u64,
     pub name: String,
 }
@@ -71,10 +71,7 @@ pub struct ContextAttr {
 ///
 /// # Safety
 /// Caller must ensure `context` is a valid UCP context handle.
-pub unsafe fn context_query(
-    context: ucp_context_h,
-    mask: u64,
-) -> Result<ContextAttr, Status> {
+pub unsafe fn context_query(context: ucp_context_h, mask: u64) -> Result<ContextAttr, Status> {
     let mut attr: ucp_context_attr = std::mem::zeroed();
     attr.field_mask = mask;
     status_to_result(ucp_context_query(context, &mut attr)).map(|()| {
@@ -87,7 +84,7 @@ pub unsafe fn context_query(
         };
         ContextAttr {
             request_size: attr.request_size,
-            thread_mode: attr.thread_mode,
+            thread_mode: crate::ThreadMode::from_ffi(attr.thread_mode),
             memory_types: attr.memory_types,
             name,
         }
