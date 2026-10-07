@@ -42,9 +42,8 @@ impl MemoryType {
             MemoryType::Rdma => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_RDMA,
             MemoryType::ZeHost => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_HOST,
             MemoryType::ZeDevice => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_DEVICE,
-            MemoryType::ZeManaged | MemoryType::Unknown => {
-                crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED
-            }
+            MemoryType::ZeManaged => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_ZE_MANAGED,
+            MemoryType::Unknown => crate::ffi::ucs_memory_type_t::UCS_MEMORY_TYPE_UNKNOWN,
         }
     }
 

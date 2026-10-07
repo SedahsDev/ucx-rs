@@ -9,12 +9,6 @@ use crate::request::Request;
 pub struct Status(pub(crate) ucs_status_t);
 
 impl Status {
-    /// Create a new Status from a raw ucs_status_t value.
-    #[inline]
-    pub(crate) fn from_raw(status: ucs_status_t) -> Self {
-        Status(status)
-    }
-
     /// The raw UCX status code.
     pub(crate) fn to_ffi(self) -> ucs_status_t {
         self.0

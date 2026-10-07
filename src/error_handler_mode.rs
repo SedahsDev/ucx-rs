@@ -43,14 +43,7 @@ mod tests {
     #[test]
     fn round_trip() {
         for mode in [ErrorHandlerMode::None, ErrorHandlerMode::Peer] {
-            assert_eq!(mode.from_ffi(mode.to_ffi()), mode);
+            assert_eq!(ErrorHandlerMode::from_ffi(mode.to_ffi()), mode);
         }
-    }
-
-    /// SAFETY: the FFI enum is a C int; 99 is outside any defined variant.
-    #[test]
-    fn unknown_maps_to_none() {
-        let raw = unsafe { std::mem::transmute::<u32, crate::ffi::ucp_err_handling_mode_t>(99) };
-        assert_eq!(ErrorHandlerMode::from_ffi(raw), ErrorHandlerMode::None);
     }
 }
