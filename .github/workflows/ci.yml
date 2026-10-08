@@ -28,7 +28,7 @@ jobs:
           # Install UCX 1.20 from source since apt has older version
           git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
           cd ucx
-          ./contrib/configure-release --prefix=/usr --with-knem --with-rc --with-tcp
+          ./configure --prefix=/usr --disable-rc --disable-dc --disable-mt --disable-verbs --disable-cma --disable-vec --disable-ffi
           make -j$(nproc)
           sudo make install
           sudo ldconfig
@@ -68,7 +68,7 @@ jobs:
           # Install UCX 1.20 from source since apt has older version
           git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
           cd ucx
-          ./contrib/configure-release --prefix=/usr --with-knem --with-rc --with-tcp
+          ./configure --prefix=/usr --disable-rc --disable-dc --disable-mt --disable-verbs --disable-cma --disable-vec --disable-ffi
           make -j$(nproc)
           sudo make install
           sudo ldconfig
