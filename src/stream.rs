@@ -5,10 +5,6 @@
 
 use crate::ep::{Ep, EpHandle};
 
-/// Native name for the UCX stream-poll entry struct.
-/// Renamed so consumers never name the bindgen `ucp_stream_poll_ep_t` directly.
-pub use crate::ffi::ucp_stream_poll_ep as StreamPollEp;
-
 use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
@@ -45,6 +41,56 @@ impl StreamPollEvent {
     /// Return the UCX stream poll flags for this endpoint.
     pub fn flags(&self) -> u32 {
         self.flags
+    }
+}
+
+/// One entry of the array filled by the deprecated [`stream_worker_poll`].
+///
+/// `#[repr(transparent)]` over UCX's poll-entry struct, so an array of entries can be handed to
+/// UCX directly. Create entries with [`StreamPollEp::default`]. Prefer [`Worker::stream_poll`].
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct StreamPollEp(ucp_stream_poll_ep_t);
+
+// `stream_worker_poll` passes `*mut StreamPollEp` to UCX as `*mut ucp_stream_poll_ep_t`.
+const _: () = {
+    assert!(std::mem::size_of::<StreamPollEp>() == std::mem::size_of::<ucp_stream_poll_ep_t>());
+    assert!(std::mem::align_of::<StreamPollEp>() == std::mem::align_of::<ucp_stream_poll_ep_t>());
+};
+
+impl Default for StreamPollEp {
+    fn default() -> Self {
+        // SAFETY: the poll-entry struct is plain C data (pointers, integers and reserved
+        // bytes), for which all-zero is valid; `Worker::stream_poll` initializes it the same way.
+        StreamPollEp(unsafe { std::mem::zeroed() })
+    }
+}
+
+impl StreamPollEp {
+    /// Return the borrowed UCX endpoint handle UCX wrote into this entry.
+    pub fn ep_handle(&self) -> EpHandle {
+        EpHandle(self.0.ep)
+    }
+
+    /// Return the user data associated with the endpoint.
+    pub fn user_data(&self) -> *mut std::ffi::c_void {
+        self.0.user_data
+    }
+
+    /// Return the UCX stream poll flags for this endpoint.
+    pub fn flags(&self) -> u32 {
+        self.0.flags
+    }
+}
+
+impl std::fmt::Debug for StreamPollEp {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StreamPollEp")
+            .field("ep", &self.0.ep)
+            .field("user_data", &self.0.user_data)
+            .field("flags", &self.0.flags)
+            .finish()
     }
 }
 
@@ -233,7 +279,14 @@ pub unsafe fn stream_worker_poll(
     max_eps: usize,
     flags: u32,
 ) -> isize {
-    ucp_stream_worker_poll(worker.handle, poll_eps, max_eps, flags)
+    // `StreamPollEp` is `#[repr(transparent)]` over `ucp_stream_poll_ep_t`, so the caller's
+    // array has exactly UCX's layout.
+    ucp_stream_worker_poll(
+        worker.handle,
+        poll_eps.cast::<ucp_stream_poll_ep_t>(),
+        max_eps,
+        flags,
+    )
 }
 
 /// Receive stream data with automatic buffer allocation.
@@ -368,5 +421,17 @@ mod tests {
     #[test]
     fn test_stream_recv_data_signature() {
         let _: for<'a> fn(&'a Ep) -> Result<Option<StreamData<'a>>, Status> = Ep::stream_recv_data;
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn stream_worker_poll_fills_native_entries() {
+        let (_ctx, worker) = setup_worker();
+        let mut entries = vec![StreamPollEp::default(); 4];
+        let count = unsafe { stream_worker_poll(&worker, entries.as_mut_ptr(), entries.len(), 0) };
+        assert_eq!(count, 0);
+        assert!(entries
+            .iter()
+            .all(|entry| entry.flags() == 0 && entry.user_data().is_null()));
     }
 }

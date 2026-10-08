@@ -1,8 +1,9 @@
 use crate::ep::Ep;
+use crate::ep::EpHandle;
 use crate::ffi::*;
 
-/// Re-exported for C callback signatures that must name the raw types.
-pub use crate::ffi::{ucp_am_recv_param_t, ucs_status_t};
+/// Re-exported for the return type of [`AmRecvCb`] (tracked in #73).
+pub use crate::ffi::ucs_status_t;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -12,14 +13,74 @@ use crate::Status;
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
+/// Raw active-message receive callback. UCX passes the receive parameters as
+/// `*const AmRecvParam`, valid only for the duration of the call. `AmRecvParam` is
+/// `#[repr(transparent)]` over UCX's C struct, so this matches UCX's C callback type.
 pub type AmRecvCb = unsafe extern "C" fn(
     arg: *mut ::std::os::raw::c_void,
     header: *const ::std::os::raw::c_void,
     header_length: usize,
     data: *mut ::std::os::raw::c_void,
     length: usize,
-    param: *const ucp_am_recv_param_t,
+    param: *const AmRecvParam,
 ) -> ucs_status_t;
+
+const AM_RECV_ATTR_FIELD_REPLY_EP: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FIELD_REPLY_EP as u64;
+const AM_RECV_ATTR_FLAG_DATA: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64;
+const AM_RECV_ATTR_FLAG_RNDV: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_RNDV as u64;
+
+bitflags! {
+    /// Receive attributes UCX reports to an [`AmRecvCb`] through [`AmRecvParam::recv_attr`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct AmRecvAttr: u64 {
+        /// `UCP_AM_RECV_ATTR_FIELD_REPLY_EP`: UCX provided a reply endpoint.
+        const REPLY_EP = AM_RECV_ATTR_FIELD_REPLY_EP;
+        /// `UCP_AM_RECV_ATTR_FLAG_DATA`: `data` is a descriptor the handler may keep.
+        const DATA = AM_RECV_ATTR_FLAG_DATA;
+        /// `UCP_AM_RECV_ATTR_FLAG_RNDV`: `data` is a rendezvous descriptor.
+        const RNDV = AM_RECV_ATTR_FLAG_RNDV;
+    }
+}
+
+/// Receive parameters UCX passes to an [`AmRecvCb`].
+///
+/// UCX owns this value. A callback receives it as `*const AmRecvParam`, valid only for the
+/// duration of the call. `#[repr(transparent)]` gives it exactly the layout of UCX's C struct.
+#[repr(transparent)]
+pub struct AmRecvParam(ucp_am_recv_param_t);
+
+// `AmRecvCb` receives `*const AmRecvParam` in place of UCX's `*const ucp_am_recv_param_t`.
+const _: () = {
+    assert!(std::mem::size_of::<AmRecvParam>() == std::mem::size_of::<ucp_am_recv_param_t>());
+    assert!(std::mem::align_of::<AmRecvParam>() == std::mem::align_of::<ucp_am_recv_param_t>());
+};
+
+impl AmRecvParam {
+    /// The receive attributes UCX reported for this message. Unknown bits are kept.
+    pub fn recv_attr(&self) -> AmRecvAttr {
+        AmRecvAttr::from_bits_retain(self.0.recv_attr)
+    }
+
+    /// The endpoint to reply on, if UCX provided one: [`AmRecvAttr::REPLY_EP`] is set and the
+    /// handle is non-null. The handle is borrowed from UCX; never close it.
+    pub fn reply_ep(&self) -> Option<EpHandle> {
+        if self.recv_attr().contains(AmRecvAttr::REPLY_EP) && !self.0.reply_ep.is_null() {
+            Some(EpHandle(self.0.reply_ep))
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Debug for AmRecvParam {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AmRecvParam")
+            .field("recv_attr", &self.recv_attr())
+            .field("reply_ep", &self.reply_ep())
+            .finish()
+    }
+}
 
 type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static>;
 
@@ -40,7 +101,7 @@ unsafe extern "C" fn am_trampoline(
     header_length: usize,
     data: *mut std::os::raw::c_void,
     length: usize,
-    _param: *const ucp_am_recv_param_t,
+    _param: *const AmRecvParam,
 ) -> ucs_status_t {
     // SAFETY: `arg` is an Arc<AmHandler> pointer installed by
     // am_register_handler and retained by Worker until after UCX destroys the
@@ -211,7 +272,11 @@ impl HandlerParamsBuilder {
     pub fn cb(&mut self, cb: AmRecvCb) -> &mut HandlerParamsBuilder {
         self.flags |= ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.cb = Some(cb);
+        // SAFETY: `AmRecvCb` and UCX's `ucp_am_recv_callback_t` differ only in the pointee type of
+        // the `param` pointer (`AmRecvParam` is `#[repr(transparent)]` over `ucp_am_recv_param_t`),
+        // and pointers to sized types are ABI-compatible.
+        params.cb =
+            unsafe { std::mem::transmute::<Option<AmRecvCb>, ucp_am_recv_callback_t>(Some(cb)) };
         self
     }
 
@@ -319,5 +384,69 @@ mod tests {
             }
         }
         assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn am_recv_param_reply_ep_requires_field_bit() {
+        let fake = 0x40usize as ucp_ep_h;
+        // SAFETY: the raw receive-param struct is plain C data; all-zero is valid.
+        let mut raw: ucp_am_recv_param_t = unsafe { std::mem::zeroed() };
+        raw.reply_ep = fake;
+        let without_bit = AmRecvParam(raw);
+        assert!(without_bit.recv_attr().is_empty());
+        assert!(without_bit.reply_ep().is_none());
+
+        raw.recv_attr = AmRecvAttr::REPLY_EP.bits() | AmRecvAttr::DATA.bits();
+        let with_bit = AmRecvParam(raw);
+        assert!(with_bit.recv_attr().contains(AmRecvAttr::DATA));
+        assert_eq!(with_bit.reply_ep().map(|ep| ep.0), Some(fake));
+
+        raw.reply_ep = std::ptr::null_mut();
+        let null_ep = AmRecvParam(raw);
+        assert!(null_ep.reply_ep().is_none());
+    }
+
+    unsafe extern "C" fn record_recv_param(
+        arg: *mut std::os::raw::c_void,
+        header: *const std::os::raw::c_void,
+        header_length: usize,
+        _data: *mut std::os::raw::c_void,
+        _length: usize,
+        param: *const AmRecvParam,
+    ) -> ucs_status_t {
+        let seen = &mut *(arg as *mut [u8; 2]);
+        if header_length == 1 && !header.is_null() {
+            seen[0] = *(header as *const u8);
+        }
+        seen[1] = match param.as_ref() {
+            Some(param) if param.reply_ep().is_none() => 1,
+            Some(_) => 2,
+            None => 3,
+        };
+        ucs_status_t::UCS_OK
+    }
+
+    #[test]
+    fn raw_callback_receives_native_recv_param() {
+        let comms = crate::tests::setup_default();
+        let mut seen = [0u8; 2];
+        let handler = HandlerParamsBuilder::new()
+            .id(24)
+            .cb(record_recv_param)
+            .arg(seen.as_mut_ptr() as *mut std::os::raw::c_void)
+            .build();
+        comms.worker.am_register(&handler).unwrap();
+        let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
+        if let Some(request) = comms.ep.am_send(24, b"q", b"", &request_param).unwrap() {
+            assert!(comms.worker.wait_request(&request).unwrap());
+        }
+        for _ in 0..1000 {
+            if seen[0] != 0 {
+                break;
+            }
+            comms.worker.progress();
+        }
+        // No reply flag was sent, so UCX must not report a reply endpoint.
+        assert_eq!(seen, [b'q', 1]);
     }
 }
