@@ -331,7 +331,7 @@ mod status_tests {
 #[cfg(test)]
 mod native_status_tests {
     use super::*;
-    use crate::am::HandlerParamsBuilder;
+    use crate::am::{AmRecvParam, HandlerParamsBuilder};
     use crate::ep::ParamsBuilder as EpParamsBuilder;
     use crate::request::RequestParamBuilder;
     use std::os::raw::c_void;
@@ -401,7 +401,7 @@ mod native_status_tests {
             _header_length: usize,
             _data: *mut c_void,
             _length: usize,
-            _param: *const ucp_am_recv_param_t,
+            _param: *const AmRecvParam,
         ) -> Status {
             Status::REJECTED
         }
