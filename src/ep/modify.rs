@@ -23,7 +23,10 @@ impl ModifyParamsBuilder {
     /// Set the endpoint error callback.
     pub fn err_handler(&mut self, cb: crate::ep::ErrHandlerCb) -> &mut Self {
         self.handle.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
-        self.handle.err_handler.cb = cb;
+        // SAFETY: `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `ErrHandlerCb` and UCX's
+        // `ucp_err_handler_cb_t` have ABI-compatible signatures.
+        self.handle.err_handler.cb =
+            unsafe { std::mem::transmute::<crate::ep::ErrHandlerCb, ucp_err_handler_cb_t>(cb) };
         self
     }
 

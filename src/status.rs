@@ -5,15 +5,80 @@ use crate::request::Request;
 ///
 /// This is the public error type for the crate. It wraps the raw
 /// `ucs_status_t` so consumers never name the bindgen type directly.
+/// `#[repr(transparent)]` gives `Status` exactly the ABI of the raw status type, so callback types such as `crate::am::AmRecvCb` can take or return `Status` directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct Status(pub(crate) ucs_status_t);
 
 impl Status {
+    /// `UCS_OK`
+    pub const OK: Status = Status(ucs_status_t::UCS_OK);
+    /// `UCS_INPROGRESS`
+    pub const IN_PROGRESS: Status = Status(ucs_status_t::UCS_INPROGRESS);
+    /// `UCS_ERR_NO_MESSAGE`
+    pub const NO_MESSAGE: Status = Status(ucs_status_t::UCS_ERR_NO_MESSAGE);
+    /// `UCS_ERR_NO_RESOURCE`
+    pub const NO_RESOURCE: Status = Status(ucs_status_t::UCS_ERR_NO_RESOURCE);
+    /// `UCS_ERR_IO_ERROR`
+    pub const IO_ERROR: Status = Status(ucs_status_t::UCS_ERR_IO_ERROR);
+    /// `UCS_ERR_NO_MEMORY`
+    pub const NO_MEMORY: Status = Status(ucs_status_t::UCS_ERR_NO_MEMORY);
+    /// `UCS_ERR_INVALID_PARAM`
+    pub const INVALID_PARAM: Status = Status(ucs_status_t::UCS_ERR_INVALID_PARAM);
+    /// `UCS_ERR_UNREACHABLE`
+    pub const UNREACHABLE: Status = Status(ucs_status_t::UCS_ERR_UNREACHABLE);
+    /// `UCS_ERR_INVALID_ADDR`
+    pub const INVALID_ADDR: Status = Status(ucs_status_t::UCS_ERR_INVALID_ADDR);
+    /// `UCS_ERR_NOT_IMPLEMENTED`
+    pub const NOT_IMPLEMENTED: Status = Status(ucs_status_t::UCS_ERR_NOT_IMPLEMENTED);
+    /// `UCS_ERR_MESSAGE_TRUNCATED`
+    pub const MESSAGE_TRUNCATED: Status = Status(ucs_status_t::UCS_ERR_MESSAGE_TRUNCATED);
+    /// `UCS_ERR_NO_PROGRESS`
+    pub const NO_PROGRESS: Status = Status(ucs_status_t::UCS_ERR_NO_PROGRESS);
+    /// `UCS_ERR_BUFFER_TOO_SMALL`
+    pub const BUFFER_TOO_SMALL: Status = Status(ucs_status_t::UCS_ERR_BUFFER_TOO_SMALL);
+    /// `UCS_ERR_NO_ELEM`
+    pub const NO_ELEM: Status = Status(ucs_status_t::UCS_ERR_NO_ELEM);
+    /// `UCS_ERR_SOME_CONNECTS_FAILED`
+    pub const SOME_CONNECTS_FAILED: Status = Status(ucs_status_t::UCS_ERR_SOME_CONNECTS_FAILED);
+    /// `UCS_ERR_NO_DEVICE`
+    pub const NO_DEVICE: Status = Status(ucs_status_t::UCS_ERR_NO_DEVICE);
+    /// `UCS_ERR_BUSY`
+    pub const BUSY: Status = Status(ucs_status_t::UCS_ERR_BUSY);
+    /// `UCS_ERR_CANCELED`
+    pub const CANCELED: Status = Status(ucs_status_t::UCS_ERR_CANCELED);
+    /// `UCS_ERR_SHMEM_SEGMENT`
+    pub const SHMEM_SEGMENT: Status = Status(ucs_status_t::UCS_ERR_SHMEM_SEGMENT);
+    /// `UCS_ERR_ALREADY_EXISTS`
+    pub const ALREADY_EXISTS: Status = Status(ucs_status_t::UCS_ERR_ALREADY_EXISTS);
+    /// `UCS_ERR_OUT_OF_RANGE`
+    pub const OUT_OF_RANGE: Status = Status(ucs_status_t::UCS_ERR_OUT_OF_RANGE);
+    /// `UCS_ERR_TIMED_OUT`
+    pub const TIMED_OUT: Status = Status(ucs_status_t::UCS_ERR_TIMED_OUT);
+    /// `UCS_ERR_EXCEEDS_LIMIT`
+    pub const EXCEEDS_LIMIT: Status = Status(ucs_status_t::UCS_ERR_EXCEEDS_LIMIT);
+    /// `UCS_ERR_UNSUPPORTED`
+    pub const UNSUPPORTED: Status = Status(ucs_status_t::UCS_ERR_UNSUPPORTED);
+    /// `UCS_ERR_REJECTED`
+    pub const REJECTED: Status = Status(ucs_status_t::UCS_ERR_REJECTED);
+    /// `UCS_ERR_NOT_CONNECTED`
+    pub const NOT_CONNECTED: Status = Status(ucs_status_t::UCS_ERR_NOT_CONNECTED);
+    /// `UCS_ERR_CONNECTION_RESET`
+    pub const CONNECTION_RESET: Status = Status(ucs_status_t::UCS_ERR_CONNECTION_RESET);
+    /// `UCS_ERR_ENDPOINT_TIMEOUT`
+    pub const ENDPOINT_TIMEOUT: Status = Status(ucs_status_t::UCS_ERR_ENDPOINT_TIMEOUT);
+
     /// Whether this status represents an error (negative UCX status).
     pub fn is_err(self) -> bool {
         (self.0 as i8) < 0
     }
 }
+
+// `Status` is passed to and returned from C callbacks in place of `ucs_status_t`.
+const _: () = {
+    assert!(std::mem::size_of::<Status>() == std::mem::size_of::<ucs_status_t>());
+    assert!(std::mem::align_of::<Status>() == std::mem::align_of::<ucs_status_t>());
+};
 
 impl From<ucs_status_t> for Status {
     fn from(status: ucs_status_t) -> Self {
@@ -260,5 +325,99 @@ mod status_tests {
     fn request_params_force_and_no_imm_cmpl_remain_mutually_exclusive() {
         let mut builder = RequestParamBuilder::new();
         builder.flags(0x1).force_imm_cmpl().no_imm_cmpl();
+    }
+}
+
+#[cfg(test)]
+mod native_status_tests {
+    use super::*;
+    use crate::am::HandlerParamsBuilder;
+    use crate::ep::ParamsBuilder as EpParamsBuilder;
+    use crate::request::RequestParamBuilder;
+    use std::os::raw::c_void;
+
+    #[test]
+    fn constants_wrap_matching_raw_codes() {
+        assert_eq!(Status::OK, Status(ucs_status_t::UCS_OK));
+        assert_eq!(Status::IN_PROGRESS, Status(ucs_status_t::UCS_INPROGRESS));
+        assert_eq!(
+            Status::INVALID_PARAM,
+            Status(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        );
+        assert_eq!(
+            Status::ENDPOINT_TIMEOUT,
+            Status(ucs_status_t::UCS_ERR_ENDPOINT_TIMEOUT)
+        );
+        assert!(!Status::OK.is_err());
+        assert!(!Status::IN_PROGRESS.is_err());
+        assert!(Status::CANCELED.is_err());
+    }
+
+    #[test]
+    fn send_callback_receives_status_through_raw_pointer() {
+        unsafe extern "C" fn record(_request: *mut c_void, status: Status, user_data: *mut c_void) {
+            *(user_data as *mut Status) = status;
+        }
+
+        let params = RequestParamBuilder::new()
+            .send_callback(Some(record))
+            .build();
+        let raw = unsafe { params.handle.cb.send }.expect("callback stored");
+        let mut seen = Status::OK;
+        unsafe {
+            raw(
+                std::ptr::null_mut(),
+                ucs_status_t::UCS_ERR_CANCELED,
+                &mut seen as *mut Status as *mut c_void,
+            )
+        };
+        assert_eq!(seen, Status::CANCELED);
+    }
+
+    #[test]
+    fn err_handler_receives_status_through_raw_pointer() {
+        unsafe extern "C" fn on_error(arg: *mut c_void, _ep: ucp_ep_h, status: Status) {
+            *(arg as *mut Status) = status;
+        }
+
+        let params = EpParamsBuilder::new().err_handler(Some(on_error)).build();
+        let raw = params.handle.err_handler.cb.expect("callback stored");
+        let mut seen = Status::OK;
+        unsafe {
+            raw(
+                &mut seen as *mut Status as *mut c_void,
+                std::ptr::null_mut(),
+                ucs_status_t::UCS_ERR_TIMED_OUT,
+            )
+        };
+        assert_eq!(seen, Status::TIMED_OUT);
+    }
+
+    #[test]
+    fn am_callback_returns_status_through_raw_pointer() {
+        unsafe extern "C" fn reject(
+            _arg: *mut c_void,
+            _header: *const c_void,
+            _header_length: usize,
+            _data: *mut c_void,
+            _length: usize,
+            _param: *const ucp_am_recv_param_t,
+        ) -> Status {
+            Status::REJECTED
+        }
+
+        let params = HandlerParamsBuilder::new().cb(reject).build();
+        let raw = params.handle.cb.expect("callback stored");
+        let result = unsafe {
+            raw(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(result, ucs_status_t::UCS_ERR_REJECTED);
     }
 }
