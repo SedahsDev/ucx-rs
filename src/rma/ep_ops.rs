@@ -647,7 +647,10 @@ mod tests {
         let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map target");
         let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
         let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
-        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        // Default params on purpose: UCX 1.16 (Ubuntu 24.04's libucx) transfers zero
+        // bytes for a put with NO_IMM_CMPL and no explicit datatype (fixed upstream in
+        // openucx ba426c890, UCX 1.17). `wait` handles immediate completion.
+        let param = RequestParamBuilder::new().build();
 
         let put = ep
             .rma_put(b"ucx-rs!!", target_addr, &rkey, &param)
@@ -655,7 +658,7 @@ mod tests {
         wait(&worker, put, "RMA put");
         // A completed put only means the source buffer may be reused. The data is
         // guaranteed to be at the target, and visible to a later get, only after a
-        // flush (see the ucp_put_nbx docs). UCX 1.16 really does defer it.
+        // flush (see the ucp_put_nbx docs).
         let flush = ep
             .flush(&param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
