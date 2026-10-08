@@ -26,7 +26,7 @@ impl ErrorHandlerMode {
 
     /// Convert from the raw FFI error handling mode. Unknown values map to
     /// [`ErrorHandlerMode::None`].
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn from_ffi(raw: crate::ffi::ucp_err_handling_mode_t) -> Self {
         if raw == crate::ffi::ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER {
             ErrorHandlerMode::Peer

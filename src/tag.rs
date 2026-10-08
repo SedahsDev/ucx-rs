@@ -52,7 +52,7 @@ impl Ep {
     /// must never be turned into a host `&[u8]`, because the host cannot dereference it. This
     /// variant takes the address and length separately so UCX can pick a CUDA-aware transport
     /// (`cuda_copy`, `cuda_ipc`, `gdr_copy`). Pair it with
-    /// `RequestParamBuilder::memory_type(UCS_MEMORY_TYPE_CUDA)` so UCX does not probe the buffer.
+    /// `RequestParamBuilder::memory_type(MemoryType::Cuda)` so UCX does not probe the buffer.
     ///
     /// # Safety
     ///

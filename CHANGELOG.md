@@ -11,6 +11,30 @@
   - `Worker::am_register_handler` closures return `Result<(), Status>`; `Ok(())` is reported to
     UCX as `UCS_OK`.
   - Removed the `am::ucs_status_t` re-export.
+- **Breaking (#104, #108):** thread modes, memory types and endpoint error-handling modes
+  use native enums instead of raw UCX enums.
+  - New `ThreadMode`, `MemoryType` and `ErrorHandlerMode` enums, re-exported at the crate
+    root. Setters such as `worker::ParamsBuilder::thread_mode`,
+    `RequestParamBuilder::memory_type`, `memh::MemMapParamsBuilder::memory_type` and
+    `ep::ParamsBuilder::err_mode` take them, and queries such as
+    `version::LibAttr::max_thread_level` and `memh::MemAttr::mem_type` return them.
+  - Removed the `ucs_thread_mode_t` and `ucs_memory_type_t` re-exports.
+  - `ThreadMode` and `MemoryType` are `#[non_exhaustive]`, so variants can be added for
+    newer UCX versions; a `match` on them outside this crate needs a wildcard arm.
+  - `MemoryType::Unknown` (like leaving the memory type unset) asks UCX to detect the
+    memory type. `ThreadMode::Unknown` is not a real thread mode: UCX never grants it, and
+    `worker::ParamsBuilder::thread_mode` requests it as `ThreadMode::Multi`.
+  - `listener::ListenerParams` used to be a type alias for `listener::ParamsBuilder`. It is
+    now a distinct opaque type that only `ParamsBuilder::build()` can produce.
+    `ParamsBuilder::build()` returns `ListenerParams` instead of the raw
+    `ucp_listener_params`, and `Listener::create_with_params` takes `&ListenerParams`
+    instead of `&ParamsBuilder`.
+  - Migration: pass `ThreadMode::Multi` (or `Single` / `Serialized`) where code passed
+    `ucs_thread_mode_t::UCS_THREAD_MODE_MULTI`, `MemoryType::Cuda` (and so on) where it
+    passed `ucs_memory_type_t::UCS_MEMORY_TYPE_CUDA`, and `ErrorHandlerMode::Peer` / `None`
+    where it passed `ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER` / `_NONE`. Call
+    `.build()` on a listener `ParamsBuilder` before `Listener::create_with_params`, and
+    replace `ListenerParams::new()` with `ParamsBuilder::new()`.
 - **Breaking (#106):** parameter builders now borrow the addresses they point at, so safe code
   can no longer hand UCX a freed socket or worker address.
   - `listener::ParamsBuilder`, `listener::ListenerParamsBuilder` and `listener::ListenerParams`

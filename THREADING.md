@@ -14,13 +14,13 @@ HPC binding crates keep one shared vocabulary.
 | Layer | Policy |
 |--------|--------|
 | **Context** | UCX documents `ucp_context_h` as shareable across workers/threads → **`Send + Sync`** target. |
-| **Worker** | One owner, one progress loop. **`!Send + !Sync`** today. `UCS_THREAD_MODE_MULTI` makes UCX *calls* concurrent-safe, not these Rust values transferable. |
+| **Worker** | One owner, one progress loop. **`!Send + !Sync`** today. `ThreadMode::Multi` makes UCX *calls* concurrent-safe, not these Rust values transferable. |
 | **Ep** | Bound to its worker's thread. **`!Send + !Sync`**. Drop before worker (enforced by the `worker_alive` guard only as a last-resort net). |
 | **Request** | Tied to the worker that owns its completion. **`!Send + !Sync`**. Freeing a request handle is always safe (UCX RELEASED-flag defers cleanup); the *reply buffer* must outlive completion regardless. |
 | **MemHandle / RemoteKey / MemHandleGuard** | Registered-memory handles. `!Send + !Sync` until an audited story exists (they carry raw C handles plus borrowed-buffer `PhantomData`). |
 | **WorkerAddress / StreamData / MessageHandle** | Borrowed or UCX-owned data guards tied to worker/ep lifetime → **`!Send`** by construction (lifetimes). |
 | **Callbacks (AM handler, listener accept/conn)** | Run on the **progress context** — whichever thread calls `Worker::progress()` (or UCX-internal progress under MULTI). No blocking calls in-handler; hop off if needed. |
-| **Global FFI mutex** | Not provided. `UCS_THREAD_MODE_SERIALIZED` puts the serialization duty on the application, exactly as UCX does. |
+| **Global FFI mutex** | Not provided. `ThreadMode::Serialized` puts the serialization duty on the application, exactly as UCX does. |
 
 **Anti-patterns (do not introduce):**
 
@@ -35,9 +35,9 @@ HPC binding crates keep one shared vocabulary.
 
 From `ucs/type/thread_mode.h` and `ucp/api/ucp.h`:
 
-* `UCS_THREAD_MODE_SINGLE` — only the creating ("master") thread may access.
-* `UCS_THREAD_MODE_SERIALIZED` — multiple threads may access, one at a time.
-* `UCS_THREAD_MODE_MULTI` — concurrent access where UCX documents it safe.
+* `ThreadMode::Single` — only the creating ("master") thread may access.
+* `ThreadMode::Serialized` — multiple threads may access, one at a time.
+* `ThreadMode::Multi` — concurrent access where UCX documents it safe.
   Per `ucp.h`, UCP guarantees thread safety for **context-level** calls and,
   under MULTI, for worker operations.
 
@@ -73,7 +73,7 @@ call `Worker::progress()` concurrently — even though MULTI makes that *safe*,
 it does not make it *fast* (§2.1).
 
 Consequence for the Rust layer: **thread-mode selection is a property of the
-worker at creation** (`Worker::ParamsBuilder::thread_mode`), but auto-trait
+worker at creation** (`worker::ParamsBuilder::thread_mode`), but auto-trait
 safety must be decided per *type*, conservatively, at compile time.
 
 ---
@@ -131,7 +131,7 @@ application thread or channel.
 4. Callback-context documentation and a safe AM-handler trampoline with typed
    user context (hop-off helper parity with pmix-rs `threading.rs`).
 5. **Implemented (opt-in):** `worker::MtWorker` provides `Send + Sync` access
-   under `UCS_THREAD_MODE_MULTI`/`SERIALIZED` with an internal mutex. The
+   under `ThreadMode::Multi`/`Serialized` with an internal mutex. The
    wrapper verifies UCX's granted thread mode at construction; it does not
    trust the requested mode. Endpoints created through it remain `!Send +
    !Sync` and must stay on the constructing thread or be serialized by the

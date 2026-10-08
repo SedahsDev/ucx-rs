@@ -146,7 +146,7 @@ impl Worker {
     /// UCX clears a handler when it is set again with a null callback, which is what this
     /// does. Removing an id that has no handler succeeds. Rust state of a closure registered
     /// with [`Self::am_register_handler`] stays allocated until the worker is dropped, because
-    /// under `UCS_THREAD_MODE_MULTI` UCX may still be running the old callback on another
+    /// under `ThreadMode::Multi` UCX may still be running the old callback on another
     /// thread when this returns. Do not send messages to an id that has no handler (see #111).
     pub fn am_unregister(&self, id: u32) -> Result<(), Status> {
         // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.

@@ -175,7 +175,13 @@ impl MemMapParamsBuilder {
         self
     }
 
-    /// Set memory type.
+    /// Set the memory type of the region.
+    ///
+    /// When registering existing memory (see `address`), the memory type is a hint that spares
+    /// UCX from detecting it. Leaving it unset, or passing `MemoryType::Unknown`, makes UCX
+    /// detect the memory type itself. When UCX allocates the memory (the allocate flag passed
+    /// to `flags`), this selects the type of memory to allocate; if it is unset, UCX allocates
+    /// host memory.
     pub fn memory_type(&mut self, mem_type: crate::MemoryType) -> &mut Self {
         self.field_mask |= ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_MEMORY_TYPE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
