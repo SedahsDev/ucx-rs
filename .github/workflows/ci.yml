@@ -21,10 +21,18 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install UCX + clang (bindgen)
+      - name: Install UCX 1.20 + clang (bindgen)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libucx-dev libclang-dev pkg-config
+          sudo apt-get install -y libclang-dev pkg-config
+          # Install UCX 1.20 from source since apt has older version
+          git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
+          cd ucx
+          ./contrib/configure-release --prefix=/usr --with-knem --with-rc --with-tcp
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+        working-directory: /home/runner/work/ucx-rs/ucx-rs
 
       # Some hosted runners expose a Mellanox/RDMA device whose verbs calls fail
       # (`ibv_create_srq() failed: Operation not supported`), which makes every
@@ -53,10 +61,18 @@ jobs:
       - name: Install Rust 1.78 (rust-version in Cargo.toml)
         uses: dtolnay/rust-toolchain@1.78
 
-      - name: Install UCX
+      - name: Install UCX 1.20
         run: |
           sudo apt-get update
-          sudo apt-get install -y libucx-dev
+          sudo apt-get install -y libclang-dev pkg-config
+          # Install UCX 1.20 from source since apt has older version
+          git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
+          cd ucx
+          ./contrib/configure-release --prefix=/usr --with-knem --with-rc --with-tcp
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+        working-directory: /home/runner/work/ucx-rs/ucx-rs
 
       - name: check
         run: cargo check --locked --all-targets
