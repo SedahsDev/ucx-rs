@@ -1,9 +1,10 @@
-/// Native alias for the send-completion callback.
-/// Mirrors the C signature (raw request/status params are unavoidable for a C callback).
+/// Native alias for the send-completion callback. The completion status arrives as
+/// [`crate::Status`], which is `#[repr(transparent)]` over the raw status, so this matches
+/// UCX's C callback type.
 pub type SendCallback = Option<
     unsafe extern "C" fn(
         request: *mut std::os::raw::c_void,
-        status: ucs_status_t,
+        status: crate::Status,
         user_data: *mut std::os::raw::c_void,
     ),
 >;
@@ -329,7 +330,10 @@ impl RequestParamBuilder {
     pub fn send_callback(&mut self, cb: SendCallback) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.cb.send = cb;
+        // SAFETY: `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `SendCallback` and
+        // UCX's `ucp_send_nbx_callback_t` have ABI-compatible signatures.
+        params.cb.send =
+            unsafe { std::mem::transmute::<SendCallback, ucp_send_nbx_callback_t>(cb) };
         self
     }
 
@@ -437,12 +441,12 @@ mod tests {
         header_length: usize,
         _data: *mut ::std::os::raw::c_void,
         _length: usize,
-        _param: *const crate::am::AmRecvParam,
-    ) -> ucs_status_t {
+        _param: *const ucp_am_recv_param_t,
+    ) -> Status {
         let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
         let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
         message[0] = in_data[0];
-        ucs_status_t::UCS_OK
+        Status::OK
     }
 
     #[test]

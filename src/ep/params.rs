@@ -91,8 +91,11 @@ impl ParamsBuilder {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER as u64;
         // SAFETY: uninit_handle is initialized by ParamsBuilder::new and this
         // field is written before build exposes the struct.
+        // `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `ErrHandlerCb` and UCX's
+        // `ucp_err_handler_cb_t` have ABI-compatible signatures.
         unsafe {
-            (*self.uninit_handle.as_mut_ptr()).err_handler.cb = cb;
+            (*self.uninit_handle.as_mut_ptr()).err_handler.cb =
+                std::mem::transmute::<crate::ep::ErrHandlerCb, ucp_err_handler_cb_t>(cb);
         }
         self
     }
