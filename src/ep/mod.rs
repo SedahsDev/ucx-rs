@@ -16,11 +16,11 @@ pub use modify::*;
 pub use params::*;
 pub use perf::*;
 
-/// Native alias for the endpoint error-handler callback.
-/// Mirrors the C signature; the raw handle/status params are unavoidable for a
-/// C callback invoked by UCX. Consumers name `ErrHandlerCb`, not `ucp_err_handler_cb_t`.
+/// Native alias for the endpoint error-handler callback. The error status arrives as
+/// [`crate::Status`], which is `#[repr(transparent)]` over the raw status, so this matches
+/// UCX's C callback type. (The raw `ep` handle parameter is still the C type.)
 pub type ErrHandlerCb = Option<
-    unsafe extern "C" fn(arg: *mut std::os::raw::c_void, ep: ucp_ep_h, status: ucs_status_t),
+    unsafe extern "C" fn(arg: *mut std::os::raw::c_void, ep: ucp_ep_h, status: crate::Status),
 >;
 
 use crate::ffi::*;
@@ -313,11 +313,7 @@ mod tests {
 
     #[test]
     fn params_builder_sets_error_callback_fields() {
-        unsafe extern "C" fn callback(
-            _arg: *mut std::ffi::c_void,
-            _ep: ucp_ep_h,
-            _status: ucs_status_t,
-        ) {
+        unsafe extern "C" fn callback(_arg: *mut std::ffi::c_void, _ep: ucp_ep_h, _status: Status) {
         }
         let mut builder = ParamsBuilder::new();
         let params = builder

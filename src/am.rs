@@ -1,8 +1,8 @@
 use crate::ep::Ep;
 use crate::ffi::*;
 
-/// Re-exported for C callback signatures that must name the raw types.
-pub use crate::ffi::{ucp_am_recv_param_t, ucs_status_t};
+/// Re-exported for the C callback signature that must name it (tracked in #77).
+pub use crate::ffi::ucp_am_recv_param_t;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -12,6 +12,8 @@ use crate::Status;
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
+/// Raw active-message receive callback. It returns a [`Status`]; `Status` is
+/// `#[repr(transparent)]` over the raw status, so this matches UCX's C callback type.
 pub type AmRecvCb = unsafe extern "C" fn(
     arg: *mut ::std::os::raw::c_void,
     header: *const ::std::os::raw::c_void,
@@ -19,9 +21,9 @@ pub type AmRecvCb = unsafe extern "C" fn(
     data: *mut ::std::os::raw::c_void,
     length: usize,
     param: *const ucp_am_recv_param_t,
-) -> ucs_status_t;
+) -> Status;
 
-type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static>;
+type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'static>;
 
 /// The Rust state retained by [`Worker::am_register_handler`].
 pub struct AmHandler {
@@ -41,7 +43,7 @@ unsafe extern "C" fn am_trampoline(
     data: *mut std::os::raw::c_void,
     length: usize,
     _param: *const ucp_am_recv_param_t,
-) -> ucs_status_t {
+) -> Status {
     // SAFETY: `arg` is an Arc<AmHandler> pointer installed by
     // am_register_handler and retained by Worker until after UCX destroys the
     // worker. UCX owns the callback buffers for this invocation; null pointers
@@ -50,14 +52,14 @@ unsafe extern "C" fn am_trampoline(
     let header = if header.is_null() && header_length == 0 {
         &[]
     } else if header.is_null() {
-        return ucs_status_t::UCS_ERR_INVALID_PARAM;
+        return Status::INVALID_PARAM;
     } else {
         unsafe { std::slice::from_raw_parts(header as *const u8, header_length) }
     };
     let data = if data.is_null() && length == 0 {
         &[]
     } else if data.is_null() {
-        return ucs_status_t::UCS_ERR_INVALID_PARAM;
+        return Status::INVALID_PARAM;
     } else {
         unsafe { std::slice::from_raw_parts(data as *const u8, length) }
     };
@@ -65,13 +67,16 @@ unsafe extern "C" fn am_trampoline(
         Ok(callback) => callback,
         // A panic poisons the mutex. Do not invoke a possibly inconsistent
         // handler again; report the callback failure to UCX instead.
-        Err(_) => return ucs_status_t::UCS_ERR_IO_ERROR,
+        Err(_) => return Status::IO_ERROR,
     };
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(header, data))) {
-        Ok(status) => status,
+        Ok(Ok(())) => Status::OK,
+        Ok(Err(status)) if status.is_err() => status,
+        // A non-error status in `Err` (for example `IN_PROGRESS`) must never reach UCX
+        Ok(Err(_)) => Status::INVALID_PARAM,
         // Handler panics are contained here and reported as a UCX error; they
         // never unwind through this extern "C" trampoline into UCX.
-        Err(_) => ucs_status_t::UCS_ERR_IO_ERROR,
+        Err(_) => Status::IO_ERROR,
     }
 }
 
@@ -80,6 +85,9 @@ impl Worker {
     /// this wrapper for a worker; registering again replaces the Rust closure.
     /// UCX invokes it in the progress context, so it must not block or call
     /// back into this worker; send heavy work to an application channel.
+    /// The closure returns `Ok(())` on success (reported to UCX as `UCS_OK`); an `Err(status)` is
+    /// reported to UCX as that status if it is an error code, otherwise as `Status::INVALID_PARAM`;
+    /// `UCS_INPROGRESS` is never returned to UCX.
     pub fn am_register_handler<F>(
         &mut self,
         id: u32,
@@ -87,7 +95,7 @@ impl Worker {
         handler: F,
     ) -> Result<(), Status>
     where
-        F: FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static,
+        F: FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'static,
     {
         let handler = Arc::new(AmHandler {
             inner: Mutex::new(Box::new(handler)),
@@ -211,7 +219,10 @@ impl HandlerParamsBuilder {
     pub fn cb(&mut self, cb: AmRecvCb) -> &mut HandlerParamsBuilder {
         self.flags |= ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.cb = Some(cb);
+        // SAFETY: `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `AmRecvCb` and UCX's
+        // `ucp_am_recv_callback_t` have ABI-compatible signatures.
+        params.cb =
+            unsafe { std::mem::transmute::<Option<AmRecvCb>, ucp_am_recv_callback_t>(Some(cb)) };
         self
     }
 
@@ -305,7 +316,7 @@ mod tests {
                 assert_eq!(header, b"h");
                 assert_eq!(data, b"d");
                 seen.fetch_add(1, Ordering::Relaxed);
-                ucs_status_t::UCS_OK
+                Ok(())
             })
             .unwrap();
         let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
