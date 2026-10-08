@@ -8,7 +8,7 @@ use ucx_sys::am::{CbFlags, HandlerParamsBuilder};
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Request, RequestParamBuilder};
+use ucx_sys::{Request, RequestParamBuilder, Status};
 
 unsafe extern "C" fn receive(
     arg: *mut c_void,
@@ -16,13 +16,8 @@ unsafe extern "C" fn receive(
     header_length: usize,
     _data: *mut c_void,
     _length: usize,
-<<<<<<< ours
-    _param: *const ucx_sys::am::ucp_am_recv_param_t,
-) -> ucx_sys::Status {
-=======
     _param: *const ucx_sys::am::AmRecvParam,
-) -> ucx_sys::am::ucs_status_t {
->>>>>>> theirs
+) -> Status {
     if arg.is_null() || header.is_null() || header_length == 0 {
         return ucx_sys::Status::INVALID_PARAM;
     }
