@@ -24,10 +24,11 @@ jobs:
       - name: Install UCX 1.20 + clang (bindgen)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libclang-dev pkg-config
+          sudo apt-get install -y libclang-dev pkg-config autotools-dev
           # Install UCX 1.20 from source since apt has older version
           git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
           cd ucx
+          ./autogen.sh
           ./configure --prefix=/usr --disable-rc --disable-dc --disable-mt --disable-verbs --disable-cma --disable-vec --disable-ffi
           make -j$(nproc)
           sudo make install
@@ -64,10 +65,11 @@ jobs:
       - name: Install UCX 1.20
         run: |
           sudo apt-get update
-          sudo apt-get install -y libclang-dev pkg-config
+          sudo apt-get install -y libclang-dev pkg-config autotools-dev
           # Install UCX 1.20 from source since apt has older version
           git clone --depth 1 --branch v1.20.0 https://github.com/openucx/ucx.git
           cd ucx
+          ./autogen.sh
           ./configure --prefix=/usr --disable-rc --disable-dc --disable-mt --disable-verbs --disable-cma --disable-vec --disable-ffi
           make -j$(nproc)
           sudo make install
