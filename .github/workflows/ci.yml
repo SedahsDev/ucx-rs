@@ -26,6 +26,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libucx-dev libclang-dev pkg-config
 
+      # Some hosted runners expose a Mellanox/RDMA device whose verbs calls fail
+      # (`ibv_create_srq() failed: Operation not supported`), which makes every
+      # worker creation fail with UCS_ERR_IO_ERROR. The tests only need self/shm/tcp.
+      - name: Disable UCX InfiniBand transports
+        run: echo "UCX_TLS=^ib" >> "$GITHUB_ENV"
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -119,6 +125,10 @@ jobs:
 
       - name: Set UCX_PREFIX to 1.22.0
         run: echo "UCX_PREFIX=/opt/ucx-1.22.0" >> "$GITHUB_ENV"
+
+      # See Tier 0: avoid a runner's non-functional RDMA device.
+      - name: Disable UCX InfiniBand transports
+        run: echo "UCX_TLS=^ib" >> "$GITHUB_ENV"
 
       - name: fmt
         run: cargo fmt --all -- --check
