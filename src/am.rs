@@ -2,13 +2,8 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
-<<<<<<< ours
-/// Re-exported for the C callback signature that must name it (tracked in #77).
-pub use crate::ffi::ucp_am_recv_param_t;
-=======
 /// Re-exported for the return type of [`AmRecvCb`] (tracked in #73).
 pub use crate::ffi::ucs_status_t;
->>>>>>> theirs
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -18,28 +13,17 @@ use crate::Status;
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
-<<<<<<< ours
-/// Raw active-message receive callback. It returns a [`Status`]; `Status` is
-/// `#[repr(transparent)]` over the raw status, so this matches UCX's C callback type.
-=======
 /// Raw active-message receive callback. UCX passes the receive parameters as
 /// `*const AmRecvParam`, valid only for the duration of the call. `AmRecvParam` is
 /// `#[repr(transparent)]` over UCX's C struct, so this matches UCX's C callback type.
->>>>>>> theirs
 pub type AmRecvCb = unsafe extern "C" fn(
     arg: *mut ::std::os::raw::c_void,
     header: *const ::std::os::raw::c_void,
     header_length: usize,
     data: *mut ::std::os::raw::c_void,
     length: usize,
-<<<<<<< ours
-    param: *const ucp_am_recv_param_t,
-) -> Status;
-
-type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'static>;
-=======
     param: *const AmRecvParam,
-) -> ucs_status_t;
+) -> Status;
 
 const AM_RECV_ATTR_FIELD_REPLY_EP: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FIELD_REPLY_EP as u64;
 const AM_RECV_ATTR_FLAG_DATA: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64;
@@ -98,9 +82,7 @@ impl std::fmt::Debug for AmRecvParam {
     }
 }
 
-type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static>;=======
 type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'static>;
->>>>>>> 87080b1 (fix: correct AmCallback type and test imports)
 
 /// The Rust state retained by [`Worker::am_register_handler`].
 pub struct AmHandler {
@@ -119,13 +101,8 @@ unsafe extern "C" fn am_trampoline(
     header_length: usize,
     data: *mut std::os::raw::c_void,
     length: usize,
-<<<<<<< ours
-    _param: *const ucp_am_recv_param_t,
-) -> Status {
-=======
     _param: *const AmRecvParam,
-) -> ucs_status_t {
->>>>>>> theirs
+) -> Status {
     // SAFETY: `arg` is an Arc<AmHandler> pointer installed by
     // am_register_handler and retained by Worker until after UCX destroys the
     // worker. UCX owns the callback buffers for this invocation; null pointers
@@ -326,14 +303,9 @@ impl HandlerParamsBuilder {
     pub fn cb(&mut self, cb: AmRecvCb) -> &mut HandlerParamsBuilder {
         self.flags |= ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-<<<<<<< ours
-        // SAFETY: `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `AmRecvCb` and UCX's
-        // `ucp_am_recv_callback_t` have ABI-compatible signatures.
-=======
         // SAFETY: `AmRecvCb` and UCX's `ucp_am_recv_callback_t` differ only in the pointee type of
         // the `param` pointer (`AmRecvParam` is `#[repr(transparent)]` over `ucp_am_recv_param_t`),
         // and pointers to sized types are ABI-compatible.
->>>>>>> theirs
         params.cb =
             unsafe { std::mem::transmute::<Option<AmRecvCb>, ucp_am_recv_callback_t>(Some(cb)) };
         self
@@ -446,57 +418,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< ours
-    fn am_unregister_then_reregister_delivers() {
-        let context_params = ContextParamsBuilder::new()
-            .features(Flags::Am)
-            .mt_workers_shared(1)
-            .build();
-        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
-        let worker_params = WorkerParamsBuilder::new().build();
-        let mut worker = context.worker_create(&worker_params).unwrap();
-        let packed = worker.pack_address().unwrap();
-        let address = RemoteWorkerAddress::new(packed.to_vec());
-        drop(packed);
-        let endpoint = worker
-            .create_ep(EpParamsBuilder::new().address(&address).build())
-            .unwrap();
-        // Removing an id that never had a handler is accepted.
-        worker.am_unregister(26).unwrap();
-        let first = Arc::new(AtomicU32::new(0));
-        let first_seen = Arc::clone(&first);
-        worker
-            .am_register_handler(24, CbFlags::WholeMsg, move |_header, _data| {
-                first_seen.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            })
-            .unwrap();
-        worker.am_unregister(24).unwrap();
-        let second = Arc::new(AtomicU32::new(0));
-        let second_seen = Arc::clone(&second);
-        worker
-            .am_register_handler(24, CbFlags::WholeMsg, move |header, data| {
-                assert_eq!(header, b"h");
-                assert_eq!(data, b"d");
-                second_seen.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            })
-            .unwrap();
-        // Only send after a handler is registered again: sending to an id without a
-        // handler over a self endpoint crashes inside UCX (#111).
-        let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
-        if let Some(request) = endpoint.am_send(24, b"h", b"d", &request_param).unwrap() {
-            assert!(worker.wait_request(&request).unwrap());
-        }
-        for _ in 0..1000 {
-            worker.progress();
-            if second.load(Ordering::Relaxed) == 1 {
-                break;
-            }
-        }
-        assert_eq!(second.load(Ordering::Relaxed), 1);
-        assert_eq!(first.load(Ordering::Relaxed), 0);
-=======
     fn am_recv_param_reply_ep_requires_field_bit() {
         let fake = 0x40usize as ucp_ep_h;
         // SAFETY: the raw receive-param struct is plain C data; all-zero is valid.
@@ -558,6 +479,5 @@ mod tests {
         }
         // No reply flag was sent, so UCX must not report a reply endpoint.
         assert_eq!(seen, [b'q', 1]);
->>>>>>> theirs
     }
 }

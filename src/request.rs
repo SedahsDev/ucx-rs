@@ -442,15 +442,9 @@ mod tests {
         header_length: usize,
         _data: *mut ::std::os::raw::c_void,
         _length: usize,
-<<<<<<< ours
-        _param: *const ucp_am_recv_param_t,
-=======
         _param: *const AmRecvParam,
->>>>>>> 87080b1 (fix: correct AmCallback type and test imports)
     ) -> Status {
-=======
-        _param: *const crate::am::AmRecvParam,
-    ) -> ucs_status_t {        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
+        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
         let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
         message[0] = in_data[0];
         Status::OK
