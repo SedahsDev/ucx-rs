@@ -15,6 +15,9 @@
   value, 1.63, could never build the crate: the code uses `let`-`else` (Rust 1.65) and
   `std::os::fd` (1.66), the `bindgen` build-dependency needs 1.70, its `rustc-hash` 2.1
   dependency needs 1.77, and the committed `Cargo.lock` (format v4) needs Cargo 1.78.
+- Added `Worker::am_unregister(id)` to remove an active-message handler (#99). Closure state of
+  handlers registered with `Worker::am_register_handler` is still retained until the worker is
+  dropped.
 
 ## 0.1.0
 

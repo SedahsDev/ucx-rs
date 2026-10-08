@@ -281,6 +281,10 @@ impl Drop for Worker {
             Ok(None) => {}
             Err(error) => eprintln!("ucx-sys: worker flush during Drop failed: {error:?}"),
         }
+        // `ucp_worker_destroy` releases every active-message handler registered on this
+        // worker, so no explicit unregistration is needed here. The Rust closures retained in
+        // `am_handlers` are dropped after this function returns (fields drop after `drop`),
+        // i.e. only once UCX can no longer invoke them.
         unsafe { ucp_worker_destroy(self.handle) };
     }
 }
