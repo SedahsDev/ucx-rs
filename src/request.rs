@@ -197,11 +197,6 @@ pub(crate) fn status_ptr_is_err(ptr: ucs_status_ptr_t) -> bool {
     ptr as usize >= (ucs_status_t::UCS_ERR_LAST as isize) as usize
 }
 
-#[inline]
-fn status_value_is_err(status: ucs_status_t) -> bool {
-    (status as i8) < 0
-}
-
 // Keep the decoder's literal status table synchronized with the bindgen output.
 // These assertions are evaluated while compiling, so regenerated bindings that
 // change a status discriminant fail immediately instead of silently misdecoding.
@@ -397,136 +392,6 @@ pub struct RequestAttr {
     pub status: Status,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::context;
-    use crate::context::Context;
-    use crate::ep;
-    use crate::worker;
-    use crate::worker::RemoteWorkerAddress;
-    use std::rc::Rc;
-
-    const TEST_AM_ID: u32 = 5;
-
-    extern "C" fn init(_request: *mut ::std::os::raw::c_void) {}
-
-    extern "C" fn cleanup(_request: *mut ::std::os::raw::c_void) {}
-
-    unsafe extern "C" fn am_cb(
-        arg: *mut ::std::os::raw::c_void,
-        header: *const ::std::os::raw::c_void,
-        header_length: usize,
-        _data: *mut ::std::os::raw::c_void,
-        _length: usize,
-        _param: *const ucp_am_recv_param_t,
-    ) -> ucs_status_t {
-        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
-        let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
-        message[0] = in_data[0];
-        ucs_status_t::UCS_OK
-    }
-
-    pub struct CommsContext {
-        pub ep: ep::Ep,
-        pub worker: worker::Worker,
-        #[allow(dead_code)]
-        pub context: context::Context,
-    }
-
-    pub fn setup_default() -> Rc<CommsContext> {
-        let features = context::Flags::Am
-            | context::Flags::Rma
-            | context::Flags::Amo32
-            | context::Flags::Amo64
-            | context::Flags::Tag;
-
-        let params = context::ParamsBuilder::new()
-            .features(features)
-            .mt_workers_shared(1)
-            .request_init(init)
-            .request_cleanup(cleanup)
-            .request_size(8)
-            .name("My Awesome Test")
-            .expect("context name")
-            .tag_sender_mask(u64::MAX)
-            .estimated_num_eps(4)
-            .estimated_num_ppn(2)
-            .build();
-
-        let worker_features = worker::ParamsBuilder::new()
-            .thread_mode(crate::ThreadMode::Multi)
-            .build();
-
-        let mut context = Context::new(
-            &context::Config::read("", "").expect("config read"),
-            &params,
-        )
-        .unwrap();
-
-        let worker = context.worker_create(&worker_features).unwrap();
-        let packed_addr = worker.pack_address().unwrap();
-        let addr = RemoteWorkerAddress::new(packed_addr.to_vec());
-
-        let ep_param = ep::ParamsBuilder::new().address(&addr).build();
-        let ep = worker.create_ep(ep_param).unwrap();
-        // If we don't drop this than the compiler complains about how the
-        // worker is borrowed in the packed_addr.
-        drop(packed_addr);
-
-        let mut progressed = worker.progress();
-        while progressed {
-            progressed = worker.progress();
-        }
-        Rc::new(CommsContext {
-            context,
-            worker,
-            ep,
-        })
-    }
-
-    #[test]
-    fn request_helper_api_signatures() {
-        let is_completed: fn(&Request) -> bool = Request::is_completed;
-        let test: fn(&Request) -> RequestState = Request::test;
-        let release: fn(Request) = Request::release;
-        let check_finished: fn(&Request) -> Result<bool, Status> = Request::check_finished;
-        let _ = (is_completed, test, release, check_finished);
-    }
-
-    #[test]
-    fn setup() {
-        let _ = setup_default();
-    }
-
-    #[test]
-    fn am() {
-        let comms = setup_default();
-        let send_buffer = vec![32];
-        let mut recv_buffer = vec![0];
-
-        let am_params = am::HandlerParamsBuilder::new()
-            .id(TEST_AM_ID)
-            .cb(am_cb)
-            .arg(recv_buffer.as_mut_ptr() as *mut std::os::raw::c_void)
-            .build();
-        comms.worker.am_register(&am_params).unwrap();
-
-        let am_flags = RequestParamBuilder::new().no_imm_cmpl().build();
-
-        let req = comms
-            .ep
-            .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
-            .unwrap();
-        if let Some(req) = req {
-            while !req.check_finished().unwrap() {
-                comms.worker.progress();
-            }
-        }
-        assert_eq!(send_buffer[0], recv_buffer[0]);
-    }
-}
-
 pub struct RequestAttrFields(u64);
 
 #[allow(non_upper_case_globals)]
@@ -556,5 +421,68 @@ impl RequestAttrFields {
     #[inline]
     pub const fn contains(self, other: RequestAttrFields) -> bool {
         (self.0 & other.0) == other.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::setup_default;
+
+    const TEST_AM_ID: u32 = 5;
+
+    unsafe extern "C" fn am_cb(
+        arg: *mut ::std::os::raw::c_void,
+        header: *const ::std::os::raw::c_void,
+        header_length: usize,
+        _data: *mut ::std::os::raw::c_void,
+        _length: usize,
+        _param: *const ucp_am_recv_param_t,
+    ) -> ucs_status_t {
+        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
+        let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
+        message[0] = in_data[0];
+        ucs_status_t::UCS_OK
+    }
+
+    #[test]
+    fn request_helper_api_signatures() {
+        let is_completed: fn(&Request) -> bool = Request::is_completed;
+        let test: fn(&Request) -> RequestState = Request::test;
+        let release: fn(Request) = Request::release;
+        let check_finished: fn(&Request) -> Result<bool, Status> = Request::check_finished;
+        let _ = (is_completed, test, release, check_finished);
+    }
+
+    #[test]
+    fn setup() {
+        let _ = setup_default();
+    }
+
+    #[test]
+    fn am() {
+        let comms = setup_default();
+        let send_buffer = vec![32];
+        let mut recv_buffer = vec![0];
+
+        let am_params = crate::am::HandlerParamsBuilder::new()
+            .id(TEST_AM_ID)
+            .cb(am_cb)
+            .arg(recv_buffer.as_mut_ptr() as *mut std::os::raw::c_void)
+            .build();
+        comms.worker.am_register(&am_params).unwrap();
+
+        let am_flags = RequestParamBuilder::new().no_imm_cmpl().build();
+
+        let req = comms
+            .ep
+            .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
+            .unwrap();
+        if let Some(req) = req {
+            while !req.check_finished().unwrap() {
+                comms.worker.progress();
+            }
+        }
+        assert_eq!(send_buffer[0], recv_buffer[0]);
     }
 }

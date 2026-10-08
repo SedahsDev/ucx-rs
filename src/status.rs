@@ -9,11 +9,6 @@ use crate::request::Request;
 pub struct Status(pub(crate) ucs_status_t);
 
 impl Status {
-    /// The raw UCX status code.
-    pub(crate) fn to_ffi(self) -> ucs_status_t {
-        self.0
-    }
-
     /// Whether this status represents an error (negative UCX status).
     pub fn is_err(self) -> bool {
         (self.0 as i8) < 0
@@ -173,6 +168,7 @@ const _: () = {
 #[cfg(test)]
 mod status_tests {
     use super::*;
+    use crate::RequestParamBuilder;
 
     #[test]
     fn status_ptr_to_result_immediate_completion() {

@@ -582,3 +582,102 @@ impl Ep {
         .map(|request| super::fetch_amo_result(request, worker))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::context::{Config, Context, Flags, ParamsBuilder};
+    use crate::ep::ParamsBuilder as EpParamsBuilder;
+    use crate::memh::MemHandle;
+    use crate::rma::RemoteKey;
+    use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress, Worker};
+    use crate::{Request, RequestParamBuilder};
+
+    /// UCX version and transport selection, for failure messages.
+    fn transport() -> String {
+        format!(
+            "UCX {}, UCX_TLS={:?}",
+            crate::version::get_version_string(),
+            std::env::var("UCX_TLS").ok()
+        )
+    }
+
+    /// Progress `worker` until `request` completes. Bounded, so a transport that
+    /// cannot complete the operation fails the test instead of hanging it.
+    fn wait(worker: &Worker, request: Option<Request>, what: &str) {
+        let Some(request) = request else {
+            return;
+        };
+        for _ in 0..1_000_000 {
+            match request.check_finished() {
+                Ok(true) => return,
+                Ok(false) => {
+                    worker.progress();
+                }
+                Err(status) => panic!("{what} failed with {status} ({})", transport()),
+            }
+        }
+        panic!("{what} did not complete ({})", transport());
+    }
+
+    /// RMA put and get through an endpoint connected to its own worker, using a
+    /// packed and unpacked rkey. CI also runs this test on its own with
+    /// `UCX_TLS=self` (the "RMA smoke test (self TLS)" job selects it by its full
+    /// path, `rma::ep_ops::tests::rma_self_put_get_round_trip`; keep them in sync).
+    #[test]
+    fn rma_self_put_get_round_trip() {
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma)
+            .mt_workers_shared(1)
+            .estimated_num_eps(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config"), &params).expect("context");
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        drop(address);
+
+        let mut target = [0u8; 8];
+        let target_addr = target.as_mut_ptr() as u64;
+        let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        // Default params on purpose: UCX 1.16 (Ubuntu 24.04's libucx) transfers zero
+        // bytes for a put with NO_IMM_CMPL and no explicit datatype (fixed upstream in
+        // openucx ba426c890, UCX 1.17). `wait` handles immediate completion.
+        let param = RequestParamBuilder::new().build();
+
+        let put = ep
+            .rma_put(b"ucx-rs!!", target_addr, &rkey, &param)
+            .unwrap_or_else(|status| panic!("post RMA put: {status} ({})", transport()));
+        wait(&worker, put, "RMA put");
+        // A completed put only means the source buffer may be reused. The data is
+        // guaranteed to be at the target, and visible to a later get, only after a
+        // flush (see the ucp_put_nbx docs).
+        let flush = ep
+            .flush(&param)
+            .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
+        wait(&worker, flush, "endpoint flush");
+
+        let mut fetched = [0u8; 8];
+        let get = ep
+            .rma_get(&mut fetched, target_addr, &rkey, &param)
+            .unwrap_or_else(|status| panic!("post RMA get: {status} ({})", transport()));
+        wait(&worker, get, "RMA get");
+
+        drop(rkey);
+        drop(memh);
+        assert_eq!(
+            (&target, &fetched),
+            (b"ucx-rs!!", b"ucx-rs!!"),
+            "(RMA put target, RMA get result) ({})",
+            transport()
+        );
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+}

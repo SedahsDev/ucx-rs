@@ -26,57 +26,74 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libucx-dev libclang-dev pkg-config
 
+      # Some hosted runners expose a Mellanox/RDMA device whose verbs calls fail
+      # (`ibv_create_srq() failed: Operation not supported`), which makes every
+      # worker creation fail with UCS_ERR_IO_ERROR. The tests only need self/shm/tcp.
+      - name: Disable UCX InfiniBand transports
+        run: echo "UCX_TLS=^ib" >> "$GITHUB_ENV"
+
       - name: fmt
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: test
-        run: cargo test -- --test-threads=1
+        run: cargo test --locked -- --test-threads=1
 
       - name: example
-        run: cargo run --example version_and_context
+        run: cargo run --locked --example version_and_context
 
-  rma_amo_smoke:
-    name: RMA/AMO smoke test (self TLS)
+  msrv:
+    name: MSRV (Rust 1.78)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust 1.78 (rust-version in Cargo.toml)
+        uses: dtolnay/rust-toolchain@1.78
 
       - name: Install UCX
         run: |
           sudo apt-get update
           sudo apt-get install -y libucx-dev
 
-      - name: Run RMA/AMO smoke test with debug logging
-        run: |
-          export UCX_TLS=self
-          export UCX_LOG_LEVEL=debug
-          echo "UCX_TLS=$UCX_TLS"
-          echo "UCX_LOG_LEVEL=$UCX_LOG_LEVEL"
-          cargo test -- rma_amo_self --ignored --nocapture 2>&1 | tee /tmp/ucx_rma_amo.log
-          if grep -q "using.*self" /tmp/ucx_rma_amo.log; then
-            echo "✅ Confirmed: UCX selected 'self' transport"
-          else
-            echo "⚠️ Warning: 'self' transport not confirmed in logs"
-            echo "=== UCX log excerpt ==="
-            tail -n 50 /tmp/ucx_rma_amo.log
-            echo "========================"
-          fi
-        env:
-          RUST_BACKTRACE: 1
+      - name: check
+        run: cargo check --locked --all-targets
 
-      - name: Document ignored RMA/AMO test
+  rma_smoke:
+    name: RMA smoke test (self TLS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UCX
         run: |
-          echo "If the RMA/AMO test fails or is ignored, it is expected on GitHub-hosted runners where self TLS RMA/AMO may be unsupported."
-          echo "See THREADING.md for details."
+          sudo apt-get update
+          sudo apt-get install -y libucx-dev
+
+      - name: Build the RMA test
+        run: cargo test --locked --lib --no-run
+
+      # The test prints the UCX version and UCX_TLS in its failure messages; UCX writes
+      # its debug log (transport selection) to the file so the test output stays readable.
+      - name: Run the RMA put/get loopback test with UCX_TLS=self
+        shell: bash -eo pipefail {0}
+        env:
+          UCX_TLS: self
+          UCX_LOG_LEVEL: debug
+          UCX_LOG_FILE: /tmp/ucx_rma_smoke.log
+          RUST_BACKTRACE: 1
+        run: |
+          cargo test --locked --lib rma::ep_ops::tests::rma_self_put_get_round_trip -- --exact --test-threads=1 --nocapture 2>&1 | tee /tmp/rma_smoke.out
+          grep -q "test result: ok. 1 passed" /tmp/rma_smoke.out
+
+      - name: Show the UCX log
         if: always()
+        run: tail -n 80 /tmp/ucx_rma_smoke.log || echo "no UCX log written"
 
   tier1-ucx-122:
     name: Tier 1 (UCX 1.22.0)
@@ -89,29 +106,38 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # mlx5dv.h ships in libibverbs-dev on Ubuntu 24.04 (there is no libmlx5-dev package).
+      # UCX's configure has no --enable-mlx5/--enable-ibverbs/--enable-rdmacm switches; the
+      # verbs, mlx5 and rdmacm transports are detected automatically (--with-* to force them).
       - name: Install UCX 1.22.0 from source
+        shell: bash -eo pipefail {0}
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential wget libnuma-dev libmlx5-dev librdmacm-dev libibverbs-dev
+          sudo apt-get install -y build-essential wget libnuma-dev librdmacm-dev libibverbs-dev
           cd /tmp
           wget -q https://github.com/openucx/ucx/releases/download/v1.22.0/ucx-1.22.0.tar.gz
+          echo "258941cddd14ca60d38c0d31b9b09ec1052c901086841011a498da8b55a3cb24  ucx-1.22.0.tar.gz" | sha256sum -c -
           tar -xzf ucx-1.22.0.tar.gz
           cd ucx-1.22.0
-          ./configure --prefix=/opt/ucx-1.22.0 --enable-mlx5 --enable-rdmacm --enable-ibverbs
-          make -j$(nproc)
+          ./configure --prefix=/opt/ucx-1.22.0 --without-java --without-go
+          make -j"$(nproc)"
           sudo make install
 
       - name: Set UCX_PREFIX to 1.22.0
-        run: echo "UCX_PREFIX=/opt/ucx-1.22.0" >> $GITHUB_ENV
+        run: echo "UCX_PREFIX=/opt/ucx-1.22.0" >> "$GITHUB_ENV"
+
+      # See Tier 0: avoid a runner's non-functional RDMA device.
+      - name: Disable UCX InfiniBand transports
+        run: echo "UCX_TLS=^ib" >> "$GITHUB_ENV"
 
       - name: fmt
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: test
-        run: cargo test
+        run: cargo test --locked -- --test-threads=1
 
       - name: example
-        run: cargo run --example version_and_context
+        run: cargo run --locked --example version_and_context

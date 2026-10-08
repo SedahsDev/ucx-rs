@@ -35,6 +35,8 @@
 #![allow(unused_imports)]
 
 mod ffi;
+#[cfg(test)]
+mod tests;
 mod threading_assert;
 use crate::ffi::*;
 
