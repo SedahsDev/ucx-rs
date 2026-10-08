@@ -37,6 +37,12 @@ impl ParamsBuilder {
         }
     }
 
+    /// Request the thread mode the worker is created with. UCX may grant a different mode;
+    /// query the granted one with `Worker::query` and `WorkerAttrFields::THREAD_MODE`.
+    /// Leaving it unset requests UCX's default, `ThreadMode::Single`.
+    ///
+    /// `ThreadMode::Unknown` is not a real thread mode: it is requested as
+    /// `ThreadMode::Multi`, the mode with the strongest thread-safety guarantees.
     pub fn thread_mode(&mut self, thread_mode: crate::ThreadMode) -> &mut ParamsBuilder {
         self.field_mask |= ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };

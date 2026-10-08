@@ -337,6 +337,10 @@ impl RequestParamBuilder {
         self
     }
 
+    /// Set the memory type of the operation's buffer, so UCX does not have to detect it.
+    ///
+    /// Leaving the memory type unset, or passing `MemoryType::Unknown`, makes UCX detect the
+    /// memory type of the buffer itself.
     #[inline]
     pub fn memory_type(&mut self, mt: crate::MemoryType) -> &mut Self {
         self.field_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32;

@@ -128,7 +128,7 @@ mod tests {
 /// Keep them on the constructing thread, or serialize their use yourself.
 /// Fetch-AMO operations whose reply buffer is borrowed are not cross-thread
 /// compatible; an owned-buffer API is future work. Per-operation locking may
-/// also negate the parallelism benefit of `UCS_THREAD_MODE_MULTI` and should
+/// also negate the parallelism benefit of `ThreadMode::Multi` and should
 /// be measured before relying on it for performance.
 pub struct MtWorker {
     inner: Arc<MtWorkerInner>,
@@ -329,10 +329,10 @@ impl Worker {
     /// Make one non-blocking progress attempt on this worker.
     ///
     /// In a UCX build with multi-thread support, concurrent calls are
-    /// safe when this worker uses `UCS_THREAD_MODE_MULTI`, but they contend on
+    /// safe when this worker uses `ThreadMode::Multi`, but they contend on
     /// UCX's internal pthread spinlock. Losing callers busy-wait and perform
     /// atomic read-modify-writes on the shared lock word, causing cache-line
-    /// thrashing. In a non-MT build or with `UCS_THREAD_MODE_SINGLE`, concurrent
+    /// thrashing. In a non-MT build or with `ThreadMode::Single`, concurrent
     /// calls are undefined behavior. See [`THREADING.md` section 2.1][threading].
     ///
     /// Prefer one thread owning each worker's progress loop. To wake that loop
@@ -360,7 +360,7 @@ impl Worker {
     ///
     /// This method repeatedly calls [`Self::progress`], so the same
     /// safe-but-contended/undefined-behavior distinction applies: it is safe
-    /// but contended under `UCS_THREAD_MODE_MULTI` in an MT-enabled UCX build,
+    /// but contended under `ThreadMode::Multi` in an MT-enabled UCX build,
     /// and undefined otherwise when another caller drives the worker. See
     /// [`THREADING.md` section 2.1][threading]. Keep one progress owner per
     /// worker; use [`Self::arm`] and [`Self::get_efd`] for wakeups.
@@ -406,8 +406,8 @@ impl Worker {
     /// Flush outstanding operations on this worker.
     ///
     /// UCX may make progress while servicing this call. Concurrent calls on a
-    /// `UCS_THREAD_MODE_MULTI` worker are safe but contended in an MT-enabled
-    /// UCX build; in a non-MT build or `UCS_THREAD_MODE_SINGLE`, concurrent
+    /// `ThreadMode::Multi` worker are safe but contended in an MT-enabled
+    /// UCX build; in a non-MT build or `ThreadMode::Single`, concurrent
     /// access is undefined behavior. See [`THREADING.md` section 2.1][threading].
     /// Prefer a single owner for the worker's progress loop and use
     /// [`Self::arm`] plus [`Self::get_efd`] to wake it from other threads.

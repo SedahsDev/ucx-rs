@@ -59,7 +59,7 @@ impl Ep {
     ///
     /// The slice-based [`Ep::rma_put`] cannot express accelerator buffers — a device pointer
     /// must never be turned into a host `&[u8]`. See [`Ep::tag_send_ptr`] for the rationale.
-    /// Set `RequestParamBuilder::memory_type(UCS_MEMORY_TYPE_CUDA)` for device buffers.
+    /// Set `RequestParamBuilder::memory_type(MemoryType::Cuda)` for device buffers.
     ///
     /// # Safety
     ///
