@@ -653,17 +653,28 @@ mod tests {
             .rma_put(b"ucx-rs!!", target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA put: {status} ({})", transport()));
         wait(&worker, put, "RMA put");
+        // A completed put only means the source buffer may be reused. The data is
+        // guaranteed to be at the target, and visible to a later get, only after a
+        // flush (see the ucp_put_nbx docs). UCX 1.16 really does defer it.
+        let flush = ep
+            .flush(&param)
+            .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
+        wait(&worker, flush, "endpoint flush");
 
         let mut fetched = [0u8; 8];
         let get = ep
             .rma_get(&mut fetched, target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA get: {status} ({})", transport()));
         wait(&worker, get, "RMA get");
-        assert_eq!(&fetched, b"ucx-rs!!", "RMA get result ({})", transport());
 
         drop(rkey);
         drop(memh);
-        assert_eq!(&target, b"ucx-rs!!", "RMA put target ({})", transport());
+        assert_eq!(
+            (&target, &fetched),
+            (b"ucx-rs!!", b"ucx-rs!!"),
+            "(RMA put target, RMA get result) ({})",
+            transport()
+        );
         ep.close(&worker, 0).expect("close endpoint");
     }
 }
