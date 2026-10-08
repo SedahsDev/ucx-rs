@@ -435,6 +435,7 @@ impl RequestAttrFields {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::am::AmRecvParam;
     use crate::tests::setup_default;
 
     const TEST_AM_ID: u32 = 5;
@@ -445,7 +446,7 @@ mod tests {
         header_length: usize,
         _data: *mut ::std::os::raw::c_void,
         _length: usize,
-        _param: *const ucp_am_recv_param_t,
+        _param: *const AmRecvParam,
     ) -> Status {
         let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
         let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
