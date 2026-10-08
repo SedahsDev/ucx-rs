@@ -431,8 +431,8 @@ impl RequestAttrFields {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::setup_default;
     use crate::am::AmRecvParam;
+    use crate::tests::setup_default;
 
     const TEST_AM_ID: u32 = 5;
 
