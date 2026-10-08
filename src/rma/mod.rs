@@ -10,7 +10,3 @@ pub mod remote_key;
 pub use atomic::*;
 pub use ep_ops::*;
 pub use remote_key::*;
-
-/// Re-export the remote key handle type for external callers.
-#[allow(non_camel_case_types)]
-pub(crate) type ucp_rkey_h = crate::ffi::ucp_rkey_h;

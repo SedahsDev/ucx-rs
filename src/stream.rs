@@ -287,10 +287,10 @@ mod tests {
     use crate::context::{Config, Context, Flags, ParamsBuilder as CtxParamsBuilder};
     use crate::worker::ParamsBuilder as WorkerParamsBuilder;
 
-    /// Helper: create a UCX context + worker with Tag feature.
+    /// Helper: create a UCX context + worker with the Tag and Stream features.
     fn setup_worker() -> (Context, Worker) {
         let ctx_params = CtxParamsBuilder::new()
-            .features(Flags::Tag)
+            .features(Flags::Tag | Flags::Stream)
             .mt_workers_shared(1)
             .build();
         let mut ctx = Context::new(&Config::read("", "").expect("config read"), &ctx_params)

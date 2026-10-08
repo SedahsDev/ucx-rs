@@ -422,57 +422,6 @@ pub unsafe fn conn_request_query(
     ConnRequest::from_raw(conn_request).query(fields)
 }
 
-fn socket_address(addr: &SocketAddr) -> (SocketStorage, ucs_sock_addr_t) {
-    match addr {
-        SocketAddr::V4(v4) => {
-            let sin = sockaddr_in {
-                sin_family: libc::AF_INET as _,
-                sin_port: v4.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(v4.ip().octets()),
-                },
-                sin_zero: [0; 8],
-            };
-            let storage = SocketStorage::V4(Box::new(sin));
-            let sa = ucs_sock_addr_t {
-                addr: storage.as_ptr(),
-                addrlen: std::mem::size_of::<sockaddr_in>() as _,
-            };
-            (storage, sa)
-        }
-        SocketAddr::V6(v6) => {
-            let sin6 = sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as _,
-                sin6_port: v6.port().to_be(),
-                sin6_flowinfo: v6.flowinfo().to_be(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: v6.ip().octets(),
-                },
-                sin6_scope_id: v6.scope_id(),
-            };
-            let storage = SocketStorage::V6(Box::new(sin6));
-            let sa = ucs_sock_addr_t {
-                addr: storage.as_ptr(),
-                addrlen: std::mem::size_of::<sockaddr_in6>() as _,
-            };
-            (storage, sa)
-        }
-    }
-}
-
-enum SocketStorage {
-    V4(Box<sockaddr_in>),
-    V6(Box<sockaddr_in6>),
-}
-impl SocketStorage {
-    fn as_ptr(&self) -> *const sockaddr {
-        match self {
-            Self::V4(v) => v.as_ref() as *const _ as _,
-            Self::V6(v) => v.as_ref() as *const _ as _,
-        }
-    }
-}
-
 fn from_storage(storage: &sockaddr_storage) -> Option<SocketAddr> {
     // SAFETY: UCX stores a sockaddr with the family in the first field; the
     // casts are guarded by family and match the corresponding C layouts.
@@ -504,7 +453,8 @@ mod tests {
     fn masks_and_ipv4_conversion() {
         assert_eq!(UCP_LISTENER_PARAM_FIELD_SOCK_ADDR, 1);
         let addr = SocketAddr::from(([127, 0, 0, 1], 42));
-        let (_storage, raw) = socket_address(&addr);
+        let sock = crate::ep::SockAddr::new(&addr);
+        let raw = sock.to_ffi();
         assert_eq!(raw.addrlen as usize, std::mem::size_of::<sockaddr_in>());
         let mut ss = unsafe { MaybeUninit::<sockaddr_storage>::zeroed().assume_init() };
         unsafe {
@@ -520,7 +470,8 @@ mod tests {
     #[test]
     fn ipv6_conversion_round_trip() {
         let addr = SocketAddr::from(([0xfe80, 0, 0, 0, 0, 0, 0, 1], 42));
-        let (_storage, raw) = socket_address(&addr);
+        let sock = crate::ep::SockAddr::new(&addr);
+        let raw = sock.to_ffi();
         assert_eq!(raw.addrlen as usize, std::mem::size_of::<sockaddr_in6>());
         let mut ss = unsafe { MaybeUninit::<sockaddr_storage>::zeroed().assume_init() };
         unsafe {

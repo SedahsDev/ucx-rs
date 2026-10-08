@@ -562,30 +562,9 @@ pub unsafe fn atomic_xor64(
 }
 
 #[cfg(test)]
-#[allow(
-    deprecated,
-    clippy::let_unit_value,
-    clippy::missing_transmute_annotations
-)]
+#[allow(deprecated, clippy::let_unit_value)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rkey_framing_round_trip_preserves_payload() {
-        let payload = [0x12, 0x34, 0xab, 0xcd];
-        let framed = frame_rkey_payload(&payload).unwrap();
-        assert_eq!(&framed[..4], &(payload.len() as u32).to_le_bytes());
-        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
-    }
-
-    #[test]
-    fn rkey_unpack_accepts_public_framed_bytes() {
-        let payload = [0x12, 0x34, 0xab, 0xcd];
-        let framed = frame_rkey_payload(&payload).unwrap();
-        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
-        let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, Status> = RemoteKey::unpack;
-        let _ = unpack;
-    }
 
     #[test]
     fn remote_key_compare_api_signature() {
@@ -690,43 +669,27 @@ mod tests {
         ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fcswap32;
     }
 
-    /// Test with invalid rkey — this segfaults on some UCX versions instead of
-    /// returning an error. The UCX library calls into the rkey internals without
-    /// Regression test: calling rkey_ptr with null rkey now returns an error
-    /// instead of segfaulting. The Rust wrapper guards against null rkeys
-    /// before calling the C library.
-    ///
-    /// Root cause: `ucp_rkey_ptr` dereferences the rkey handle before validating it.
-    /// The Rust wrapper now checks `rkey.is_null()` and returns `UCS_ERR_INVALID_PARAM`.
+    /// `rkey_ptr` rejects a null rkey handle with `UCS_ERR_INVALID_PARAM` before
+    /// calling UCX: `ucp_rkey_ptr` dereferences the handle without validating it,
+    /// so passing null through would segfault.
     #[test]
     fn test_rkey_ptr_invalid() {
-        let result = unsafe { rkey_ptr(std::ptr::null_mut(), 0) };
-        assert!(
-            result.is_err(),
-            "Expected error for null rkey, got {:?}",
-            result
-        );
+        let rkey = RemoteKey {
+            handle: std::ptr::null_mut(),
+            worker_alive: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let result = unsafe { rkey_ptr(&rkey, 0) };
         assert_eq!(
-            result.unwrap_err(),
-            ucs_status_t::UCS_ERR_INVALID_PARAM,
+            result,
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM)),
             "Expected UCS_ERR_INVALID_PARAM for null rkey"
         );
     }
 
-    /// Structural test: verify rkey_ptr function exists in FFI.
+    /// Structural test: the safe `RemoteKey::rkey_ptr` keeps its signature.
     #[test]
     fn test_rkey_ptr_signature() {
         let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], Status> =
             RemoteKey::rkey_ptr;
-        // Verify the FFI function is accessible — just check it compiles
-        extern "C" {
-            fn ucp_rkey_ptr(
-                rkey: &RemoteKey,
-                raddr: u64,
-                addr_p: *mut *mut std::os::raw::c_void,
-            ) -> ucs_status_t;
-        }
-        // Function exists and has correct signature
-        let _ = unsafe { std::mem::transmute::<_, ()>(ucp_rkey_ptr) };
     }
 }

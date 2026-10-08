@@ -180,12 +180,6 @@ impl RemoteKey {
         Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
     }
 
-    /// Get the raw rkey handle.
-    #[inline]
-    pub(crate) fn as_raw(&self) -> ucp_rkey_h {
-        self.handle
-    }
-
     /// Compare this key with another key belonging to the same worker.
     /// UCX returns zero when the keys refer to the same memory region.
     pub fn compare(&self, other: &RemoteKey, worker: &Worker) -> Result<bool, Status> {
@@ -218,5 +212,27 @@ impl Drop for RemoteKey {
         if !self.handle.is_null() {
             unsafe { ucp_rkey_destroy(self.handle) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rkey_framing_round_trip_preserves_payload() {
+        let payload = [0x12, 0x34, 0xab, 0xcd];
+        let framed = frame_rkey_payload(&payload).unwrap();
+        assert_eq!(&framed[..4], &(payload.len() as u32).to_le_bytes());
+        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
+    }
+
+    #[test]
+    fn rkey_unpack_accepts_public_framed_bytes() {
+        let payload = [0x12, 0x34, 0xab, 0xcd];
+        let framed = frame_rkey_payload(&payload).unwrap();
+        assert_eq!(unframe_rkey_payload(&framed).unwrap(), payload);
+        let unpack: fn(&Ep, &[u8]) -> Result<RemoteKey, Status> = RemoteKey::unpack;
+        let _ = unpack;
     }
 }
