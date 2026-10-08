@@ -2,8 +2,6 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
-/// Re-exported for the return type of [`AmRecvCb`] (tracked in #73).
-pub use crate::ffi::ucs_status_t;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -13,9 +11,8 @@ use crate::Status;
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
-/// Raw active-message receive callback. UCX passes the receive parameters as
-/// `*const AmRecvParam`, valid only for the duration of the call. `AmRecvParam` is
-/// `#[repr(transparent)]` over UCX's C struct, so this matches UCX's C callback type.
+/// Raw active-message receive callback. It returns a [`Status`]; `Status` is
+/// `#[repr(transparent)]` over the raw status, so this matches UCX's C callback type.
 pub type AmRecvCb = unsafe extern "C" fn(
     arg: *mut ::std::os::raw::c_void,
     header: *const ::std::os::raw::c_void,
@@ -303,9 +300,8 @@ impl HandlerParamsBuilder {
     pub fn cb(&mut self, cb: AmRecvCb) -> &mut HandlerParamsBuilder {
         self.flags |= ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        // SAFETY: `AmRecvCb` and UCX's `ucp_am_recv_callback_t` differ only in the pointee type of
-        // the `param` pointer (`AmRecvParam` is `#[repr(transparent)]` over `ucp_am_recv_param_t`),
-        // and pointers to sized types are ABI-compatible.
+        // SAFETY: `Status` is `#[repr(transparent)]` over `ucs_status_t`, so `AmRecvCb` and UCX's
+        // `ucp_am_recv_callback_t` have ABI-compatible signatures.
         params.cb =
             unsafe { std::mem::transmute::<Option<AmRecvCb>, ucp_am_recv_callback_t>(Some(cb)) };
         self
