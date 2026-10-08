@@ -53,9 +53,10 @@ impl Drop for ListenerState {
             // SAFETY: the state owns the handle and is dropped only after the
             // Listener and all callback-delivered ConnRequests are gone.
             //
-            // Note: Listener destroy is best-effort. UCX documentation states that
-            // destroying a listener cancels all pending connection requests and
-            // destroys associated endpoints.
+            // `ucp_listener_destroy` returns no status, so there is nothing to check
+            // or report here. Endpoints created from this listener's connection
+            // requests are not owned by the listener; each one is closed through
+            // its own `Ep`.
             unsafe { ucp_listener_destroy(handle) };
         }
         // Reset the handle to null to prevent double-free
@@ -236,6 +237,10 @@ impl Default for ParamsBuilder<'_> {
 }
 
 /// RAII wrapper for a UCP listener.
+///
+/// The UCX listener is destroyed when the last owner of its shared state is dropped: this
+/// `Listener` and every [`ConnRequest`] delivered by its connection callback. That is why
+/// `Listener`'s own `Drop` is empty. `ucp_listener_destroy` reports no status.
 pub struct Listener {
     state: Arc<ListenerState>,
 }

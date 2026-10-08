@@ -88,6 +88,7 @@ impl Worker {
     /// The closure returns `Ok(())` on success (reported to UCX as `UCS_OK`); an `Err(status)` is
     /// reported to UCX as that status if it is an error code, otherwise as `Status::INVALID_PARAM`;
     /// `UCS_INPROGRESS` is never returned to UCX.
+    /// Use [`Self::am_unregister`] to remove the handler again.
     pub fn am_register_handler<F>(
         &mut self,
         id: u32,
@@ -107,9 +108,9 @@ impl Worker {
             .arg(Arc::as_ptr(&handler) as *mut std::ffi::c_void)
             .build();
         status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &params.handle) })?;
-        // UCX has no unregister/unset operation for AM handlers. Keep replaced handlers
-        // alive until worker destruction because UCX may still dispatch an in-flight
-        // callback using the previous opaque argument (`arg` pointer).
+        // Keep replaced and unregistered handlers (see `Worker::am_unregister`) alive until
+        // worker destruction because UCX may still dispatch an in-flight callback using the
+        // previous opaque argument (`arg` pointer).
         //
         // Cleanup strategy (Issue #100):
         // - When a new handler is registered, the old `AmHandler` Arc is pushed to
@@ -131,8 +132,32 @@ impl Worker {
     /// the thread calling `Worker::progress()`, or UCX-internal progress under
     /// MULTI. Do not block or call back into the same worker; hop heavy work to
     /// an application thread or channel. See `THREADING.md` section 4.
+    ///
+    /// UCX stores the callback pointer and the `arg` pointer, not a copy of the data `arg`
+    /// points to. The caller owns that data and must keep it valid until the handler for this
+    /// id is replaced, removed with [`Self::am_unregister`], or the worker is dropped.
     pub fn am_register(&self, am_param: &HandlerParams) -> Result<(), Status> {
         status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &am_param.handle) })
+    }
+
+    /// Remove the active-message handler registered for `id`, whether it was installed with
+    /// [`Self::am_register`] or [`Self::am_register_handler`].
+    ///
+    /// UCX clears a handler when it is set again with a null callback, which is what this
+    /// does. Removing an id that has no handler succeeds. Rust state of a closure registered
+    /// with [`Self::am_register_handler`] stays allocated until the worker is dropped, because
+    /// under `UCS_THREAD_MODE_MULTI` UCX may still be running the old callback on another
+    /// thread when this returns. Do not send messages to an id that has no handler (see #111).
+    pub fn am_unregister(&self, id: u32) -> Result<(), Status> {
+        // SAFETY: UCX parameter structs are valid when zeroed; the field mask controls reads.
+        let mut param: ucp_am_handler_param_t = unsafe { std::mem::zeroed() };
+        param.field_mask = ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID as u64
+            | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB as u64;
+        param.id = id;
+        // A null callback is UCX's documented way to clear the handler for `id`.
+        param.cb = None;
+        // SAFETY: self.handle is a live worker and `param` is fully initialized.
+        status_to_result(unsafe { ucp_worker_set_am_recv_handler(self.handle, &param) })
     }
 }
 
@@ -330,5 +355,57 @@ mod tests {
             }
         }
         assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn am_unregister_then_reregister_delivers() {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Am)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let worker_params = WorkerParamsBuilder::new().build();
+        let mut worker = context.worker_create(&worker_params).unwrap();
+        let packed = worker.pack_address().unwrap();
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .unwrap();
+        // Removing an id that never had a handler is accepted.
+        worker.am_unregister(26).unwrap();
+        let first = Arc::new(AtomicU32::new(0));
+        let first_seen = Arc::clone(&first);
+        worker
+            .am_register_handler(24, CbFlags::WholeMsg, move |_header, _data| {
+                first_seen.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .unwrap();
+        worker.am_unregister(24).unwrap();
+        let second = Arc::new(AtomicU32::new(0));
+        let second_seen = Arc::clone(&second);
+        worker
+            .am_register_handler(24, CbFlags::WholeMsg, move |header, data| {
+                assert_eq!(header, b"h");
+                assert_eq!(data, b"d");
+                second_seen.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .unwrap();
+        // Only send after a handler is registered again: sending to an id without a
+        // handler over a self endpoint crashes inside UCX (#111).
+        let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
+        if let Some(request) = endpoint.am_send(24, b"h", b"d", &request_param).unwrap() {
+            assert!(worker.wait_request(&request).unwrap());
+        }
+        for _ in 0..1000 {
+            worker.progress();
+            if second.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+        }
+        assert_eq!(second.load(Ordering::Relaxed), 1);
+        assert_eq!(first.load(Ordering::Relaxed), 0);
     }
 }
