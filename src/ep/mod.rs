@@ -72,7 +72,7 @@ impl Ep {
         });
     }
 
-    pub fn new(ep_params: Params, worker: &Worker) -> Result<Ep, Status> {
+    pub fn new(ep_params: Params<'_>, worker: &Worker) -> Result<Ep, Status> {
         let mut ep: ucp_ep_h = std::ptr::null_mut();
         let result =
             status_to_result(unsafe { ucp_ep_create(worker.handle, &ep_params.handle, &mut ep) });
@@ -375,5 +375,20 @@ mod tests {
             .expect("endpoint close should complete");
         drop(worker);
         drop(context);
+    }
+
+    #[test]
+    fn ep_params_sockaddr_points_at_borrowed_address() {
+        let addr = "127.0.0.1:13337".parse().unwrap();
+        let sock = SockAddr::new(&addr);
+        let mut builder = ParamsBuilder::new();
+        let params = builder.sockaddr(&sock).build();
+        assert_ne!(
+            params.handle.field_mask & ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR as u64,
+            0
+        );
+        let raw = sock.to_ffi();
+        assert_eq!(params.handle.sockaddr.addr, raw.addr);
+        assert_eq!(params.handle.sockaddr.addrlen, raw.addrlen);
     }
 }
