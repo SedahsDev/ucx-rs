@@ -11,6 +11,21 @@
   - `Worker::am_register_handler` closures return `Result<(), Status>`; `Ok(())` is reported to
     UCX as `UCS_OK`.
   - Removed the `am::ucs_status_t` re-export.
+- **Breaking (#106):** parameter builders now borrow the addresses they point at, so safe code
+  can no longer hand UCX a freed socket or worker address.
+  - `listener::ParamsBuilder`, `listener::ListenerParamsBuilder` and `listener::ListenerParams`
+    have a lifetime parameter (`ParamsBuilder<'a>`); `ParamsBuilder::sockaddr` takes
+    `&'a SockAddr`. `Listener::create_with_params` takes `&ListenerParams<'_>`.
+  - `ep::ParamsBuilder` and `ep::Params` have a lifetime parameter; `ParamsBuilder::sockaddr`
+    takes `&'a SockAddr` and `ParamsBuilder::address` takes `&'a RemoteWorkerAddress`.
+    `Ep::new`, `Worker::create_ep` and `MtWorker::create_ep` take `ep::Params<'_>`.
+  - Migration: builder chains such as
+    `Listener::create_with_params(&worker, &ParamsBuilder::new().sockaddr(&sa).build())` and
+    `worker.create_ep(EpParamsBuilder::new().address(&remote).build())` are unchanged. Code
+    that names these types in its own signatures or struct fields adds a lifetime (for
+    example `ep::Params<'_>`). Code that dropped the `SockAddr` or `RemoteWorkerAddress`
+    before the create call no longer compiles: keep the address alive until the listener or
+    endpoint has been created (UCX copies it during creation, so it may be dropped after).
 - The minimum supported Rust version is now 1.78 (`rust-version`), and CI checks it. The old
   value, 1.63, could never build the crate: the code uses `let`-`else` (Rust 1.65) and
   `std::os::fd` (1.66), the `bindgen` build-dependency needs 1.70, its `rustc-hash` 2.1

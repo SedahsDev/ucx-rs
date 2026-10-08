@@ -18,6 +18,7 @@ use crate::worker::Worker;
 use crate::Status;
 use bitflags::bitflags;
 use libc::{sockaddr_in, sockaddr_in6};
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ptr;
@@ -115,33 +116,76 @@ pub const UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER: u64 = ListenerParamFields::AC
 pub const UCP_LISTENER_PARAM_FIELD_CONN_HANDLER: u64 = ListenerParamFields::CONN_HANDLER.bits();
 
 /// Builder for the raw UCX listener parameter structure.
+///
+/// `'a` is the borrow of the [`crate::ep::SockAddr`] passed to [`ParamsBuilder::sockaddr`].
+/// UCX reads that address inside [`Listener::create_with_params`], so it must stay alive
+/// until the listener has been created.
 #[derive(Debug)]
-pub struct ParamsBuilder {
+pub struct ParamsBuilder<'a> {
     params: ucp_listener_params,
+    _addr: PhantomData<&'a crate::ep::SockAddr>,
 }
 
-pub type ListenerParamsBuilder = ParamsBuilder;
+pub type ListenerParamsBuilder<'a> = ParamsBuilder<'a>;
 
 /// Built listener parameters, ready for [`Listener::create_with_params`].
-pub struct ListenerParams {
+pub struct ListenerParams<'a> {
     params: ucp_listener_params,
+    _addr: PhantomData<&'a crate::ep::SockAddr>,
 }
 
-impl std::fmt::Debug for ListenerParams {
+impl std::fmt::Debug for ListenerParams<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ListenerParams").finish_non_exhaustive()
     }
 }
 
-impl ParamsBuilder {
+impl<'a> ParamsBuilder<'a> {
     pub fn new() -> Self {
         // SAFETY: ucp_listener_params is a C POD; zero is the documented
         // default for optional callbacks and unused fields.
         let params = unsafe { MaybeUninit::<ucp_listener_params>::zeroed().assume_init() };
-        Self { params }
+        Self {
+            params,
+            _addr: PhantomData,
+        }
     }
 
-    pub fn sockaddr(mut self, addr: &crate::ep::SockAddr) -> Self {
+    /// Listen on the socket address `addr`.
+    ///
+    /// The builder and the [`ListenerParams`] built from it borrow `addr`: UCX reads the
+    /// address inside [`Listener::create_with_params`], so `addr` must stay alive until the
+    /// listener has been created. The compiler enforces this:
+    ///
+    /// ```no_run
+    /// use ucx_sys::ep::SockAddr;
+    /// use ucx_sys::listener::{Listener, ParamsBuilder};
+    ///
+    /// fn listen(worker: &ucx_sys::worker::Worker) -> Result<Listener, ucx_sys::Status> {
+    ///     let addr = "127.0.0.1:0".parse().unwrap();
+    ///     let sa = SockAddr::new(&addr);
+    ///     let listener =
+    ///         Listener::create_with_params(worker, &ParamsBuilder::new().sockaddr(&sa).build());
+    ///     listener
+    /// }
+    /// ```
+    ///
+    /// Dropping the address before the listener is created is rejected (issue #106):
+    ///
+    /// ```compile_fail,E0597
+    /// use ucx_sys::ep::SockAddr;
+    /// use ucx_sys::listener::{Listener, ListenerParams, ParamsBuilder};
+    ///
+    /// fn dangling(worker: &ucx_sys::worker::Worker) -> Result<Listener, ucx_sys::Status> {
+    ///     let addr = "127.0.0.1:0".parse().unwrap();
+    ///     let params: ListenerParams = {
+    ///         let sa = SockAddr::new(&addr);
+    ///         ParamsBuilder::new().sockaddr(&sa).build()
+    ///     }; // `sa` (and its boxed sockaddr) is freed here
+    ///     Listener::create_with_params(worker, &params) // UCX would read the freed sockaddr
+    /// }
+    /// ```
+    pub fn sockaddr(mut self, addr: &'a crate::ep::SockAddr) -> Self {
         self.params.field_mask |= UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
         self.params.sockaddr = addr.to_ffi();
         self
@@ -178,14 +222,15 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn build(self) -> ListenerParams {
+    pub fn build(self) -> ListenerParams<'a> {
         ListenerParams {
             params: self.params,
+            _addr: PhantomData,
         }
     }
 }
 
-impl Default for ParamsBuilder {
+impl Default for ParamsBuilder<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -227,7 +272,10 @@ impl Listener {
 
     /// Create a listener from explicitly-built parameters. Callback execution
     /// follows the progress-context rules documented on [`Self::create`].
-    pub fn create_with_params(worker: &Worker, params: &ListenerParams) -> Result<Self, Status> {
+    pub fn create_with_params(
+        worker: &Worker,
+        params: &ListenerParams<'_>,
+    ) -> Result<Self, Status> {
         let mut handle = ptr::null_mut();
         status_to_result(unsafe { ucp_listener_create(worker.handle, &params.params, &mut handle) })
             .map(|()| Self {
@@ -487,6 +535,20 @@ mod tests {
             );
         }
         assert_eq!(from_storage(&ss), Some(addr));
+    }
+
+    #[test]
+    fn params_sockaddr_points_at_borrowed_address() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let sock = crate::ep::SockAddr::new(&addr);
+        let params = ParamsBuilder::new().sockaddr(&sock).build();
+        assert_ne!(
+            params.params.field_mask & UCP_LISTENER_PARAM_FIELD_SOCK_ADDR,
+            0
+        );
+        let raw = sock.to_ffi();
+        assert_eq!(params.params.sockaddr.addr, raw.addr);
+        assert_eq!(params.params.sockaddr.addrlen, raw.addrlen);
     }
 
     #[test]

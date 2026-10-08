@@ -250,7 +250,7 @@ impl MtWorker {
         Ok(false)
     }
 
-    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, Status> {
+    pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
         self.lock().create_ep(ep_params)
     }
 
@@ -389,7 +389,7 @@ impl Worker {
         Ok(false)
     }
 
-    pub fn create_ep(&self, ep_params: ep::Params) -> Result<Ep, Status> {
+    pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
         Ep::new(ep_params, self)
     }
 
