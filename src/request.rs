@@ -432,6 +432,7 @@ impl RequestAttrFields {
 mod tests {
     use super::*;
     use crate::tests::setup_default;
+    use crate::am::AmRecvParam;
 
     const TEST_AM_ID: u32 = 5;
 
@@ -443,12 +444,13 @@ mod tests {
         _length: usize,
 <<<<<<< ours
         _param: *const ucp_am_recv_param_t,
+=======
+        _param: *const AmRecvParam,
+>>>>>>> 87080b1 (fix: correct AmCallback type and test imports)
     ) -> Status {
 =======
         _param: *const crate::am::AmRecvParam,
-    ) -> ucs_status_t {
->>>>>>> theirs
-        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
+    ) -> ucs_status_t {        let message = std::slice::from_raw_parts_mut(arg as *mut i8, 1);
         let in_data = std::slice::from_raw_parts(header as *const i8, header_length);
         message[0] = in_data[0];
         Status::OK

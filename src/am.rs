@@ -98,8 +98,9 @@ impl std::fmt::Debug for AmRecvParam {
     }
 }
 
-type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static>;
->>>>>>> theirs
+type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> ucs_status_t + Send + 'static>;=======
+type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'static>;
+>>>>>>> 87080b1 (fix: correct AmCallback type and test imports)
 
 /// The Rust state retained by [`Worker::am_register_handler`].
 pub struct AmHandler {
@@ -522,7 +523,7 @@ mod tests {
         _data: *mut std::os::raw::c_void,
         _length: usize,
         param: *const AmRecvParam,
-    ) -> ucs_status_t {
+    ) -> Status {
         let seen = &mut *(arg as *mut [u8; 2]);
         if header_length == 1 && !header.is_null() {
             seen[0] = *(header as *const u8);
@@ -532,7 +533,7 @@ mod tests {
             Some(_) => 2,
             None => 3,
         };
-        ucs_status_t::UCS_OK
+        Status::OK
     }
 
     #[test]
