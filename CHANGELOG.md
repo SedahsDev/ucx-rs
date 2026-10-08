@@ -30,11 +30,9 @@
   value, 1.63, could never build the crate: the code uses `let`-`else` (Rust 1.65) and
   `std::os::fd` (1.66), the `bindgen` build-dependency needs 1.70, its `rustc-hash` 2.1
   dependency needs 1.77, and the committed `Cargo.lock` (format v4) needs Cargo 1.78.
-<<<<<<< ours
 - Added `Worker::am_unregister(id)` to remove an active-message handler (#99). Closure state of
   handlers registered with `Worker::am_register_handler` is still retained until the worker is
   dropped.
-=======
 - **Breaking (#77):** the raw AM receive-parameter and stream-poll-entry structs no longer appear
   in the public API.
   - `am::AmRecvCb` callbacks receive `param: *const am::AmRecvParam` (a `#[repr(transparent)]`
@@ -47,7 +45,6 @@
   - Migration: in raw AM callbacks replace `*const ucp_am_recv_param_t` with
     `*const AmRecvParam`; replace `entry.ep` / `entry.user_data` / `entry.flags` field reads with
     the method calls.
->>>>>>> theirs
 
 ## 0.1.0
 
