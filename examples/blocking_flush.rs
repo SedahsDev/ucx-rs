@@ -1,5 +1,6 @@
 //! Demonstrate a bounded blocking flush built from the non-blocking API.
 
+use ucx_sys::am::CbFlags;
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
@@ -27,7 +28,7 @@ fn main() {
         .build();
     let mut context =
         Context::new(&Config::read("", "").expect("config"), &params).expect("context");
-    let worker = context
+    let mut worker = context
         .worker_create(&WorkerParamsBuilder::new().build())
         .expect("worker");
     let address = worker.pack_address().expect("address");
@@ -36,6 +37,16 @@ fn main() {
         .create_ep(EpParamsBuilder::new().address(&remote).build())
         .expect("endpoint");
     drop(address);
+
+    // Register an AM handler before sending; Ep::am_send requires one to be
+    // registered for the AM id, otherwise the receive path may segfault.
+    let am_handler = |_header: &[u8], data: &[u8]| {
+        println!("received AM data: {data:?}");
+        Ok(())
+    };
+    worker
+        .am_register_handler(0, CbFlags::empty(), am_handler)
+        .expect("register active-message handler");
 
     // Issue an AM operation, then synchronously wait for the endpoint flush.
     // A self endpoint is enough to make this example runnable without a peer.
