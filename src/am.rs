@@ -218,6 +218,15 @@ impl Worker {
 }
 
 impl Ep {
+    /// Send an active message.
+    ///
+    /// # Precondition
+    ///
+    /// An AM handler must be registered on the receiving worker for the
+    /// given `id` before calling this method. For self endpoints, the
+    /// receiving worker is the caller's own worker. Calling `am_send` with
+    /// an unregistered `id` on a self endpoint will cause undefined behavior
+    /// (SIGSEGV in UCX).
     #[inline]
     pub fn am_send(
         &self,
