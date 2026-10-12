@@ -35,6 +35,15 @@
     where it passed `ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER` / `_NONE`. Call
     `.build()` on a listener `ParamsBuilder` before `Listener::create_with_params`, and
     replace `ListenerParams::new()` with `ParamsBuilder::new()`.
+- **Breaking (#107):** `ucp_mem_advice_t` and `ucp_conn_request_h` no longer appear in the public API.
+  - New `MemAdvice` enum with `Normal` and `WillNeed` variants.
+  - `memh::MemHandle::advice()` and `memh::MemAdviceParamsBuilder::advice()` take `MemAdvice`
+    instead of `ucp_mem_advice_t`.
+  - `ep::ParamsBuilder::conn_request()` takes `ConnRequest` by value instead of `ucp_conn_request_h`,
+    consuming the request to prevent handle reuse.
+  - Removed `ucp_mem_advice_t` from `memh.rs` public scope (it was already unreachable without `unsafe`).
+  - Migration: use `MemAdvice::WillNeed` instead of `ucp_mem_advice_t::UCP_MADV_WILLNEED`,
+    and pass `ConnRequest` directly to `conn_request()` instead of calling `.as_raw()`.
 - **Breaking (#106):** parameter builders now borrow the addresses they point at, so safe code
   can no longer hand UCX a freed socket or worker address.
   - `listener::ParamsBuilder`, `listener::ListenerParamsBuilder` and `listener::ListenerParams`

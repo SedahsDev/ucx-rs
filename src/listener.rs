@@ -2,6 +2,25 @@
 
 use crate::ep::SockAddrStorage;
 
+/// Connection request handle values for public APIs.
+///
+/// These map to the UCX `ucp_conn_request_h` type but are defined natively
+/// to avoid exposing FFI types in the public API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnRequestHandle {
+    /// A valid connection request.
+    Valid(*mut crate::ffi::ucp_conn_request),
+}
+
+impl ConnRequestHandle {
+    /// Convert to the underlying raw pointer.
+    pub(crate) fn as_raw(self) -> *mut crate::ffi::ucp_conn_request {
+        match self {
+            ConnRequestHandle::Valid(ptr) => ptr,
+        }
+    }
+}
+
 /// Native alias for the listener accept callback.
 /// Mirrors the C signature (raw ep handle is unavoidable for a C callback).
 pub type AcceptHandlerCb =
@@ -9,8 +28,12 @@ pub type AcceptHandlerCb =
 
 /// Native alias for the listener connection-request callback.
 /// Mirrors the C signature (raw conn-request handle is unavoidable for a C callback).
-pub type ConnHandlerCb =
-    Option<unsafe extern "C" fn(conn_request: ucp_conn_request_h, arg: *mut std::os::raw::c_void)>;
+pub type ConnHandlerCb = Option<
+    unsafe extern "C" fn(
+        conn_request: *mut crate::ffi::ucp_conn_request,
+        arg: *mut std::os::raw::c_void,
+    ),
+>;
 
 use crate::ffi::*;
 use crate::status_to_result;
@@ -72,12 +95,13 @@ unsafe extern "C" fn conn_trampoline(conn_request: ucp_conn_request_h, arg: *mut
     if arg.is_null() {
         return;
     }
+    let conn_request = ConnRequestHandle::Valid(conn_request);
     // Take one strong reference for the request without consuming the Arc
     // owned by the Listener.
     unsafe { Arc::increment_strong_count(arg as *const ListenerState) };
     let request_state = unsafe { Arc::from_raw(arg as *const ListenerState) };
     let request = ConnRequest {
-        handle: conn_request,
+        handle: conn_request.as_raw(),
         state: request_state,
     };
     let callback_state = Arc::clone(&request.state);
@@ -408,7 +432,7 @@ pub struct ConnRequest {
 impl ConnRequest {
     /// # Safety
     /// `handle` must be a valid request supplied by a UCX listener callback.
-    pub unsafe fn from_raw(handle: ucp_conn_request_h) -> Self {
+    pub unsafe fn from_raw(handle: *mut crate::ffi::ucp_conn_request) -> Self {
         Self {
             handle,
             state: Arc::new(ListenerState {
@@ -417,7 +441,11 @@ impl ConnRequest {
             }),
         }
     }
-    pub fn as_raw(&self) -> ucp_conn_request_h {
+    pub fn as_raw(&self) -> ConnRequestHandle {
+        ConnRequestHandle::Valid(self.handle)
+    }
+    /// Get the raw UCX connection request handle.
+    pub(crate) fn as_raw_ptr(&self) -> *mut crate::ffi::ucp_conn_request {
         self.handle
     }
     /// Reject this connection request, consuming its single-use handle.
@@ -469,10 +497,10 @@ pub struct ConnRequestAttr {
 /// # Safety
 /// `conn_request` must be a valid UCX connection request handle.
 pub unsafe fn conn_request_query(
-    conn_request: ucp_conn_request_h,
+    conn_request: ConnRequestHandle,
     fields: ConnRequestFields,
 ) -> Result<ConnRequestAttr, Status> {
-    ConnRequest::from_raw(conn_request).query(fields)
+    ConnRequest::from_raw(conn_request.as_raw()).query(fields)
 }
 
 fn from_storage(storage: &sockaddr_storage) -> Option<SocketAddr> {

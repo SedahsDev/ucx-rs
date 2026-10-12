@@ -64,6 +64,7 @@ pub use status::*;
 
 // Re-export wrapped types
 pub use error_handler_mode::ErrorHandlerMode;
+pub use memh::MemAdvice;
 pub use memory_type::MemoryType;
 pub use thread_mode::ThreadMode;
 
