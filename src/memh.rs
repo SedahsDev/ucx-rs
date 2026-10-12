@@ -38,6 +38,28 @@ pub struct MemHandleGuard<'a> {
     _buffer: PhantomData<&'a mut [u8]>,
 }
 
+/// Memory advice values for `MemHandle::advice()`.
+///
+/// These map to the UCX `ucp_mem_advice_t` enum but are defined natively
+/// to avoid exposing FFI types in the public API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemAdvice {
+    /// Normal memory access pattern.
+    Normal,
+    /// Memory will be needed soon.
+    WillNeed,
+}
+
+impl MemAdvice {
+    /// Convert to the corresponding UCX FFI type.
+    pub(crate) fn to_ffi(self) -> crate::ffi::ucp_mem_advice_t {
+        match self {
+            MemAdvice::Normal => crate::ffi::ucp_mem_advice_t::UCP_MADV_NORMAL,
+            MemAdvice::WillNeed => crate::ffi::ucp_mem_advice_t::UCP_MADV_WILLNEED,
+        }
+    }
+}
+
 impl<'a> MemHandleGuard<'a> {
     /// Access the underlying registered memory handle.
     pub fn mem_handle(&self) -> &MemHandle {
@@ -249,10 +271,10 @@ impl MemAdviseParamsBuilder {
         self
     }
 
-    pub fn advice(&mut self, advice: ucp_mem_advice_t) -> &mut Self {
+    pub fn advice(&mut self, advice: MemAdvice) -> &mut Self {
         self.field_mask |= ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.advice = advice;
+        params.advice = advice.to_ffi();
         self
     }
 
