@@ -78,6 +78,10 @@
   - Migration: in raw AM callbacks replace `*const ucp_am_recv_param_t` with
     `*const AmRecvParam`; replace `entry.ep` / `entry.user_data` / `entry.flags` field reads with
     the method calls.
+- **Fix (#126, slice 4 of #110):** the 14 deprecated atomic wrappers in `rma::atomic` now pass
+  `count=1` with a proper contiguous datatype (`dt_make_contig(size_of::<T>())`) to
+  `ucp_atomic_op_nbx` instead of byte sizes as `count`, which UCX rejected. Function signatures
+  are unchanged; the fix is internal to each wrapper body.
 
 ## 0.1.0
 
