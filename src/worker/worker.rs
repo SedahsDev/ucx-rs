@@ -390,6 +390,8 @@ impl Worker {
     }
 
     pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
+        let mut ep_params = ep_params;
+        ep_params.handle.conn_request = ep_params.conn_request_ptr();
         Ep::new(ep_params, self)
     }
 
