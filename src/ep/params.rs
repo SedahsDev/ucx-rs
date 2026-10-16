@@ -22,7 +22,18 @@ bitflags! {
 pub struct Params<'a> {
     pub(crate) handle: ucp_ep_params_t,
     name: Option<CString>,
+    conn_request: Option<crate::listener::ConnRequest>,
     _borrows: PhantomData<&'a ()>,
+}
+
+impl<'a> Params<'a> {
+    /// Get the raw connection request pointer, if present.
+    pub(crate) fn conn_request_ptr(&self) -> *mut crate::ffi::ucp_conn_request {
+        self.conn_request
+            .as_ref()
+            .map(|req| req.as_conn_request_ptr())
+            .unwrap_or(std::ptr::null_mut())
+    }
 }
 
 /// Builder for [`Params`]. `'a` is the borrow of the addresses passed to
@@ -32,6 +43,7 @@ pub struct ParamsBuilder<'a> {
     uninit_handle: std::mem::MaybeUninit<ucp_ep_params_t>,
     field_mask: u64,
     name: Option<CString>,
+    conn_request: Option<crate::listener::ConnRequest>,
     _borrows: PhantomData<&'a ()>,
 }
 
@@ -49,6 +61,7 @@ impl<'a> ParamsBuilder<'a> {
             uninit_handle: uninit_params,
             field_mask: 0,
             name: None,
+            conn_request: None,
             _borrows: PhantomData,
         }
     }
@@ -108,6 +121,7 @@ impl<'a> ParamsBuilder<'a> {
         unsafe {
             (*self.uninit_handle.as_mut_ptr()).conn_request = req.as_raw_ptr();
         }
+        self.conn_request = Some(req);
         self
     }
 
@@ -175,6 +189,7 @@ impl<'a> ParamsBuilder<'a> {
         let mut ep_param = Params {
             handle: unsafe { self.uninit_handle.assume_init() },
             name: None,
+            conn_request: self.conn_request.take(),
             _borrows: PhantomData,
         };
         if let Some(new_name) = self.name.take() {

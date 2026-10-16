@@ -444,6 +444,10 @@ impl ConnRequest {
     pub fn as_raw(&self) -> ConnRequestHandle {
         ConnRequestHandle::Valid(self.handle)
     }
+    /// Get the raw connection request pointer.
+    pub(crate) fn as_conn_request_ptr(&self) -> *mut crate::ffi::ucp_conn_request {
+        self.handle
+    }
     /// Get the raw UCX connection request handle.
     pub(crate) fn as_raw_ptr(&self) -> *mut crate::ffi::ucp_conn_request {
         self.handle
