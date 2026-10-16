@@ -1,3 +1,4 @@
+use crate::dt::dt_make_contig;
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
@@ -218,14 +219,18 @@ pub unsafe fn atomic_fadd32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -244,14 +249,18 @@ pub unsafe fn atomic_fadd64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -270,14 +279,18 @@ pub unsafe fn atomic_fswap32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -296,14 +309,18 @@ pub unsafe fn atomic_fswap64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -325,14 +342,18 @@ pub unsafe fn atomic_fcswap32(
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
     let operand = [expected, replacement];
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::CSwap,
         operand.as_ptr() as *const std::os::raw::c_void,
-        std::mem::size_of::<[u32; 2]>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -354,14 +375,18 @@ pub unsafe fn atomic_fcswap64(
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
     let operand = [expected, replacement];
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::CSwap,
         operand.as_ptr() as *const std::os::raw::c_void,
-        std::mem::size_of::<[u64; 2]>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -378,14 +403,18 @@ pub unsafe fn atomic_add32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -402,14 +431,18 @@ pub unsafe fn atomic_add64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Add,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -426,14 +459,18 @@ pub unsafe fn atomic_swap32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -450,14 +487,18 @@ pub unsafe fn atomic_swap64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Swap,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -476,14 +517,18 @@ pub unsafe fn atomic_fxor32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -502,14 +547,18 @@ pub unsafe fn atomic_fxor64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -526,14 +575,18 @@ pub unsafe fn atomic_xor32(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(4);
     atomic_op_nbx(
         ep,
         AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u32>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
@@ -550,14 +603,18 @@ pub unsafe fn atomic_xor64(
     rkey: &RemoteKey,
     param: &RequestParam,
 ) -> Result<Option<crate::Request>, Status> {
+    let mut param = RequestParam {
+        handle: param.handle,
+    };
+    param.handle.datatype = dt_make_contig(8);
     atomic_op_nbx(
         ep,
         AtomicOp::Xor,
         &operand as *const _ as *const std::os::raw::c_void,
-        std::mem::size_of::<u64>(),
+        1,
         remote_addr,
         rkey,
-        param,
+        &param,
     )
 }
 
