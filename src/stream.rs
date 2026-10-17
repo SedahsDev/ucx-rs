@@ -13,6 +13,7 @@ use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
 use crate::Status;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 /// One endpoint reported ready by [`Worker::stream_poll`].
@@ -145,6 +146,108 @@ impl Drop for StreamData<'_> {
     }
 }
 
+/// A stream send or receive tied to both its worker and its buffer.
+///
+/// UCX keeps reading (send) or writing (recv) the buffer until the request
+/// completes. This guard holds the buffer borrow for its entire lifetime, so
+/// safe code cannot drop, move, or reuse the buffer while the operation is in
+/// flight. Dropping a pending guard progresses its worker to completion before
+/// releasing the buffer borrow, unless the bounded progress loop times out; in
+/// that pathological case the request is deliberately leaked and the buffer
+/// must not be reused. This mirrors [`crate::rma::FetchAmoRequest`].
+pub struct StreamRequest<'w, 'a> {
+    request: Option<crate::Request>,
+    worker: &'w Worker,
+    length: usize,
+    _buffer: PhantomData<&'a mut [u8]>,
+}
+
+impl<'w, 'a> StreamRequest<'w, 'a> {
+    /// Extract the underlying UCX request without completing it.
+    ///
+    /// # Safety
+    /// The returned request may be in flight and still own the buffer borrowed
+    /// by this guard. The caller must keep that buffer valid until the returned
+    /// request reaches completion (`check_finished() == Ok(true)`) and must not
+    /// drop it (which calls `ucp_request_free`) while in flight. Prefer
+    /// `check_finished()` + `free()` on the wrapper, or let `Drop` handle it.
+    pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
+        self.request.take()
+    }
+
+    /// True if the operation has completed (or was already resolved).
+    pub fn check_finished(&self) -> Result<bool, Status> {
+        self.request
+            .as_ref()
+            .map_or(Ok(true), crate::Request::check_finished)
+    }
+
+    /// Test completion of a stream receive and return its byte length.
+    ///
+    /// Returns `Ok(length)` only when the receive is complete; a pending
+    /// receive returns `Err(Status::IN_PROGRESS)`. For a guard whose request
+    /// completed immediately, the length recorded by the call is returned.
+    /// This method must only be used with a guard returned by
+    /// [`Ep::stream_recv`].
+    pub fn stream_recv_test(&self) -> Result<usize, Status> {
+        match &self.request {
+            None => Ok(self.length),
+            Some(request) => request.stream_recv_test(),
+        }
+    }
+
+    /// Progress the request to completion before releasing its buffer borrow.
+    ///
+    /// If completion cannot be observed within the bounded progress loop, the
+    /// request is deliberately leaked rather than freed while it may still be
+    /// in flight. This preserves the same safety contract as [`Drop`].
+    pub fn free(mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) | Err(_) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
+impl Drop for StreamRequest<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                    Err(_) => {
+                        request.free();
+                        return;
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
 impl Ep {
     /// Receive one internally allocated stream data buffer.
     ///
@@ -168,26 +271,86 @@ impl Ep {
     }
 
     /// Send data on a stream (safe wrapper).
-    pub fn stream_send(
+    ///
+    /// UCX keeps reading `data` until the send completes. The returned guard,
+    /// when present, holds the borrow of `data` for its entire lifetime: the
+    /// buffer cannot be dropped, moved, or reused while the guard is alive.
+    /// `worker` must be the worker `self` was created on; the guard uses it to
+    /// drive progress when it is dropped while the send is still pending.
+    ///
+    /// ```compile_fail
+    /// use ucx_sys::ep::Ep;
+    /// use ucx_sys::worker::Worker;
+    /// use ucx_sys::RequestParam;
+    ///
+    /// fn leak(worker: &Worker, ep: &Ep, param: &RequestParam) {
+    ///     let guard = {
+    ///         let data = vec![0u8; 64];
+    ///         ep.stream_send(worker, &data, param).unwrap()
+    ///     };
+    ///     let _ = guard;
+    /// }
+    /// ```
+    pub fn stream_send<'w, 'a>(
         &self,
-        data: &[u8],
+        worker: &'w Worker,
+        data: &'a [u8],
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Option<StreamRequest<'w, 'a>>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "stream_send: the passed worker is not the endpoint's worker"
+        );
         status_ptr_to_result(unsafe {
             ucp_stream_send_nbx(self.handle, data.as_ptr() as _, data.len(), &param.handle)
+        })
+        .map(|request| {
+            request.map(|request| StreamRequest {
+                request: Some(request),
+                worker,
+                length: 0,
+                _buffer: PhantomData,
+            })
         })
     }
 
     /// Receive data on a stream (safe wrapper).
     ///
-    /// Returns the actual number of bytes received.
-    pub fn stream_recv(
+    /// UCX keeps writing into `buf` until the receive completes. The returned
+    /// guard holds the borrow of `buf` for its entire lifetime: the buffer
+    /// cannot be dropped, moved, or reused while the guard is alive. `worker`
+    /// must be the worker `self` was created on; the guard uses it to drive
+    /// progress when it is dropped while the receive is still pending.
+    ///
+    /// The number of bytes received is available from
+    /// [`StreamRequest::stream_recv_test`] once the request completes (UCX
+    /// fills the length only at completion).
+    ///
+    /// ```compile_fail
+    /// use ucx_sys::ep::Ep;
+    /// use ucx_sys::worker::Worker;
+    /// use ucx_sys::RequestParam;
+    ///
+    /// fn leak(worker: &Worker, ep: &Ep, param: &RequestParam) {
+    ///     let guard = {
+    ///         let mut buf = vec![0u8; 64];
+    ///         ep.stream_recv(worker, &mut buf, param).unwrap()
+    ///     };
+    ///     let _ = guard;
+    /// }
+    /// ```
+    pub fn stream_recv<'w, 'a>(
         &self,
-        buf: &mut [u8],
+        worker: &'w Worker,
+        buf: &'a mut [u8],
         param: &RequestParam,
-    ) -> Result<(Option<Request>, usize), Status> {
+    ) -> Result<StreamRequest<'w, 'a>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "stream_recv: the passed worker is not the endpoint's worker"
+        );
         let mut length: usize = 0;
-        let res = status_ptr_to_result(unsafe {
+        status_ptr_to_result(unsafe {
             ucp_stream_recv_nbx(
                 self.handle,
                 buf.as_mut_ptr() as _,
@@ -195,8 +358,13 @@ impl Ep {
                 &mut length,
                 &param.handle,
             )
-        });
-        res.map(|r| (r, length))
+        })
+        .map(|request| StreamRequest {
+            request,
+            worker,
+            length,
+            _buffer: PhantomData,
+        })
     }
 }
 
@@ -373,7 +541,7 @@ mod tests {
         // Verify stream_send compiles with valid params (won't complete without peer,
         // but the API call itself should not crash)
         let data = b"hello";
-        let result = ep.stream_send(data, &param);
+        let result = ep.stream_send(&worker, data, &param);
 
         // The send may return an error (no peer to receive), or a pending request.
         // Either way, the API is valid.
@@ -381,8 +549,8 @@ mod tests {
             Ok(None) => {
                 // Completed immediately (unlikely without peer, but valid)
             }
-            Ok(Some(_req)) => {
-                // Got a pending request — valid API behavior
+            Ok(Some(_guard)) => {
+                // Got a pending request guard — valid API behavior
             }
             Err(_status) => {
                 // Error is expected without a connected peer — API is still valid
@@ -391,8 +559,12 @@ mod tests {
 
         // Do not call stream_recv on a bare self-EP: UCX requires a connected
         // stream peer and dereferences uninitialized stream state otherwise.
-        let _: fn(&Ep, &mut [u8], &RequestParam) -> Result<(Option<Request>, usize), Status> =
-            Ep::stream_recv;
+        let _: for<'w, 'a> fn(
+            &Ep,
+            &'w Worker,
+            &'a mut [u8],
+            &RequestParam,
+        ) -> Result<StreamRequest<'w, 'a>, Status> = Ep::stream_recv;
     }
 
     /// Test that Worker::stream_poll and stream_data_release FFI functions exist.
@@ -415,7 +587,32 @@ mod tests {
 
     #[test]
     fn test_stream_request_completion_signature() {
+        // Wrapper functions pin the guard method signatures at compile time:
+        // if a signature changes, these helpers stop compiling.
+        fn guard_recv_test<'w, 'a>(guard: &StreamRequest<'w, 'a>) -> Result<usize, Status> {
+            guard.stream_recv_test()
+        }
+        fn guard_check_finished<'w, 'a>(guard: &StreamRequest<'w, 'a>) -> Result<bool, Status> {
+            guard.check_finished()
+        }
+        fn guard_free<'w, 'a>(guard: StreamRequest<'w, 'a>) {
+            guard.free()
+        }
         let _: fn(&Request) -> Result<usize, Status> = Request::stream_recv_test;
+        let _: for<'w, 'a> fn(&StreamRequest<'w, 'a>) -> Result<usize, Status> = guard_recv_test;
+        let _: for<'w, 'a> fn(&StreamRequest<'w, 'a>) -> Result<bool, Status> =
+            guard_check_finished;
+        let _: for<'w, 'a> fn(StreamRequest<'w, 'a>) = guard_free;
+    }
+
+    #[test]
+    fn test_stream_send_guard_signature() {
+        let _: for<'w, 'a> fn(
+            &Ep,
+            &'w Worker,
+            &'a [u8],
+            &RequestParam,
+        ) -> Result<Option<StreamRequest<'w, 'a>>, Status> = Ep::stream_send;
     }
 
     #[test]

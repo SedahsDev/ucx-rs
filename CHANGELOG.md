@@ -3,6 +3,31 @@
 ## Unreleased
 
 - UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
+- **Breaking (#129):** `Ep::stream_send` and `Ep::stream_recv` now return a
+  buffer-borrowing request guard, so safe code can no longer drop or reuse the
+  buffer while a stream operation is in flight (use-after-free fix, #112 slice 3).
+  - New `stream::StreamRequest<'w, 'a>` guard, following the same pattern as
+    `rma::FetchAmoRequest`: it borrows the worker and the buffer, and its
+    `Drop` progresses the worker to completion before releasing the buffer
+    borrow (a bounded progress loop; on timeout the request is deliberately
+    leaked rather than freed in flight).
+  - `Ep::stream_send(worker, data, param)` now takes the endpoint's `&Worker`
+    and returns `Result<Option<StreamRequest<'_, '_>>, Status>` instead of
+    `Result<Option<Request>, Status>`.
+  - `Ep::stream_recv(worker, buf, param)` now takes the endpoint's `&Worker`
+    and returns `Result<StreamRequest<'_, '_>, Status>` instead of
+    `Result<(Option<Request>, usize), Status>`. The received length is no
+    longer an out-tuple field: read it from `StreamRequest::stream_recv_test()`
+    (or keep using `Request::stream_recv_test` on the request extracted with
+    `StreamRequest::into_inner`).
+  - Migration: pass the worker as the first argument, e.g.
+    `ep.stream_send(&worker, &data, &param)?` and
+    `let guard = ep.stream_recv(&worker, &mut buf, &param)?;`. Code that kept
+    the `Request` and progressed manually can call `guard.check_finished()`
+    and `guard.free()`, or `unsafe { guard.into_inner() }` to recover the raw
+    `Request` (the buffer must then stay valid until completion). Code that
+    dropped the buffer while the request was pending no longer compiles: that
+    was the use-after-free this change removes.
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
