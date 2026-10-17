@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
