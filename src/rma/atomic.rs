@@ -692,4 +692,77 @@ mod tests {
         let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], Status> =
             RemoteKey::rkey_ptr;
     }
+
+    #[test]
+    #[allow(deprecated)]
+    fn atomic_fetch_nbx_loopback_test() {
+        use crate::worker::Worker;
+        use crate::Params;
+        use crate::WorkerParams;
+
+        let worker = Worker::new(&WorkerParams::new()).unwrap();
+        let ep_params = Params::new().address(worker.local_address()).build();
+        let ep = worker.create_ep(&ep_params).unwrap();
+
+        let mut reply: u64 = 0;
+        let operand: u64 = 42;
+        let rkey = ep.remote_key(&worker, 0).unwrap();
+        let param = RequestParamBuilder::new()
+            .reply_buffer(&mut reply as *mut _ as *mut std::os::raw::c_void)
+            .build();
+
+        let result = unsafe {
+            atomic_fetch_nbx(
+                &ep,
+                AtomicOp::Add,
+                &operand as *const _ as *const std::os::raw::c_void,
+                std::ptr::null_mut(),
+                std::mem::size_of::<u64>(),
+                0,
+                &rkey,
+                &param,
+            )
+        };
+        assert!(result.is_ok());
+        let req = result.unwrap();
+        assert!(req.is_some());
+        let req = req.unwrap();
+        let status = req.wait();
+        assert_eq!(status, Status::OK);
+        assert_eq!(reply, 0);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn atomic_op_nbx_loopback_test() {
+        use crate::worker::Worker;
+        use crate::Params;
+        use crate::WorkerParams;
+
+        let worker = Worker::new(&WorkerParams::new()).unwrap();
+        let ep_params = Params::new().address(worker.local_address()).build();
+        let ep = worker.create_ep(&ep_params).unwrap();
+
+        let operand: u64 = 42;
+        let rkey = ep.remote_key(&worker, 0).unwrap();
+        let param = RequestParamBuilder::new().build();
+
+        let result = unsafe {
+            atomic_op_nbx(
+                &ep,
+                AtomicOp::Add,
+                &operand as *const _ as *const std::os::raw::c_void,
+                std::mem::size_of::<u64>(),
+                0,
+                &rkey,
+                &param,
+            )
+        };
+        assert!(result.is_ok());
+        let req = result.unwrap();
+        assert!(req.is_some());
+        let req = req.unwrap();
+        let status = req.wait();
+        assert_eq!(status, Status::OK);
+    }
 }
