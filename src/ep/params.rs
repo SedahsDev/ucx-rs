@@ -102,7 +102,15 @@ impl<'a> ParamsBuilder<'a> {
         self
     }
 
-    pub fn conn_request(&mut self, req: ConnRequest) -> &mut Self {
+    /// Set the connection request handle for accepting an incoming connection.
+    ///
+    /// # Safety
+    ///
+    /// The `req` handle must be a valid UCX connection request obtained from a
+    /// listener callback, and it must not have been previously consumed by
+    /// [`crate::listener::Listener::reject`], [`crate::listener::ConnRequest::reject`],
+    /// or dropped. UCX will consume this request in [`crate::worker::Worker::create_ep`].
+    pub unsafe fn conn_request(&mut self, req: ConnRequest) -> &mut Self {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64;
         // SAFETY: req is an opaque UCX handle accepted by this parameter.
         unsafe {
