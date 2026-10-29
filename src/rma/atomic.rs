@@ -692,4 +692,67 @@ mod tests {
         let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], Status> =
             RemoteKey::rkey_ptr;
     }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_atomic_fetch_nbx_loopback() {
+        let worker = Worker::new(&crate::Context::new(&crate::ContextParams::new()).unwrap(), &crate::WorkerParams::new()).unwrap();
+        let ep = worker.create_ep(&crate::EpParams::new().address(worker.address())).unwrap();
+        let rkey = ep.rkey(0).unwrap();
+
+        let mut reply: u64 = 0;
+        let operand: u64 = 42;
+        let param = crate::RequestParamBuilder::new()
+            .reply_buffer(&mut reply as *mut _ as *mut std::os::raw::c_void)
+            .build();
+
+        unsafe {
+            let req = atomic_fetch_nbx(
+                &ep,
+                AtomicOp::Add,
+                &operand as *const _ as *const std::os::raw::c_void,
+                &mut reply as *mut _ as *mut std::os::raw::c_void,
+                std::mem::size_of::<u64>(),
+                0,
+                &rkey,
+                &param,
+            ).unwrap();
+            if let Some(req) = req {
+                req.wait();
+            }
+        }
+
+        assert_eq!(reply, 0);
+        drop(ep);
+        drop(worker);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_atomic_op_nbx_loopback() {
+        let worker = Worker::new(&crate::Context::new(&crate::ContextParams::new()).unwrap(), &crate::WorkerParams::new()).unwrap();
+        let ep = worker.create_ep(&crate::EpParams::new().address(worker.address())).unwrap();
+        let rkey = ep.rkey(0).unwrap();
+
+        let operand: u64 = 42;
+        let param = crate::RequestParamBuilder::new().build();
+
+        unsafe {
+            let req = atomic_op_nbx(
+                &ep,
+                AtomicOp::Add,
+                &operand as *const _ as *const std::os::raw::c_void,
+                std::mem::size_of::<u64>(),
+                0,
+                &rkey,
+                &param,
+            ).unwrap();
+            if let Some(req) = req {
+                req.wait();
+            }
+        }
+
+        drop(ep);
+        drop(worker);
+    }
 }
