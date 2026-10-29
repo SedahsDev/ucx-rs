@@ -102,6 +102,37 @@ impl<'a> ParamsBuilder<'a> {
         self
     }
 
+    /// Set the connection request handle for this endpoint.
+    ///
+    /// The builder and the [`Params`] built from it borrow `req`: UCX consumes the request
+    /// inside [`crate::worker::Worker::create_ep`], so `req` must stay alive until the
+    /// endpoint has been created. The compiler enforces this:
+    ///
+    /// ```no_run
+    /// use ucx_sys::ep::{Ep, ParamsBuilder};
+    /// use ucx_sys::listener::Listener;
+    ///
+    /// fn connect_from_request(worker: &ucx_sys::worker::Worker, listener: &Listener) -> Result<Ep, ucx_sys::Status> {
+    ///     let request = listener.accept().unwrap();
+    ///     let ep = worker.create_ep(ParamsBuilder::new().conn_request(request).build());
+    ///     ep
+    /// }
+    /// ```
+    ///
+    /// Dropping the connection request before the endpoint is created is rejected:
+    ///
+    /// ```compile_fail,E0597
+    /// use ucx_sys::ep::{Ep, ParamsBuilder};
+    /// use ucx_sys::listener::Listener;
+    ///
+    /// fn dangling(worker: &ucx_sys::worker::Worker, listener: &Listener) -> Result<Ep, ucx_sys::Status> {
+    ///     let request = listener.accept().unwrap();
+    ///     let params = {
+    ///         ParamsBuilder::new().conn_request(request).build()
+    ///     }; // `request` is dropped here
+    ///     worker.create_ep(params) // UCX would use the freed request
+    /// }
+    /// ```
     pub fn conn_request(&mut self, req: ConnRequest) -> &mut Self {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64;
         // SAFETY: req is an opaque UCX handle accepted by this parameter.
