@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The supported UCX range is now **>= 1.19**, matching `build.rs`.
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
