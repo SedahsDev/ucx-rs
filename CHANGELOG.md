@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Updated UCX version support documentation to reflect range **>= 1.19** (no upper bound).
+  The build script enforces the minimum version at compile time using `ucp_get_version()`.
+  This matches the range stated in `README.md` and enforced by `build.rs`.
+
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
