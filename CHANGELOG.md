@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
+- Updated UCX version support documentation: the crate now supports UCX **>= 1.19**.
+  The build script enforces this minimum version at compile time using `ucp_get_version()`.
+  The `build.rs` script checks `ucp_get_version()` and fails the build if the detected UCX
+  version is below 1.19.0.
+
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
     (`Status::OK`, `Status::IN_PROGRESS`, `Status::INVALID_PARAM`, ...).
