@@ -104,7 +104,8 @@ impl<'a> ParamsBuilder<'a> {
 
     pub fn conn_request(&mut self, req: ConnRequest) -> &mut Self {
         self.field_mask |= ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST as u64;
-        // SAFETY: req is an opaque UCX handle accepted by this parameter.
+        // SAFETY: req is a live ConnRequest owned by the caller. UCX consumes the request
+        // inside `ucp_ep_create`, so the caller must not drop or reject `req` before that call.
         unsafe {
             (*self.uninit_handle.as_mut_ptr()).conn_request = req.as_raw_ptr();
         }
