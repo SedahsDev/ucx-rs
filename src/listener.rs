@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 type ConnCallback = Box<dyn FnMut(ConnRequest) + Send + 'static>;
 
-struct ListenerState {
+pub struct ListenerState {
     // Raw UCX handles are opaque pointers and are not Send/Sync in Rust.
     // Carrying the address as usize lets this state cross UCX progress threads.
     handle: Mutex<usize>,
@@ -401,7 +401,7 @@ pub const UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ID: u64 = ConnRequestFields::CLIENT
 /// A borrowed UCX connection request handle.
 #[derive(Debug)]
 pub struct ConnRequest {
-    handle: ucp_conn_request_h,
+    pub(crate) handle: ucp_conn_request_h,
     state: Arc<ListenerState>,
 }
 
