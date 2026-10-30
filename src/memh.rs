@@ -5,6 +5,23 @@
 
 use crate::context::Context;
 use crate::ffi::*;
+
+/// Wrapper for UCX memory advice values.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemAdvice(pub ucp_mem_advice_t);
+
+impl From<MemAdvice> for ucp_mem_advice_t {
+    fn from(v: MemAdvice) -> Self {
+        v.0
+    }
+}
+
+impl From<ucp_mem_advice_t> for MemAdvice {
+    fn from(v: ucp_mem_advice_t) -> Self {
+        MemAdvice(v)
+    }
+}
 use crate::status_to_result;
 use crate::Status;
 use std::ffi::CString;
@@ -249,10 +266,10 @@ impl MemAdviseParamsBuilder {
         self
     }
 
-    pub fn advice(&mut self, advice: ucp_mem_advice_t) -> &mut Self {
+    pub fn advice(&mut self, advice: MemAdvice) -> &mut Self {
         self.field_mask |= ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.advice = advice;
+        params.advice = advice.into();
         self
     }
 
