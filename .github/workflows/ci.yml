@@ -58,8 +58,7 @@ jobs:
         run: |
           export UCX_TLS=self
           export UCX_LOG_LEVEL=debug
-          echo "UCX_TLS=$UCX_TLS"
-          echo "UCX_LOG_LEVEL=$UCX_LOG_LEVEL"
+          echo "UCX_TLS=$UCX_TLS" && echo "UCX_LOG_LEVEL=$UCX_LOG_LEVEL" && \
           cargo test -- rma_amo_self --ignored --nocapture 2>&1 | tee /tmp/ucx_rma_amo.log
           if grep -q "using.*self" /tmp/ucx_rma_amo.log; then
             echo "✅ Confirmed: UCX selected 'self' transport"
@@ -69,6 +68,7 @@ jobs:
             tail -n 50 /tmp/ucx_rma_amo.log
             echo "========================"
           fi
+        shell: bash -eo pipefail {0}
         env:
           RUST_BACKTRACE: 1
 

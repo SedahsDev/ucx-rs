@@ -11,8 +11,8 @@ pub use crate::ffi::ucp_stream_poll_ep as StreamPollEp;
 
 use crate::ffi::*;
 use crate::status_ptr_is_err;
-use crate::status_ptr_to_result;
-use crate::status_to_result;
+use crate::status_ptr_to_result as status_ptr_to_result;
+use crate::status_to_result as status_to_result;
 use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
