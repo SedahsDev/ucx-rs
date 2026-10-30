@@ -179,7 +179,7 @@ impl Request {
     }
 }
 
-// UCX uses `ucs_status_ptr_t` for nonblocking operations: the result is either
+/// UCX uses `ucs_status_ptr_t` for nonblocking operations: the result is either
 // an immediate status, a request pointer, or an error. This helper maps those
 // outcomes to `Result<Option<Request>, Status>`. A status-pointer API
 // never returns `UCS_INPROGRESS`; an incomplete operation returns a request

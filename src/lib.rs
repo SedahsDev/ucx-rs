@@ -34,6 +34,7 @@
 
 #![allow(unused_imports)]
 
+#[allow(clippy::module_inception)]
 mod ffi;
 mod threading_assert;
 use crate::ffi::*;
