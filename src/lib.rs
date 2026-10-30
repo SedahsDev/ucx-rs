@@ -2,6 +2,7 @@
 //!
 //! # Threading model
 //!
+//!
 //! The default policy is a single-threaded progress loop. `Context`, `Worker`,
 //! and `Ep` are intentionally `!Send` and `!Sync` today (as are the associated
 //! handle wrappers such as `MemHandle` and `RemoteKey`). This is the current
