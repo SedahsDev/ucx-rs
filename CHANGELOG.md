@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
+- Updated documentation to clarify UCX version support: the crate supports versions **>= 1.19**, consistent with the `build.rs` enforcement.
+- Removed outdated references to UCX 1.16 support in documentation.
+
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes
     (`Status::OK`, `Status::IN_PROGRESS`, `Status::INVALID_PARAM`, ...).
