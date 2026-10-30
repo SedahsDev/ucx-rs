@@ -82,6 +82,7 @@
   `count=1` with a proper contiguous datatype (`dt_make_contig(size_of::<T>())`) to
   `ucp_atomic_op_nbx` instead of byte sizes as `count`, which UCX rejected. Function signatures
   are unchanged; the fix is internal to each wrapper body.
+ - Supports UCX versions **>= 1.19** (no upper bound). The build script enforces this range.
 
 ## 0.1.0
 
