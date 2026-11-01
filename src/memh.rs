@@ -10,6 +10,21 @@ use crate::Status;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::os::fd::RawFd;
+/// Safe wrapper for UCX memory advice enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MemAdvice(pub ucp_mem_advice_t);
+
+impl From<MemAdvice> for ucp_mem_advice_t {
+    fn from(advice: MemAdvice) -> Self {
+        advice.0
+    }
+}
+
+impl From<ucp_mem_advice_t> for MemAdvice {
+    fn from(value: ucp_mem_advice_t) -> Self {
+        MemAdvice(value)
+    }
+}
 
 /// Print UCX memory diagnostics for `mem_spec` to `fd`.
 pub fn mem_print_info(
@@ -249,10 +264,10 @@ impl MemAdviseParamsBuilder {
         self
     }
 
-    pub fn advice(&mut self, advice: ucp_mem_advice_t) -> &mut Self {
+    pub fn advice(&mut self, advice: MemAdvice) -> &mut Self {
         self.field_mask |= ucp_mem_advise_params_field::UCP_MEM_ADVISE_PARAM_FIELD_ADVICE as u64;
         let params = unsafe { &mut *self.uninit_handle.as_mut_ptr() };
-        params.advice = advice;
+        params.advice = advice.into();
         self
     }
 
