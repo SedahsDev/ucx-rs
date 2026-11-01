@@ -1,8 +1,7 @@
 use crate::ep::Ep;
 use crate::ffi::*;
 
-/// Re-exported for C callback signatures that must name the raw types.
-pub use crate::ffi::{ucp_am_recv_param_t, ucs_status_t};
+///
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
