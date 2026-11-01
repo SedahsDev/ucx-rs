@@ -1,6 +1,7 @@
 //! UCP listeners and incoming connection requests.
 
 use crate::ep::SockAddrStorage;
+use std::marker::PhantomData;
 
 /// Native alias for the listener accept callback.
 /// Mirrors the C signature (raw ep handle is unavoidable for a C callback).
@@ -116,35 +117,39 @@ pub const UCP_LISTENER_PARAM_FIELD_CONN_HANDLER: u64 = ListenerParamFields::CONN
 
 /// Builder for the raw UCX listener parameter structure.
 #[derive(Debug)]
-pub struct ParamsBuilder {
+pub struct ParamsBuilder<'a> {
     params: ucp_listener_params,
+    _addr: PhantomData<&'a crate::ep::SockAddr>,
 }
 
-pub type ListenerParamsBuilder = ParamsBuilder;
+pub type ListenerParamsBuilder<'a> = ParamsBuilder<'a>;
 
 /// Built listener parameters, ready for [`Listener::create_with_params`].
-pub struct ListenerParams {
+pub struct ListenerParams<'a> {
     params: ucp_listener_params,
+    _addr: PhantomData<&'a crate::ep::SockAddr>,
 }
 
-impl std::fmt::Debug for ListenerParams {
+impl<'a> std::fmt::Debug for ListenerParams<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ListenerParams").finish_non_exhaustive()
     }
 }
 
-impl ParamsBuilder {
+impl<'a> ParamsBuilder<'a> {
     pub fn new() -> Self {
         // SAFETY: ucp_listener_params is a C POD; zero is the documented
         // default for optional callbacks and unused fields.
         let params = unsafe { MaybeUninit::<ucp_listener_params>::zeroed().assume_init() };
-        Self { params }
+        Self { params, _addr: PhantomData }
     }
 
-    pub fn sockaddr(mut self, addr: &crate::ep::SockAddr) -> Self {
-        self.params.field_mask |= UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
-        self.params.sockaddr = addr.to_ffi();
-        self
+    pub fn sockaddr(self, addr: &'a crate::ep::SockAddr) -> Self {
+        let mut builder = self;
+        builder.params.field_mask |= UCP_LISTENER_PARAM_FIELD_SOCK_ADDR;
+        builder.params.sockaddr = addr.to_ffi();
+        builder._addr = PhantomData;
+        builder
     }
 
     /// Set the raw callback and opaque argument supplied directly to UCX.
@@ -178,14 +183,15 @@ impl ParamsBuilder {
         self
     }
 
-    pub fn build(self) -> ListenerParams {
+    pub fn build(self) -> ListenerParams<'a> {
         ListenerParams {
             params: self.params,
+            _addr: PhantomData,
         }
     }
 }
 
-impl Default for ParamsBuilder {
+impl<'a> Default for ParamsBuilder<'a> {
     fn default() -> Self {
         Self::new()
     }
@@ -227,7 +233,7 @@ impl Listener {
 
     /// Create a listener from explicitly-built parameters. Callback execution
     /// follows the progress-context rules documented on [`Self::create`].
-    pub fn create_with_params(worker: &Worker, params: &ListenerParams) -> Result<Self, Status> {
+    pub fn create_with_params<'a>(worker: &Worker, params: &ListenerParams<'a>) -> Result<Self, Status> {
         let mut handle = ptr::null_mut();
         status_to_result(unsafe { ucp_listener_create(worker.handle, &params.params, &mut handle) })
             .map(|()| Self {
