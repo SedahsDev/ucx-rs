@@ -6,9 +6,9 @@
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Request, RequestParamBuilder};
+use ucx_sys::RequestParamBuilder;
 
-fn wait(worker: &ucx_sys::worker::Worker, request: Request) {
+fn wait(worker: &ucx_sys::worker::Worker, mut request: ucx_sys::tag::TagRequest<'_, '_>) {
     const MAX_ROUNDS: usize = 1_000_000;
     for _ in 0..MAX_ROUNDS {
         match request.check_finished().expect("tag request failed") {
@@ -42,11 +42,10 @@ fn main() {
     let mut received = [0u8; 5];
     let request_param = RequestParamBuilder::new().no_imm_cmpl().build();
     let receive = worker
-        .tag_recv(&mut received, 0x44, u64::MAX, &request_param)
-        .expect("post receive")
-        .expect("receive should be pending");
+        .tag_recv(&worker, &mut received, 0x44, u64::MAX, &request_param)
+        .expect("post receive");
     let send = ep
-        .tag_send(b"hello", 0x44, &request_param)
+        .tag_send(&worker, b"hello", 0x44, &request_param)
         .expect("post send");
     wait(&worker, receive);
     if let Some(request) = send {

@@ -7,15 +7,18 @@ use crate::Request;
 use crate::RequestParam;
 use crate::Status;
 use bitflags::bitflags;
+use std::marker::PhantomData;
+use std::ptr::NonNull;
 
 impl Ep {
     /// Send tagged message.
-    pub fn tag_send(
+    pub fn tag_send<'w, 'a>(
         &self,
-        data: &[u8],
+        worker: &'w Worker,
+        data: &'a [u8],
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Option<TagRequest<'w, 'a>>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_send_nbx(
                 self.handle,
@@ -24,6 +27,13 @@ impl Ep {
                 tag,
                 &param.handle,
             )
+        })
+        .map(|request| {
+            request.map(|mut request| TagRequest {
+                worker,
+                handle: request.handle.take(),
+                _buffer: PhantomData,
+            })
         })
     }
 
@@ -100,6 +110,72 @@ pub struct TagInfo {
     sender_tag: u64,
 }
 
+/// A tagged request that borrows its worker and buffer until completion.
+pub struct TagRequest<'w, 'a> {
+    worker: &'w Worker,
+    handle: Option<NonNull<std::os::raw::c_void>>,
+    _buffer: PhantomData<&'a [u8]>,
+}
+
+impl<'w, 'a> TagRequest<'w, 'a> {
+    pub fn check_finished(&mut self) -> Result<bool, Status> {
+        let request = std::mem::ManuallyDrop::new(Request {
+            handle: self.handle,
+        });
+        let result = request.check_finished();
+        self.handle = request.handle;
+        result
+    }
+
+    pub fn free(mut self) -> Result<(), Status> {
+        self.complete()
+    }
+
+    /// Return the underlying request without waiting for completion.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep the worker and buffer valid until the request
+    /// completes, and must not access a receive buffer before completion.
+    pub unsafe fn into_inner(mut self) -> Request {
+        Request {
+            handle: self.handle.take(),
+        }
+    }
+
+    pub fn worker(&self) -> &Worker {
+        self.worker
+    }
+
+    fn complete(&mut self) -> Result<(), Status> {
+        let mut remaining = 1_000_000;
+        loop {
+            match self.check_finished() {
+                Ok(false) => {
+                    if remaining == 0 {
+                        // Releasing the buffer while UCX still uses it is unsafe.
+                        std::process::abort();
+                    }
+                    remaining -= 1;
+                    self.worker.progress();
+                }
+                result => {
+                    drop(Request {
+                        handle: self.handle.take(),
+                    });
+                    return result.map(|_| ());
+                }
+            }
+        }
+    }
+}
+
+impl Drop for TagRequest<'_, '_> {
+    fn drop(&mut self) {
+        let _ = self.complete();
+    }
+}
+
 impl TagInfo {
     /// Construct a `TagInfo` from the raw FFI struct.
     pub(crate) fn from_ffi(ffi: ucp_tag_recv_info_t) -> Self {
@@ -123,13 +199,14 @@ impl TagInfo {
 }
 
 impl Worker {
-    pub fn tag_recv(
-        &self,
-        data: &mut [u8],
+    pub fn tag_recv<'w, 'a>(
+        &'w self,
+        worker: &'w Worker,
+        data: &'a mut [u8],
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<TagRequest<'w, 'a>, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_recv_nbx(
                 self.handle,
@@ -139,6 +216,11 @@ impl Worker {
                 mask,
                 &param.handle,
             )
+        })
+        .map(|request| TagRequest {
+            worker,
+            handle: request.and_then(|mut request| request.handle.take()),
+            _buffer: PhantomData,
         })
     }
 
@@ -260,14 +342,14 @@ pub unsafe fn tag_msg_recv_nb(
     buffer: *mut std::os::raw::c_void,
     count: usize,
     datatype: u64,
-    message: ucp_tag_message_h,
+    message: &MessageHandle,
 ) -> crate::Request {
     let ptr = ucp_tag_msg_recv_nb(
         worker.handle,
         buffer,
         count,
         datatype as ucp_datatype_t,
-        message,
+        message.handle,
         None,
     );
     crate::Request::from_raw(ptr)
@@ -342,21 +424,25 @@ mod tests {
         let param = RequestParamBuilder::new().no_imm_cmpl().build();
         let mut recv_request = comms
             .worker
-            .tag_recv(&mut recv_buffer, tag, u64::MAX, &param)
-            .expect("post tag receive")
-            .expect("receive should remain outstanding");
+            .tag_recv(&comms.worker, &mut recv_buffer, tag, u64::MAX, &param)
+            .expect("post tag receive");
         let send_buffer = *b"hello";
         let send_request = comms
             .ep
-            .tag_send(&send_buffer, tag, &param)
+            .tag_send(&comms.worker, &send_buffer, tag, &param)
             .expect("post tag send");
 
-        let info = loop {
-            if let Some(info) = recv_request.tag_recv_test().expect("test tag receive") {
-                break info;
-            }
+        while !recv_request.check_finished().expect("test tag receive") {
             comms.worker.progress();
-        };
+        }
+
+        // SAFETY: The receive has completed, and its worker and buffer remain alive.
+        let mut recv_request = unsafe { recv_request.into_inner() };
+        let info = recv_request
+            .tag_recv_test()
+            .expect("test completed tag receive")
+            .expect("completed receive should include info");
+        drop(recv_request);
 
         assert_eq!(info.sender_tag(), tag);
         assert_eq!(info.len(), send_buffer.len());
@@ -372,16 +458,22 @@ mod tests {
         let tag_flags = RequestParamBuilder::new().no_imm_cmpl().build();
         let _send_req = comms
             .ep
-            .tag_send(send_buff.as_slice(), TAG_FULL, &tag_flags)
+            .tag_send(&comms.worker, send_buff.as_slice(), TAG_FULL, &tag_flags)
             .unwrap();
-        let recv_req = comms
+        let mut recv_req = comms
             .worker
-            .tag_recv(recv_buff.as_mut_slice(), TAG_FULL, TAG_FULL, &tag_flags)
-            .unwrap()
+            .tag_recv(
+                &comms.worker,
+                recv_buff.as_mut_slice(),
+                TAG_FULL,
+                TAG_FULL,
+                &tag_flags,
+            )
             .unwrap();
         while !recv_req.check_finished().unwrap() {
             comms.worker.progress();
         }
+        drop(recv_req);
         assert_eq!(send_buff[0], recv_buff[0]);
     }
 
@@ -393,7 +485,7 @@ mod tests {
         let tag_flags = RequestParamBuilder::new().no_imm_cmpl().build();
         let _send_req = comms
             .ep
-            .tag_send(send_buff.as_slice(), TAG_FULL, &tag_flags)
+            .tag_send(&comms.worker, send_buff.as_slice(), TAG_FULL, &tag_flags)
             .unwrap();
         let mut msg = comms.worker.tag_probe(TAG_FULL, TAG_FULL, true);
         while msg.is_none() {
