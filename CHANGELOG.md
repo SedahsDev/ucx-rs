@@ -3,6 +3,21 @@
 ## Unreleased
 
 - UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
+- **Breaking (#128, #112):** `Ep::tag_send` and `Worker::tag_recv` now return
+  buffer-borrowing `tag::TagRequest<'w, 'a>` guards, following the
+  `stream::StreamRequest` pattern.
+  - The guard explicitly borrows the worker and buffer slice, holds the
+    underlying `Request`, and progresses the worker to completion on `Drop`
+    before releasing the buffer borrow.
+  - New guard methods: `check_finished()`, `free()`, `into_inner()`, and
+    `worker()`.
+  - Migration: pass the endpoint's `&Worker` as the first argument to
+    `Ep::tag_send`. Use `guard.check_finished()` and `guard.free()` instead
+    of direct `Request` access, and `guard.worker()` to access the borrowed
+    worker. Use `unsafe { guard.into_inner() }` to recover the underlying
+    `Request` only if the worker and buffer remain valid until completion.
+    Dropping or reusing the buffer while a tag request is pending no longer
+    compiles: this prevents the buffer use-after-free tracked in #112.
 - **Breaking (#129):** `Ep::stream_send` and `Ep::stream_recv` now return a
   buffer-borrowing request guard, so safe code can no longer drop or reuse the
   buffer while a stream operation is in flight (use-after-free fix, #112 slice 3).
