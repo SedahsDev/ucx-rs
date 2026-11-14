@@ -1,7 +1,7 @@
 //! # Teardown
 //!
-//! [`Ep::close`] is the explicit graceful teardown path and waits for the
-//! close request to complete. [`Drop`] performs a best-effort graceful close
+//! [`Ep::close`] is the explicit graceful teardown path and returns the
+//! pending close operation. [`Drop`] performs a best-effort graceful close
 //! when the worker is still alive. [`Ep::destroy`] and [`Ep::disconnect_nb`]
 //! are force/error-path escape hatches; use them only for broken endpoints and
 //! never while operations are pending on the endpoint.
@@ -28,6 +28,7 @@ use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::RemoteWorkerAddress;
 use crate::worker::Worker;
+use crate::Pending;
 use crate::Status;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -95,7 +96,7 @@ impl Ep {
     /// undefined behavior in a non-MT build or `ThreadMode::Single`. See
     /// `THREADING.md` §2.1. Prefer one thread to own each worker's progress
     /// loop, using `Worker::arm()` and `Worker::get_efd()` for wakeups.
-    pub fn flush(&self, params: &crate::RequestParam) -> Result<Option<crate::Request>, Status> {
+    pub fn flush(&self, params: &crate::RequestParam) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -118,10 +119,10 @@ impl Ep {
     /// while operations are pending. [`Ep::close`] is recommended for normal
     /// graceful teardown; `ucp_ep_close_nb` replaces this deprecated UCX API.
     /// The returned request, when present, is owned by the caller.
-    pub fn disconnect_nb(self) -> Result<Option<crate::Request>, Status> {
+    pub fn disconnect_nb(self) -> Result<Pending, Status> {
         let this = std::mem::ManuallyDrop::new(self);
         if !this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(None);
+            return status_ptr_to_result(std::ptr::null_mut());
         }
         // SAFETY: this endpoint is owned and its worker is alive. On an
         // immediate error, UCX did not take ownership, so destroy the handle.
@@ -138,7 +139,7 @@ impl Ep {
     ///
     /// `ucp_ep_modify_nb` is an upstream deprecated compatibility API declared
     /// in `ucp_compat.h`.
-    pub fn modify(&self, params: &ModifyParams) -> Result<Option<crate::Request>, Status> {
+    pub fn modify(&self, params: &ModifyParams) -> Result<Pending, Status> {
         // SAFETY: self.handle is a live endpoint and params owns initialized storage.
         status_ptr_to_result(unsafe { ucp_ep_modify_nb(self.handle, &params.handle) })
     }
@@ -203,38 +204,15 @@ impl Ep {
 
     /// Start closing this endpoint and return the completion request, if any.
     /// The caller owns progress of a returned request and should check it while
-    /// progressing the associated worker. If close times out, it returns
-    /// `Err(UCS_ERR_TIMED_OUT)` after leaking the in-flight close request; the
-    /// endpoint must be recreated before it is used again.
-    pub fn close(self, worker: &Worker, flags: u32) -> Result<(), Status> {
+    /// progressing the associated worker.
+    pub fn close(self, worker: &Worker, flags: u32) -> Result<Pending, Status> {
+        let _ = worker;
         let this = std::mem::ManuallyDrop::new(self);
         // SAFETY: UCX request parameter structs are valid when zeroed.
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         param.flags = flags;
         // SAFETY: this.handle is owned by the endpoint and param is initialized.
-        let request = status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })?;
-        if let Some(request) = request {
-            for _ in 0..1_000_000 {
-                match request.check_finished() {
-                    Ok(true) => {
-                        request.free();
-                        return Ok(());
-                    }
-                    Ok(false) => {
-                        worker.progress();
-                    }
-                    Err(error) => {
-                        // Do not free a request that may still be in flight.
-                        std::mem::forget(request);
-                        return Err(error);
-                    }
-                }
-            }
-            // Do not free a request that may still be in flight.
-            std::mem::forget(request);
-            return Err(Status(ucs_status_t::UCS_ERR_TIMED_OUT));
-        }
-        Ok(())
+        status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })
     }
 }
 
@@ -246,16 +224,17 @@ impl Drop for Ep {
         }
         // SAFETY: UCX request parameter structs are valid when zeroed.
         let param: ucp_request_param_t = unsafe { std::mem::zeroed() };
-        // Close returns Ok(None) if complete, Ok(Some(req)) if in progress.
+        // Close returns a null status pointer if complete, a request if in progress.
         // Request::Drop frees the request; do not free manually (would double-free).
         // SAFETY: self.handle is owned by this endpoint and param is initialized.
-        match status_ptr_to_result(unsafe { ucp_ep_close_nbx(self.handle, &param) }) {
-            Ok(Some(_req)) => {
+        let status = unsafe { ucp_ep_close_nbx(self.handle, &param) };
+        match status_ptr_to_result(status) {
+            Ok(_req) if !status.is_null() => {
                 eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first");
                 // Do not free a request whose close has not completed.
                 std::mem::forget(_req);
             }
-            Ok(None) => {}
+            Ok(_) => {}
             Err(error) => eprintln!("ucx-sys: endpoint close during Drop failed: {error:?}; UCX released endpoint resources"),
         }
     }
@@ -267,13 +246,12 @@ mod tests {
 
     #[test]
     fn test_endpoint_flush_api_signature() {
-        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Option<crate::Request>, Status> =
-            Ep::flush;
+        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Pending, Status> = Ep::flush;
     }
 
     #[test]
     fn endpoint_issue_37_api_signatures() {
-        let _: fn(&Ep, &ModifyParams) -> Result<Option<crate::Request>, Status> = Ep::modify;
+        let _: fn(&Ep, &ModifyParams) -> Result<Pending, Status> = Ep::modify;
         let _: fn(&Ep, usize) -> Result<EpPerf, Status> = Ep::evaluate_perf;
     }
 
@@ -342,13 +320,13 @@ mod tests {
 
     #[test]
     fn close_api_has_worker_signature() {
-        let _close: fn(Ep, &Worker, u32) -> Result<(), Status> = Ep::close;
+        let _close: fn(Ep, &Worker, u32) -> Result<Pending, Status> = Ep::close;
     }
 
     #[test]
     fn teardown_api_has_expected_signatures() {
         let _: fn(Ep) = Ep::destroy;
-        let _: fn(Ep) -> Result<Option<crate::Request>, Status> = Ep::disconnect_nb;
+        let _: fn(Ep) -> Result<Pending, Status> = Ep::disconnect_nb;
     }
 
     #[test]

@@ -50,6 +50,12 @@
     `Request` (the buffer must then stay valid until completion). Code that
     dropped the buffer while the request was pending no longer compiles: that
     was the use-after-free this change removes.
+- **Breaking (#138):** `Worker::flush_nbx`, `Worker::flush_ep_nbx`, and `Ep::close`
+  now return `Result<Pending, Status>` instead of an optional request result.
+  - `Pending` enum has two variants: `Complete` (inline completion) and
+    `InProgress(Request)` (operation in flight).
+  - Migration: replace `if let Some(req) = ...` with `match ... { Pending::InProgress(req) => ..., Pending::Complete => ... }`.
+  - Use `Pending::into_request()` to get an optional `Request` if needed, or `Pending::wait(&worker)` for a bounded progress loop.
 - Added opt-in, thread-mode-checked `worker::MtWorker` access.
 - **Breaking (#73):** `ucs_status_t` no longer appears in the public API.
   - `Status` is `#[repr(transparent)]` and has associated constants for the UCX status codes

@@ -1,9 +1,9 @@
 use crate::dt::dt_make_contig;
 use crate::ep::Ep;
 use crate::ffi::*;
+use crate::request::Pending;
 use crate::status_ptr_to_result;
 use crate::worker::Worker;
-use crate::Request;
 use crate::RequestParam;
 use crate::Status;
 
@@ -14,7 +14,7 @@ fn with_amo_reply<T>(
     param: &RequestParam,
     reply: T,
     post: impl FnOnce(&RequestParam) -> *mut std::ffi::c_void,
-) -> Result<Option<Request>, Status> {
+) -> Result<Pending, Status> {
     let mut reply = Box::new(reply);
     let mut inner = RequestParam::fetch_params(reply.as_mut());
     let reply_buffer = inner.handle.reply_buffer;
@@ -44,7 +44,7 @@ fn with_amo_reply<T>(
     inner.handle.user_data = completion.cast();
     let result = status_ptr_to_result(post(&inner));
     // UCX does not invoke the callback for immediate completion or posting errors.
-    if !matches!(result, Ok(Some(_))) {
+    if !matches!(result, Ok(Pending::InProgress(_))) {
         unsafe { drop(Box::from_raw(completion)) };
     }
     result
@@ -83,7 +83,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -103,7 +103,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
@@ -135,7 +135,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -164,7 +164,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
@@ -186,7 +186,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -211,7 +211,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -236,7 +236,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         with_amo_reply(param, 0u64, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -261,7 +261,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -286,7 +286,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -312,7 +312,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         let operand = [expected, replacement];
         with_amo_reply(param, replacement, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&expected));
@@ -340,7 +340,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -365,7 +365,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -390,7 +390,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         with_amo_reply(param, 0u32, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -415,7 +415,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -440,7 +440,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&operand));
             let mut param = param.handle;
@@ -466,7 +466,7 @@ impl Ep {
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         let operand = [expected, replacement];
         with_amo_reply(param, replacement, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&expected));
@@ -511,7 +511,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch-and-xor 64-bit; writes the previous value to `reply`.
@@ -538,7 +541,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch-and-swap 64-bit; writes the previous value to `reply`.
@@ -565,7 +571,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch compare-and-swap 64-bit; writes the previous value to `reply`.
@@ -594,7 +603,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch-and-add 32-bit; writes the previous value to `reply`.
@@ -621,7 +633,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch-and-xor 32-bit; writes the previous value to `reply`.
@@ -648,7 +663,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch-and-swap 32-bit; writes the previous value to `reply`.
@@ -675,7 +693,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 
     /// Atomic fetch compare-and-swap 32-bit; writes the previous value to `reply`.
@@ -704,7 +725,10 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| super::fetch_amo_result(request, worker))
+        .map(|request| match request {
+            Pending::InProgress(request) => super::fetch_amo_result(Some(request), worker),
+            _ => super::fetch_amo_result(None, worker),
+        })
     }
 }
 
@@ -713,9 +737,10 @@ mod tests {
     use crate::context::{Config, Context, Flags, ParamsBuilder};
     use crate::ep::{Ep, ParamsBuilder as EpParamsBuilder};
     use crate::memh::MemHandle;
+    use crate::request::Pending;
     use crate::rma::RemoteKey;
     use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress, Worker};
-    use crate::{Request, RequestParamBuilder};
+    use crate::RequestParamBuilder;
 
     /// UCX version and transport selection, for failure messages.
     fn transport() -> String {
@@ -728,8 +753,8 @@ mod tests {
 
     /// Progress `worker` until `request` completes. Bounded, so a transport that
     /// cannot complete the operation fails the test instead of hanging it.
-    fn wait(worker: &Worker, request: Option<Request>, what: &str) {
-        let Some(request) = request else {
+    fn wait(worker: &Worker, request: Pending, what: &str) {
+        let Pending::InProgress(request) = request else {
             return;
         };
         for _ in 0..1_000_000 {
@@ -770,12 +795,7 @@ mod tests {
         initial: T,
         expected: T,
         what: &str,
-        post: impl FnOnce(
-            &Ep,
-            u64,
-            &RemoteKey,
-            &crate::RequestParam,
-        ) -> Result<Option<Request>, crate::Status>,
+        post: impl FnOnce(&Ep, u64, &RemoteKey, &crate::RequestParam) -> Result<Pending, crate::Status>,
     ) where
         T: Copy + PartialEq + std::fmt::Debug,
     {

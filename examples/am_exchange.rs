@@ -8,7 +8,7 @@ use ucx_sys::am::{CbFlags, HandlerParamsBuilder};
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Request, RequestParamBuilder, Status};
+use ucx_sys::{Pending, Request, RequestParamBuilder, Status};
 
 unsafe extern "C" fn receive(
     arg: *mut c_void,
@@ -66,7 +66,8 @@ fn main() {
         .build();
     worker.am_register(&handler).expect("register AM handler");
     let request_param = RequestParamBuilder::new().no_imm_cmpl().build();
-    if let Some(request) = ep.am_send(7, b"Z", &[], &request_param).expect("AM send") {
+    if let Pending::InProgress(request) = ep.am_send(7, b"Z", &[], &request_param).expect("AM send")
+    {
         wait(&worker, request);
     }
     assert_eq!(received, [b'Z']);

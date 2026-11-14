@@ -6,6 +6,7 @@ use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::address::*;
 use crate::worker::params::*;
+use crate::Pending;
 use crate::Request;
 use crate::RequestParam;
 use crate::RequestParamBuilder;
@@ -211,7 +212,7 @@ impl MtWorker {
         self.lock().progress()
     }
 
-    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, Status> {
+    pub fn flush(&self, params: &RequestParam) -> Result<Pending, Status> {
         self.lock().flush(params)
     }
 
@@ -267,7 +268,7 @@ impl Drop for Worker {
         // Drop is best-effort: never panic during drop glue, and do not wait
         // indefinitely for a UCX request which cannot make progress.
         match self.flush(&params) {
-            Ok(Some(request)) => {
+            Ok(Pending::InProgress(request)) => {
                 const MAX_FLUSH_PROGRESS_ROUNDS: usize = 1_000_000;
                 for _ in 0..MAX_FLUSH_PROGRESS_ROUNDS {
                     match request.check_finished() {
@@ -278,7 +279,7 @@ impl Drop for Worker {
                     }
                 }
             }
-            Ok(None) => {}
+            Ok(_) => {}
             Err(error) => eprintln!("ucx-sys: worker flush during Drop failed: {error:?}"),
         }
         // `ucp_worker_destroy` releases every active-message handler registered on this
@@ -399,10 +400,8 @@ impl Worker {
     ///
     /// Prefer [`Request::cancel`] which also frees the request handle.
     pub fn cancel_request(&self, request: &mut Request) {
-        if let Some(h) = request.handle {
-            // SAFETY: both handles are live UCX objects.
-            unsafe { ucp_request_cancel(self.handle, h.as_ptr()) };
-        }
+        // SAFETY: both handles are live UCX objects.
+        unsafe { ucp_request_cancel(self.handle, request.handle.as_ptr()) };
     }
 
     /// Flush outstanding operations on this worker.
@@ -415,7 +414,7 @@ impl Worker {
     /// [`Self::arm`] plus [`Self::get_efd`] to wake it from other threads.
     ///
     /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
-    pub fn flush(&self, params: &RequestParam) -> Result<Option<Request>, Status> {
+    pub fn flush(&self, params: &RequestParam) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
 
@@ -429,7 +428,7 @@ impl Worker {
         data_desc: NonNull<std::ffi::c_void>,
         buffer: &mut [u8],
         params: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_am_recv_data_nbx(
                 self.handle,

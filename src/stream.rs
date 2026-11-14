@@ -10,6 +10,7 @@ use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
+use crate::Pending;
 use crate::Request;
 use crate::RequestParam;
 use crate::Status;
@@ -105,7 +106,7 @@ impl Request {
     /// value in all cases. This method must only be used with a request returned
     /// by [`Ep::stream_recv`].
     pub fn stream_recv_test(&self) -> Result<usize, Status> {
-        let request = self.handle.ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
+        let request = self.handle;
         let mut length = 0usize;
         status_to_result(unsafe { ucp_stream_recv_request_test(request.as_ptr(), &mut length) })
             .map(|()| length)
@@ -304,13 +305,14 @@ impl Ep {
         status_ptr_to_result(unsafe {
             ucp_stream_send_nbx(self.handle, data.as_ptr() as _, data.len(), &param.handle)
         })
-        .map(|request| {
-            request.map(|request| StreamRequest {
+        .map(|request| match request {
+            Pending::InProgress(request) => Some(StreamRequest {
                 request: Some(request),
                 worker,
                 length: 0,
                 _buffer: PhantomData,
-            })
+            }),
+            _ => None,
         })
     }
 
@@ -360,7 +362,10 @@ impl Ep {
             )
         })
         .map(|request| StreamRequest {
-            request,
+            request: match request {
+                Pending::InProgress(request) => Some(request),
+                _ => None,
+            },
             worker,
             length,
             _buffer: PhantomData,
@@ -407,7 +412,7 @@ pub unsafe fn stream_send_nbx(
     buffer: *const std::os::raw::c_void,
     count: usize,
     param: &RequestParam,
-) -> Result<Option<Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_stream_send_nbx(ep.handle, buffer, count, &param.handle))
 }
 
@@ -424,7 +429,7 @@ pub unsafe fn stream_recv_nbx(
     count: usize,
     length: *mut usize,
     param: &RequestParam,
-) -> Result<Option<Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_stream_recv_nbx(
         ep.handle,
         buffer,

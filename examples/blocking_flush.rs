@@ -4,9 +4,13 @@ use ucx_sys::am::CbFlags;
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Request, RequestParamBuilder};
+use ucx_sys::{Pending, RequestParamBuilder};
 
-fn wait_request(worker: &ucx_sys::worker::Worker, request: Request) {
+fn wait_request(worker: &ucx_sys::worker::Worker, pending: Pending) {
+    let request = match pending {
+        Pending::Complete => return,
+        Pending::InProgress(request) => request,
+    };
     const MAX_ROUNDS: usize = 1_000_000;
     for _ in 0..MAX_ROUNDS {
         match request.check_finished() {
@@ -55,11 +59,7 @@ fn main() {
         .am_send(0, &[], &[], &request_param)
         .expect("active-message send");
     let flush = ep.flush(&request_param).expect("start flush");
-    if let Some(request) = flush {
-        wait_request(&worker, request);
-    }
-    if let Some(request) = operation {
-        wait_request(&worker, request);
-    }
+    wait_request(&worker, flush);
+    wait_request(&worker, operation);
     ep.close(&worker, 0).expect("close endpoint");
 }

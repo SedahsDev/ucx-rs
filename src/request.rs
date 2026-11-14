@@ -25,8 +25,60 @@ use std::ptr::NonNull;
 ///
 /// Not `Send`/`Sync`. Pair with a worker in the same thread (see
 /// `docs/FFI-CONVENTIONS.md` in the monorepo docs tree).
+#[derive(Debug)]
 pub struct Request {
-    pub(crate) handle: Option<NonNull<::std::os::raw::c_void>>,
+    // A dangling pointer denotes an inert handle, leaving the null niche for Pending.
+    pub(crate) handle: NonNull<::std::os::raw::c_void>,
+}
+
+/// Outcome of a non-blocking UCX operation.
+#[derive(Debug)]
+pub enum Pending {
+    /// Completed inline; input buffers may be reused immediately.
+    Complete,
+    /// In flight; drive with worker.progress() and check_finished().
+    InProgress(Request),
+}
+
+impl Pending {
+    /// True if this operation completed inline.
+    #[inline]
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Pending::Complete)
+    }
+
+    /// Consume this and return the underlying request if in progress.
+    /// Returns `None` if the operation completed inline.
+    #[inline]
+    pub fn into_request(self) -> Option<crate::Request> {
+        match self {
+            Pending::Complete => None,
+            Pending::InProgress(req) => Some(req),
+        }
+    }
+
+    /// Bounded progress loop that waits for completion.
+    ///
+    /// Calls `worker.progress()` up to 1_000_000 times or until the
+    /// request completes. On timeout, the request is leaked (not freed
+    /// while in flight). Returns `Ok(())` on success, `Err(status)` on
+    /// failure.
+    pub fn wait(self, worker: &crate::worker::Worker) -> Result<(), crate::Status> {
+        match self {
+            Pending::Complete => Ok(()),
+            Pending::InProgress(req) => {
+                for _ in 0..1_000_000 {
+                    if let Ok(true) = req.check_finished() {
+                        return Ok(());
+                    }
+                    worker.progress();
+                }
+                // Timeout: leak the request rather than freeing it in flight
+                std::mem::forget(req);
+                Err(crate::Status::from(ucs_status_t::UCS_ERR_TIMED_OUT))
+            }
+        }
+    }
 }
 
 /// The result of testing a non-blocking request.
@@ -39,7 +91,7 @@ pub struct RequestState {
 
 impl Drop for Request {
     fn drop(&mut self) {
-        if let Some(h) = self.handle.take() {
+        if let Some(h) = self.take_handle() {
             // SAFETY: handle came from UCX as a request pointer and has not been freed yet.
             unsafe { ucp_request_free(h.as_ptr()) };
         }
@@ -50,7 +102,7 @@ impl Request {
     /// Wrap a non-null request pointer. Returns `None` if `request_handle` is null.
     #[inline]
     pub fn new(request_handle: *mut std::os::raw::c_void) -> Option<Request> {
-        NonNull::new(request_handle).map(|h| Request { handle: Some(h) })
+        NonNull::new(request_handle).map(|h| Request { handle: h })
     }
 
     /// Create a Request from a raw pointer.
@@ -62,22 +114,32 @@ impl Request {
     pub unsafe fn from_raw(ptr: *mut std::os::raw::c_void) -> Request {
         debug_assert!(!ptr.is_null(), "Request::from_raw with null");
         Request {
-            handle: NonNull::new(ptr),
+            handle: NonNull::new(ptr).expect("Request::from_raw with null"),
         }
     }
 
     /// Raw pointer for FFI, or null if already freed/cancelled.
     #[inline]
     pub fn as_ptr(&self) -> *mut std::os::raw::c_void {
-        self.handle
-            .map(|h| h.as_ptr())
-            .unwrap_or(std::ptr::null_mut())
+        if self.is_live() {
+            self.handle.as_ptr()
+        } else {
+            std::ptr::null_mut()
+        }
     }
 
     /// True if this still owns a live UCX request.
     #[inline]
     pub fn is_live(&self) -> bool {
-        self.handle.is_some()
+        self.handle != NonNull::dangling()
+    }
+
+    #[inline]
+    fn take_handle(&mut self) -> Option<NonNull<::std::os::raw::c_void>> {
+        if !self.is_live() {
+            return None;
+        }
+        Some(std::mem::replace(&mut self.handle, NonNull::dangling()))
     }
 
     /// Check an outstanding request.
@@ -86,10 +148,10 @@ impl Request {
     /// Returns `Ok(true)` if the request was already freed/cancelled.
     #[inline]
     pub fn check_finished(&self) -> Result<bool, Status> {
-        let Some(h) = self.handle else {
+        if !self.is_live() {
             return Ok(true);
-        };
-        let status = unsafe { ucp_request_check_status(h.as_ptr()) };
+        }
+        let status = unsafe { ucp_request_check_status(self.handle.as_ptr()) };
         let status_ptr = status as isize as usize as ucs_status_ptr_t;
         if status_ptr_is_err(status_ptr) {
             return Err(crate::Status::from(status_from_ptr(status_ptr)));
@@ -106,10 +168,10 @@ impl Request {
     /// An inert request (one already freed or cancelled) is complete.
     #[inline]
     pub fn is_completed(&self) -> bool {
-        let Some(h) = self.handle else {
+        if !self.is_live() {
             return true;
-        };
-        unsafe { ucp_request_is_completed(h.as_ptr()) != 0 }
+        }
+        unsafe { ucp_request_is_completed(self.handle.as_ptr()) != 0 }
     }
 
     /// Test a request and return the status reported by UCX.
@@ -126,11 +188,11 @@ impl Request {
     /// An inert request is represented as a successfully completed request.
     #[inline]
     pub fn test(&self) -> RequestState {
-        let Some(h) = self.handle else {
+        if !self.is_live() {
             return RequestState { status: Ok(()) };
-        };
+        }
         let mut info: ucp_tag_recv_info_t = unsafe { std::mem::zeroed() };
-        let status = unsafe { ucp_request_test(h.as_ptr(), &mut info) };
+        let status = unsafe { ucp_request_test(self.handle.as_ptr(), &mut info) };
         RequestState {
             status: status_to_result(status),
         }
@@ -153,7 +215,7 @@ impl Request {
     /// the callback depends.
     #[inline]
     pub fn release(mut self) {
-        if let Some(h) = self.handle.take() {
+        if let Some(h) = self.take_handle() {
             unsafe { ucp_request_release(h.as_ptr()) };
         }
     }
@@ -162,7 +224,7 @@ impl Request {
     ///
     /// After cancel, further `check_finished` returns `Ok(true)`.
     pub fn cancel(&mut self, worker: &worker::Worker) {
-        if let Some(h) = self.handle.take() {
+        if let Some(h) = self.take_handle() {
             // SAFETY: worker and request handles are valid UCX objects.
             unsafe {
                 ucp_request_cancel(worker.handle, h.as_ptr());
@@ -174,15 +236,14 @@ impl Request {
     /// Explicit free without drop glue (handle becomes inert). Prefer Drop normally.
     pub fn free(mut self) {
         let _ = self
-            .handle
-            .take()
+            .take_handle()
             .map(|h| unsafe { ucp_request_free(h.as_ptr()) });
     }
 }
 
 // UCX uses `ucs_status_ptr_t` for nonblocking operations: the result is either
 // an immediate status, a request pointer, or an error. This helper maps those
-// outcomes to `Result<Option<Request>, Status>`. A status-pointer API
+// outcomes to `Result<Pending, Status>`. A status-pointer API
 // never returns `UCS_INPROGRESS`; an incomplete operation returns a request
 // pointer instead, while callers observe that status through plain
 // `ucs_status_t` APIs such as `ucp_request_check_status`.
@@ -487,11 +548,36 @@ mod tests {
             .ep
             .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
             .unwrap();
-        if let Some(req) = req {
+        if let Pending::InProgress(req) = req {
             while !req.check_finished().unwrap() {
                 comms.worker.progress();
             }
         }
         assert_eq!(send_buffer[0], recv_buffer[0]);
+    }
+
+    #[test]
+    fn status_ptr_to_result_immediate_completion() {
+        let result = crate::status::status_ptr_to_result(std::ptr::null_mut());
+        assert!(matches!(result, Ok(Pending::Complete)));
+    }
+
+    #[test]
+    fn pending_size_assertion() {
+        use std::mem::size_of;
+        assert_eq!(
+            size_of::<Pending>(),
+            8,
+            "Pending must be 8 bytes for niche optimization"
+        );
+    }
+
+    #[test]
+    fn status_ptr_to_result_decodes_error() {
+        let ptr = ucs_status_t::UCS_ERR_NO_MEMORY as isize as ucs_status_ptr_t;
+        assert_eq!(
+            crate::status::status_ptr_to_result(ptr).unwrap_err(),
+            Status::from(ucs_status_t::UCS_ERR_NO_MEMORY)
+        );
     }
 }
