@@ -1,5 +1,6 @@
 use crate::ep::Ep;
 use crate::ffi::*;
+use crate::request::Pending;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
@@ -28,12 +29,13 @@ impl Ep {
                 &param.handle,
             )
         })
-        .map(|request| {
-            request.map(|mut request| TagRequest {
+        .map(|request| match request {
+            Pending::InProgress(request) => Some(TagRequest {
                 worker,
-                handle: request.handle.take(),
+                handle: Some(std::mem::ManuallyDrop::new(request).handle),
                 _buffer: PhantomData,
-            })
+            }),
+            _ => None,
         })
     }
 
@@ -41,10 +43,10 @@ impl Ep {
     ///
     /// Returns a `Result` containing the request or a UCX error status.
     /// Guarantees remote delivery before the request completes. If the send
-    /// completes immediately, the result contains an inert `Request` whose
-    /// drop is a no-op and whose `check_finished()` returns `Ok(true)`.
-    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Request, Status> {
-        let result = status_ptr_to_result(unsafe {
+    /// completes immediately, the result contains `Pending::Complete`; otherwise,
+    /// it contains `Pending::InProgress` with the request.
+    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Pending, Status> {
+        status_ptr_to_result(unsafe {
             ucp_tag_send_sync_nbx(
                 self.handle,
                 data.as_ptr() as _,
@@ -52,8 +54,7 @@ impl Ep {
                 tag,
                 std::ptr::null(),
             )
-        });
-        result.map(|request| request.unwrap_or(Request { handle: None }))
+        })
     }
 
     /// Send `len` bytes from an arbitrary address, including device (GPU) memory.
@@ -78,7 +79,7 @@ impl Ep {
         len: usize,
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_send_nbx(self.handle, ptr as _, len, tag, &param.handle)
         })
@@ -119,12 +120,11 @@ pub struct TagRequest<'w, 'a> {
 
 impl<'w, 'a> TagRequest<'w, 'a> {
     pub fn check_finished(&mut self) -> Result<bool, Status> {
-        let request = std::mem::ManuallyDrop::new(Request {
-            handle: self.handle,
-        });
-        let result = request.check_finished();
-        self.handle = request.handle;
-        result
+        let Some(handle) = self.handle else {
+            return Ok(true);
+        };
+        let request = std::mem::ManuallyDrop::new(Request { handle });
+        request.check_finished()
     }
 
     pub fn free(mut self) -> Result<(), Status> {
@@ -137,9 +137,10 @@ impl<'w, 'a> TagRequest<'w, 'a> {
     ///
     /// The caller must keep the worker and buffer valid until the request
     /// completes, and must not access a receive buffer before completion.
-    pub unsafe fn into_inner(mut self) -> Request {
-        Request {
-            handle: self.handle.take(),
+    pub unsafe fn into_inner(mut self) -> Pending {
+        match self.handle.take() {
+            Some(handle) => Pending::InProgress(Request { handle }),
+            None => Pending::Complete,
         }
     }
 
@@ -160,9 +161,9 @@ impl<'w, 'a> TagRequest<'w, 'a> {
                     self.worker.progress();
                 }
                 result => {
-                    drop(Request {
-                        handle: self.handle.take(),
-                    });
+                    if let Some(handle) = self.handle.take() {
+                        drop(Request { handle });
+                    }
                     return result.map(|_| ());
                 }
             }
@@ -219,7 +220,10 @@ impl Worker {
         })
         .map(|request| TagRequest {
             worker,
-            handle: request.and_then(|mut request| request.handle.take()),
+            handle: match request {
+                Pending::InProgress(request) => Some(std::mem::ManuallyDrop::new(request).handle),
+                _ => None,
+            },
             _buffer: PhantomData,
         })
     }
@@ -243,7 +247,7 @@ impl Worker {
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_tag_recv_nbx(self.handle, ptr as _, len, tag, mask, &param.handle)
         })
@@ -271,7 +275,7 @@ impl Worker {
         data: &mut [u8],
         message: &MessageHandle,
         param: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         if !message.removed {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
@@ -303,15 +307,12 @@ impl Request {
     ///
     /// `Ok(Some(info))` means the receive completed and `info` contains the sender tag
     /// and length reported by UCX. `Ok(None)` means the request is still in progress.
-    /// A request that was already freed or cancelled also returns `Ok(None)`: it can
-    /// no longer complete, but there is no receive information to report.
+    /// Receive information is only available while the request remains allocated.
     ///
     /// Callers should not use this method after the request has completed and the
     /// request has been freed.
     pub fn tag_recv_test(&mut self) -> Result<Option<TagInfo>, Status> {
-        let Some(h) = self.handle else {
-            return Ok(None);
-        };
+        let h = self.handle;
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::uninit();
         let status = unsafe { ucp_tag_recv_request_test(h.as_ptr(), info.as_mut_ptr()) };
         map_tag_recv_test_status(status, info)
@@ -372,7 +373,7 @@ mod tests {
 
     #[test]
     fn tag_send_sync_api_signature() {
-        let _: fn(&Ep, &[u8], u64) -> Result<Request, Status> = Ep::tag_send_sync;
+        let _: fn(&Ep, &[u8], u64) -> Result<Pending, Status> = Ep::tag_send_sync;
     }
 
     #[test]
@@ -437,7 +438,10 @@ mod tests {
         }
 
         // SAFETY: The receive has completed, and its worker and buffer remain alive.
-        let mut recv_request = unsafe { recv_request.into_inner() };
+        let mut recv_request = match unsafe { recv_request.into_inner() } {
+            Pending::InProgress(request) => request,
+            Pending::Complete => panic!("no_imm_cmpl should return an in-progress request"),
+        };
         let info = recv_request
             .tag_recv_test()
             .expect("test completed tag receive")
@@ -496,8 +500,10 @@ mod tests {
         let recv_req = comms
             .worker
             .tag_msg_recv(recv_buff.as_mut_slice(), &msg, &tag_flags)
-            .unwrap()
             .unwrap();
+        let Pending::InProgress(recv_req) = recv_req else {
+            panic!("no_imm_cmpl should return an in-progress request");
+        };
         while !recv_req.check_finished().unwrap() {
             comms.worker.progress();
         }

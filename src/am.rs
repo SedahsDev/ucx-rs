@@ -2,10 +2,10 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
+use crate::request::Pending;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
-use crate::Request;
 use crate::RequestParam;
 use crate::Status;
 use bitflags::bitflags;
@@ -234,7 +234,7 @@ impl Ep {
         header: &[u8],
         data: &[u8],
         params: &RequestParam,
-    ) -> Result<Option<Request>, Status> {
+    ) -> Result<Pending, Status> {
         status_ptr_to_result(unsafe {
             ucp_am_send_nbx(
                 self.handle,
@@ -376,7 +376,7 @@ mod tests {
         std::ptr::NonNull<std::ffi::c_void>,
         &mut [u8],
         &RequestParam,
-    ) -> Result<Option<Request>, Status>;
+    ) -> Result<Pending, Status>;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {
@@ -410,7 +410,9 @@ mod tests {
             })
             .unwrap();
         let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
-        if let Some(request) = endpoint.am_send(23, b"h", b"d", &request_param).unwrap() {
+        if let Pending::InProgress(request) =
+            endpoint.am_send(23, b"h", b"d", &request_param).unwrap()
+        {
             assert!(worker.wait_request(&request).unwrap());
         }
         for _ in 0..1000 {
@@ -473,7 +475,9 @@ mod tests {
             .build();
         comms.worker.am_register(&handler).unwrap();
         let request_param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
-        if let Some(request) = comms.ep.am_send(24, b"q", b"", &request_param).unwrap() {
+        if let Pending::InProgress(request) =
+            comms.ep.am_send(24, b"q", b"", &request_param).unwrap()
+        {
             assert!(comms.worker.wait_request(&request).unwrap());
         }
         for _ in 0..1000 {

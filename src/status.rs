@@ -1,5 +1,6 @@
 use crate::ffi::*;
 use crate::request::Request;
+use crate::Pending;
 
 /// Native error type wrapping a UCX status code.
 ///
@@ -113,7 +114,7 @@ impl std::error::Error for Status {}
 /// `src/ucp/core/ucp_request.inl` and `src/ucs/type/status.h` in the new UCX
 /// version first.
 #[inline]
-pub(crate) fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Request>, Status> {
+pub fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Pending, Status> {
     if status_ptr_is_err(ptr) {
         return Err(Status::from(status_from_ptr(ptr)));
     }
@@ -126,10 +127,12 @@ pub(crate) fn status_ptr_to_result(ptr: ucs_status_ptr_t) -> Result<Option<Reque
     );
     // UCX uses small non-negative integers for immediate statuses; only larger
     // values can be real request addresses.
-    if ptr as usize <= ucs_status_t::UCS_INPROGRESS as usize {
-        return Ok(None);
+    if ptr as usize == ucs_status_t::UCS_OK as usize {
+        return Ok(Pending::Complete);
     }
-    Ok(Request::new(ptr))
+    // It's a request pointer
+    let req = unsafe { Request::from_raw(ptr as *mut std::os::raw::c_void) };
+    Ok(Pending::InProgress(req))
 }
 
 #[inline]
@@ -239,7 +242,7 @@ mod status_tests {
     fn status_ptr_to_result_immediate_completion() {
         assert!(matches!(
             status_ptr_to_result(ucs_status_t::UCS_OK as usize as ucs_status_ptr_t),
-            Ok(None)
+            Ok(Pending::Complete)
         ));
     }
 
@@ -266,9 +269,9 @@ mod status_tests {
     }
 
     #[test]
-    fn request_check_finished_on_freed_handle_is_complete() {
-        let request = Request { handle: None };
-        assert_eq!(request.check_finished(), Ok(true));
+    fn pending_complete_has_no_request() {
+        assert!(Pending::Complete.is_complete());
+        assert!(Pending::Complete.into_request().is_none());
     }
 
     #[test]

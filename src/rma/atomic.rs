@@ -4,7 +4,7 @@ use crate::ffi::*;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
-use crate::Request;
+use crate::Pending;
 use crate::RequestParam;
 use crate::Status;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ pub unsafe fn put_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_put_nbx(
         ep.handle,
         buffer,
@@ -73,7 +73,7 @@ pub unsafe fn get_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_get_nbx(
         ep.handle,
         buffer,
@@ -98,7 +98,7 @@ pub unsafe fn atomic_op_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
         opcode.to_ffi(),
@@ -142,7 +142,7 @@ pub unsafe fn atomic_fetch_nbx(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     status_ptr_to_result(ucp_atomic_op_nbx(
         ep.handle,
         opcode.to_ffi(),
@@ -218,7 +218,7 @@ pub unsafe fn atomic_fadd32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -248,7 +248,7 @@ pub unsafe fn atomic_fadd64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -278,7 +278,7 @@ pub unsafe fn atomic_fswap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -308,7 +308,7 @@ pub unsafe fn atomic_fswap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -340,7 +340,7 @@ pub unsafe fn atomic_fcswap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let operand = [expected, replacement];
     let mut param = RequestParam {
         handle: param.handle,
@@ -373,7 +373,7 @@ pub unsafe fn atomic_fcswap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let operand = [expected, replacement];
     let mut param = RequestParam {
         handle: param.handle,
@@ -402,7 +402,7 @@ pub unsafe fn atomic_add32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -430,7 +430,7 @@ pub unsafe fn atomic_add64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -458,7 +458,7 @@ pub unsafe fn atomic_swap32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -486,7 +486,7 @@ pub unsafe fn atomic_swap64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -516,7 +516,7 @@ pub unsafe fn atomic_fxor32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -546,7 +546,7 @@ pub unsafe fn atomic_fxor64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -574,7 +574,7 @@ pub unsafe fn atomic_xor32(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
@@ -602,7 +602,7 @@ pub unsafe fn atomic_xor64(
     remote_addr: u64,
     rkey: &RemoteKey,
     param: &RequestParam,
-) -> Result<Option<crate::Request>, Status> {
+) -> Result<Pending, Status> {
     let mut param = RequestParam {
         handle: param.handle,
     };
