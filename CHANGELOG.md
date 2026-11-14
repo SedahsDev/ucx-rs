@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Fix (#110, slice 1):** Non-fetch AMO wrappers (`amo_add64/32`, `amo_xor64/32`,
+  `amo_swap64/32`, `amo_and64/32`, `amo_or64/32`, `amo_cswap64/32`) now pass
+  `count=1` and set the datatype internally via `ucp_dt_make_contig`, matching
+  UCX's `UCP_AMO_CHECK_PARAM_NBX` requirements. Callers no longer need to set
+  `.datatype()` for these operations. Added self-endpoint loopback tests for
+  all 12 non-fetch AMO operations.
+
 - UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
 - **Breaking (#128, #112):** `Ep::tag_send` and `Worker::tag_recv` now return
   buffer-borrowing `tag::TagRequest<'w, 'a>` guards, following the
