@@ -1,3 +1,4 @@
+use crate::dt::dt_make_contig;
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::status_ptr_to_result;
@@ -496,13 +497,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u64>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u64>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -521,13 +524,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u64>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u64>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -546,13 +551,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u64>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u64>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -573,13 +580,15 @@ impl Ep {
         reply: &'a mut u64,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
         let operand = [compare, swap];
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u64>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
                 operand.as_ptr() as *const _,
-                std::mem::size_of::<[u64; 2]>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -598,13 +607,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u32>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_ADD,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u32>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -623,13 +634,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u32>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_XOR,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u32>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -648,13 +661,15 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u32>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_SWAP,
                 &operand as *const _ as *const _,
-                std::mem::size_of::<u32>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -675,13 +690,15 @@ impl Ep {
         reply: &'a mut u32,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
         let operand = [expected, swap];
-        let param = RequestParam::fetch_params(reply);
+        let mut param = RequestParam::fetch_params(reply);
+        param.handle.op_attr_mask |= 1 << 3; // Datatype field.
+        param.handle.datatype = dt_make_contig(std::mem::size_of::<u32>());
         status_ptr_to_result(unsafe {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
                 operand.as_ptr() as *const _,
-                std::mem::size_of::<[u32; 2]>(),
+                1,
                 remote_addr,
                 rkey.handle,
                 &param.handle,
@@ -908,6 +925,124 @@ mod tests {
             10u32,
             "amo_cswap32 mismatch",
             |ep, addr, rkey, param| ep.amo_cswap32(11, 20, addr, rkey, param),
+        );
+    }
+
+    fn run_fetch_amo_test<T>(
+        initial: T,
+        expected: T,
+        what: &str,
+        post: impl for<'w, 'a> FnOnce(
+            &Ep,
+            &'w Worker,
+            u64,
+            &RemoteKey,
+            &'a mut T,
+        )
+            -> Result<crate::rma::FetchAmoRequest<'w, 'a, T>, crate::Status>,
+    ) where
+        T: Copy + PartialEq + std::fmt::Debug,
+    {
+        if std::env::var("UCX_TLS").as_deref() != Ok("self") {
+            eprintln!("skipping {what}: run with UCX_TLS=self");
+            return;
+        }
+        let mut target = initial;
+        let (context, worker, ep) = setup_amo_test();
+        // The caller owns the aligned target until after the mapping is dropped.
+        let remote_addr = &mut target as *mut T as u64;
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut target as *mut T as *mut u8,
+                std::mem::size_of::<T>(),
+            )
+        };
+        let memh = MemHandle::map_slice(&context, bytes, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().build();
+        let mut reply = expected;
+
+        let request = post(&ep, &worker, remote_addr, &rkey, &mut reply)
+            .unwrap_or_else(|status| panic!("post {what}: {status} ({})", transport()));
+        // Complete the fetch at the endpoint before releasing its reply borrow.
+        let flush = ep
+            .flush(&param)
+            .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
+        wait(&worker, flush, "endpoint flush");
+        drop(request);
+
+        assert_eq!(
+            reply,
+            initial,
+            "{what} old value mismatch ({})",
+            transport()
+        );
+        let result = unsafe { *(remote_addr as *const T) };
+        assert_eq!(result, expected, "{what} result mismatch ({})", transport());
+
+        drop(rkey);
+        drop(memh);
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
+    #[test]
+    fn amo_fadd64_self_round_trip() {
+        run_fetch_amo_test(
+            10u64,
+            15u64,
+            "amo_fadd64",
+            |ep, worker, addr, rkey, reply| ep.amo_fadd64(worker, 5, addr, rkey, reply),
+        );
+    }
+
+    #[test]
+    fn amo_fadd32_self_round_trip() {
+        run_fetch_amo_test(
+            10u32,
+            15u32,
+            "amo_fadd32",
+            |ep, worker, addr, rkey, reply| ep.amo_fadd32(worker, 5, addr, rkey, reply),
+        );
+    }
+
+    #[test]
+    fn amo_fxor64_self_round_trip() {
+        run_fetch_amo_test(
+            0b1010u64,
+            0b0110u64,
+            "amo_fxor64",
+            |ep, worker, addr, rkey, reply| ep.amo_fxor64(worker, 0b1100, addr, rkey, reply),
+        );
+    }
+
+    #[test]
+    fn amo_fxor32_self_round_trip() {
+        run_fetch_amo_test(
+            0b1010u32,
+            0b0110u32,
+            "amo_fxor32",
+            |ep, worker, addr, rkey, reply| ep.amo_fxor32(worker, 0b1100, addr, rkey, reply),
+        );
+    }
+
+    #[test]
+    fn amo_fswap64_self_round_trip() {
+        run_fetch_amo_test(
+            10u64,
+            5u64,
+            "amo_fswap64",
+            |ep, worker, addr, rkey, reply| ep.amo_fswap64(worker, 5, addr, rkey, reply),
+        );
+    }
+
+    #[test]
+    fn amo_fswap32_self_round_trip() {
+        run_fetch_amo_test(
+            10u32,
+            5u32,
+            "amo_fswap32",
+            |ep, worker, addr, rkey, reply| ep.amo_fswap32(worker, 5, addr, rkey, reply),
         );
     }
 
