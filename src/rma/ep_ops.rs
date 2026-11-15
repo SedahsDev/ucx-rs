@@ -305,6 +305,11 @@ impl Ep {
     }
 
     /// Atomic compare-and-swap 64-bit (no fetch — use fetch variant if you need the old value).
+    ///
+    /// The remote value is replaced with `replacement` only when it equals `expected`.
+    /// UCX CSWAP uses `buffer` for the compare value (`expected`) and
+    /// `reply_buffer` for the swap value (`replacement`) on input and the old value
+    /// on completion. The reply buffer is kept alive until completion and discarded.
     pub fn amo_cswap64(
         &self,
         expected: u64,
@@ -313,7 +318,6 @@ impl Ep {
         rkey: &RemoteKey,
         param: &RequestParam,
     ) -> Result<Pending, Status> {
-        let operand = [expected, replacement];
         with_amo_reply(param, replacement, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&expected));
             let mut param = param.handle;
@@ -322,7 +326,7 @@ impl Ep {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
-                operand.as_ptr() as *const _,
+                &expected as *const _ as *const _,
                 1,
                 remote_addr,
                 rkey.handle,
@@ -459,6 +463,11 @@ impl Ep {
     }
 
     /// Atomic compare-and-swap 32-bit (no fetch — use fetch variant if you need the old value).
+    ///
+    /// The remote value is replaced with `replacement` only when it equals `expected`.
+    /// UCX CSWAP uses `buffer` for the compare value (`expected`) and
+    /// `reply_buffer` for the swap value (`replacement`) on input and the old value
+    /// on completion. The reply buffer is kept alive until completion and discarded.
     pub fn amo_cswap32(
         &self,
         expected: u32,
@@ -467,7 +476,6 @@ impl Ep {
         rkey: &RemoteKey,
         param: &RequestParam,
     ) -> Result<Pending, Status> {
-        let operand = [expected, replacement];
         with_amo_reply(param, replacement, |param| unsafe {
             let datatype = ucp_dt_make_contig(std::mem::size_of_val(&expected));
             let mut param = param.handle;
@@ -476,7 +484,7 @@ impl Ep {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
-                operand.as_ptr() as *const _,
+                &expected as *const _ as *const _,
                 1,
                 remote_addr,
                 rkey.handle,
@@ -579,6 +587,12 @@ impl Ep {
 
     /// Atomic fetch compare-and-swap 64-bit; writes the previous value to `reply`.
     /// The reply buffer must remain valid until the request is resolved.
+    ///
+    /// The remote value is replaced with `swap` only when it equals `compare`.
+    /// UCX CSWAP uses `buffer` for the compare value and `reply_buffer` for
+    /// the swap value on input and the old remote value on output. This method
+    /// writes `swap` into `*reply` before posting; on completion, `reply` holds
+    /// the old value whether or not the swap occurred.
     pub fn amo_fcswap64<'w, 'a>(
         &self,
         worker: &'w Worker,
@@ -588,7 +602,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u64,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u64>, Status> {
-        let operand = [compare, swap];
+        *reply = swap;
         let mut param = RequestParam::fetch_params(reply);
         param.handle.op_attr_mask |= 1 << 3; // Datatype field.
         param.handle.datatype = dt_make_contig(std::mem::size_of::<u64>());
@@ -596,7 +610,7 @@ impl Ep {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
-                operand.as_ptr() as *const _,
+                &compare as *const _ as *const _,
                 1,
                 remote_addr,
                 rkey.handle,
@@ -701,6 +715,12 @@ impl Ep {
 
     /// Atomic fetch compare-and-swap 32-bit; writes the previous value to `reply`.
     /// The reply buffer must remain valid until the request is resolved.
+    ///
+    /// The remote value is replaced with `swap` only when it equals `expected`.
+    /// UCX CSWAP uses `buffer` for the compare value (`expected`) and `reply_buffer`
+    /// for the swap value on input and the old remote value on output. This method
+    /// writes `swap` into `*reply` before posting; on completion, `reply` holds
+    /// the old value whether or not the swap occurred.
     pub fn amo_fcswap32<'w, 'a>(
         &self,
         worker: &'w Worker,
@@ -710,7 +730,7 @@ impl Ep {
         rkey: &RemoteKey,
         reply: &'a mut u32,
     ) -> Result<super::FetchAmoRequest<'w, 'a, u32>, Status> {
-        let operand = [expected, swap];
+        *reply = swap;
         let mut param = RequestParam::fetch_params(reply);
         param.handle.op_attr_mask |= 1 << 3; // Datatype field.
         param.handle.datatype = dt_make_contig(std::mem::size_of::<u32>());
@@ -718,7 +738,7 @@ impl Ep {
             ucp_atomic_op_nbx(
                 self.handle,
                 ucp_atomic_op_t::UCP_ATOMIC_OP_CSWAP,
-                operand.as_ptr() as *const _,
+                &expected as *const _ as *const _,
                 1,
                 remote_addr,
                 rkey.handle,
