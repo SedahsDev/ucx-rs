@@ -33,14 +33,14 @@ pub struct Request {
 
 /// Outcome of a non-blocking UCX operation.
 #[derive(Debug)]
-pub enum Pending {
+pub enum Pending<T = Request> {
     /// Completed inline; input buffers may be reused immediately.
     Complete,
     /// In flight; drive with worker.progress() and check_finished().
-    InProgress(Request),
+    InProgress(T),
 }
 
-impl Pending {
+impl<T> Pending<T> {
     /// True if this operation completed inline.
     #[inline]
     pub fn is_complete(&self) -> bool {
@@ -50,13 +50,15 @@ impl Pending {
     /// Consume this and return the underlying request if in progress.
     /// Returns `None` if the operation completed inline.
     #[inline]
-    pub fn into_request(self) -> Option<crate::Request> {
+    pub fn into_request(self) -> Option<T> {
         match self {
             Pending::Complete => None,
             Pending::InProgress(req) => Some(req),
         }
     }
+}
 
+impl Pending {
     /// Bounded progress loop that waits for completion.
     ///
     /// Calls `worker.progress()` up to 1_000_000 times or until the
@@ -78,6 +80,75 @@ impl Pending {
                 Err(crate::Status::from(ucs_status_t::UCS_ERR_TIMED_OUT))
             }
         }
+    }
+}
+
+/// An active-message send request borrowing its worker, header, and data.
+///
+/// Dropping this guard progresses the worker until completion or timeout.
+/// On timeout, the request is leaked rather than freed while in flight.
+pub struct AmRequest<'w, 'a> {
+    pub(crate) worker: &'w worker::Worker,
+    // These fields retain the buffer borrows for the lifetime of the guard.
+    #[allow(dead_code)]
+    pub(crate) header: &'a [u8],
+    #[allow(dead_code)]
+    pub(crate) data: &'a [u8],
+    pub(crate) request: Request,
+}
+
+impl Drop for AmRequest<'_, '_> {
+    fn drop(&mut self) {
+        let _ = self.wait_for_completion();
+    }
+}
+
+impl<'w, 'a> AmRequest<'w, 'a> {
+    /// Returns `Ok(true)` when complete, `Ok(false)` while in progress,
+    /// or `Err(status)` on failure.
+    #[inline]
+    pub fn check_finished(&self) -> Result<bool, Status> {
+        self.request.check_finished()
+    }
+
+    /// Progress to completion and release the request and its borrows.
+    ///
+    /// On timeout, the request is leaked and a timeout status is returned.
+    pub fn free(mut self) -> Result<(), Status> {
+        self.wait_for_completion()
+    }
+
+    /// Extract the underlying request without progressing it.
+    ///
+    /// # Safety
+    /// The caller must keep the worker and both header and data buffers valid,
+    /// and must not modify either buffer, until the request completes.
+    pub unsafe fn into_inner(self) -> Request {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: suppressing the guard's destructor transfers sole ownership
+        // of the request to the caller.
+        unsafe { std::ptr::read(&this.request) }
+    }
+
+    /// Return the worker borrowed by this request.
+    #[inline]
+    pub fn worker(&self) -> &worker::Worker {
+        self.worker
+    }
+
+    fn wait_for_completion(&mut self) -> Result<(), Status> {
+        for _ in 0..1_000_000 {
+            match self.request.check_finished() {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    self.worker.progress();
+                }
+                Err(status) => return Err(status),
+            }
+        }
+        // Timeout: leave the handle unowned rather than freeing it in flight.
+        let _ = self.request.take_handle();
+        Err(Status::from(ucs_status_t::UCS_ERR_TIMED_OUT))
     }
 }
 
@@ -546,7 +617,13 @@ mod tests {
 
         let req = comms
             .ep
-            .am_send(TEST_AM_ID, send_buffer.as_slice(), b"", &am_flags)
+            .am_send(
+                &comms.worker,
+                TEST_AM_ID,
+                send_buffer.as_slice(),
+                b"",
+                &am_flags,
+            )
             .unwrap();
         if let Pending::InProgress(req) = req {
             while !req.check_finished().unwrap() {

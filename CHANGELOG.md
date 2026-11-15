@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Breaking (#130, #112 slice 4):** `Ep::am_send` now returns a
+  buffer-borrowing `am::AmRequest<'w, 'a>` guard, following the `TagRequest`
+  and `StreamRequest` pattern.
+  - The guard borrows the worker and both buffers (header and payload), and
+    its `Drop` progresses the worker to completion before releasing the borrows.
+  - New guard methods: `check_finished()`, `free()`, `into_inner()`, and `worker()`.
+  - Migration: pass the worker as the first argument, e.g.,
+    `ep.am_send(&worker, id, &header, &data, &params)`. Use
+    `guard.check_finished()` and `guard.free()` instead of direct `Request`
+    access. Dropping or reusing either buffer while an AM send is pending
+    no longer compiles: this prevents the use-after-free tracked in #112.
+
 - **Breaking (#127, #112 slice 1):** `Ep::rma_put` and `Ep::rma_get` now return
   buffer-borrowing `rma::RmaRequest<'w, 'a>` guards, following the
   `FetchAmoRequest` pattern.
