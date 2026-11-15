@@ -328,6 +328,10 @@ pub unsafe fn atomic_fswap64(
 #[allow(deprecated)]
 /// Atomic compare-and-swap 32-bit.
 ///
+/// UCX returns the compare value (expected) in the reply buffer if the swap failed
+/// (remote value != expected), or the swap value (replacement) if it succeeded
+/// (remote value == expected).
+///
 /// Operand layout: `[expected, replacement]` as two consecutive u32 values.
 ///
 /// # Safety
@@ -360,6 +364,10 @@ pub unsafe fn atomic_fcswap32(
 #[deprecated = "Use Ep safe AMO methods instead"]
 #[allow(deprecated)]
 /// Atomic compare-and-swap 64-bit.
+///
+/// UCX returns the compare value (expected) in the reply buffer if the swap failed
+/// (remote value != expected), or the swap value (replacement) if it succeeded
+/// (remote value == expected).
 ///
 /// Operand layout: `[expected, replacement]` as two consecutive u64 values.
 ///
