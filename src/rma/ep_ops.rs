@@ -8,6 +8,103 @@ use crate::RequestParam;
 use crate::Status;
 
 use super::RemoteKey;
+use std::marker::PhantomData;
+
+/// A buffer-borrowing RMA completion guard.
+///
+/// The buffer must remain valid until the request is resolved. Dropping
+/// a pending value progresses its worker to completion before releasing the
+/// buffer borrow, unless the bounded progress loop times out; in that
+/// pathological case the request is deliberately leaked and the buffer
+/// must not be reused.
+pub struct RmaRequest<'w, 'a> {
+    request: Option<crate::Request>,
+    worker: &'w Worker,
+    _buffer: PhantomData<&'a mut [u8]>,
+}
+
+impl<'w, 'a> RmaRequest<'w, 'a> {
+    /// Extract the underlying UCX request without completing it.
+    ///
+    /// # Safety
+    /// The returned request may be in flight and still own the buffer.
+    /// The caller must keep the buffer valid until the request reaches
+    /// completion (`check_finished() == Ok(true)`) and must not drop it
+    /// while in flight. Prefer `check_finished()` + `free()` on the wrapper,
+    /// or let `Drop` handle it.
+    pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
+        self.request.take()
+    }
+
+    /// Check if the request has finished.
+    pub fn check_finished(&self) -> Result<bool, crate::Status> {
+        self.request
+            .as_ref()
+            .map_or(Ok(true), crate::Request::check_finished)
+    }
+
+    /// Progress the request to completion before releasing its buffer borrow.
+    ///
+    /// If completion cannot be observed within the bounded progress loop,
+    /// the request is deliberately leaked rather than freed while it may
+    /// still be in flight. This preserves the same safety contract as [`Drop`].
+    pub fn free(mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) | Err(_) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
+impl<'w, 'a> Drop for RmaRequest<'w, 'a> {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.take() {
+            const MAX_PROGRESS: usize = 1_000_000;
+            for _ in 0..MAX_PROGRESS {
+                match request.check_finished() {
+                    Ok(true) => {
+                        request.free();
+                        return;
+                    }
+                    Ok(false) => {
+                        self.worker.progress();
+                    }
+                    Err(_) => {
+                        request.free();
+                        return;
+                    }
+                }
+            }
+            // SAFETY: The request is still in flight. It must not be freed;
+            // the caller must not reuse the buffer after this timeout.
+            std::mem::forget(request);
+        }
+    }
+}
+
+fn make_rma_request<'w, 'a>(
+    request: Option<crate::Request>,
+    worker: &'w Worker,
+) -> RmaRequest<'w, 'a> {
+    RmaRequest {
+        request,
+        worker,
+        _buffer: PhantomData,
+    }
+}
 
 /// Keep the required swap reply buffer alive until completion, discarding its value.
 fn with_amo_reply<T>(
@@ -77,13 +174,14 @@ impl Ep {
     // ── Put / Get ──
 
     /// Put data to a remote memory location.
-    pub fn rma_put(
+    pub fn rma_put<'w, 'a>(
         &self,
-        buffer: &[u8],
+        worker: &'w Worker,
+        buffer: &'a [u8],
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Pending, Status> {
+    ) -> Result<Option<RmaRequest<'w, 'a>>, Status> {
         status_ptr_to_result(unsafe {
             ucp_put_nbx(
                 self.handle,
@@ -94,25 +192,34 @@ impl Ep {
                 &param.handle,
             )
         })
+        .map(|request| match request {
+            Pending::InProgress(request) => Some(make_rma_request(Some(request), worker)),
+            _ => None,
+        })
     }
 
     /// Get data from a remote memory location.
-    pub fn rma_get(
+    pub fn rma_get<'w, 'a>(
         &self,
-        buffer: &mut [u8],
+        worker: &'w Worker,
+        buffer: &'a mut [u8],
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Pending, Status> {
+    ) -> Result<Option<RmaRequest<'w, 'a>>, Status> {
         status_ptr_to_result(unsafe {
             ucp_get_nbx(
                 self.handle,
-                buffer.as_ptr() as _,
+                buffer.as_mut_ptr() as _,
                 buffer.len(),
                 remote_addr,
                 rkey.handle,
                 &param.handle,
             )
+        })
+        .map(|request| match request {
+            Pending::InProgress(request) => Some(make_rma_request(Some(request), worker)),
+            _ => None,
         })
     }
 
@@ -1120,9 +1227,9 @@ mod tests {
         let param = RequestParamBuilder::new().build();
 
         let put = ep
-            .rma_put(b"ucx-rs!!", target_addr, &rkey, &param)
+            .rma_put(&worker, b"ucx-rs!!", target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA put: {status} ({})", transport()));
-        wait(&worker, put, "RMA put");
+        drop(put);
         // A completed put only means the source buffer may be reused. The data is
         // guaranteed to be at the target, and visible to a later get, only after a
         // flush (see the ucp_put_nbx docs).
@@ -1133,9 +1240,9 @@ mod tests {
 
         let mut fetched = [0u8; 8];
         let get = ep
-            .rma_get(&mut fetched, target_addr, &rkey, &param)
+            .rma_get(&worker, &mut fetched, target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA get: {status} ({})", transport()));
-        wait(&worker, get, "RMA get");
+        drop(get);
 
         drop(rkey);
         drop(memh);

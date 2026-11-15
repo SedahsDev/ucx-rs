@@ -8,17 +8,7 @@ use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::memh::MemHandle;
 use ucx_sys::rma::RemoteKey;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Pending, RequestParamBuilder};
-
-fn wait(worker: &ucx_sys::worker::Worker, request: ucx_sys::Request) {
-    for _ in 0..1_000_000 {
-        if request.check_finished().expect("RMA request failed") {
-            return;
-        }
-        worker.progress();
-    }
-    panic!("RMA request timed out");
-}
+use ucx_sys::RequestParamBuilder;
 
 fn main() {
     let params = ParamsBuilder::new()
@@ -44,20 +34,26 @@ fn main() {
     let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
     let param = RequestParamBuilder::new().no_imm_cmpl().build();
 
-    if let Pending::InProgress(request) = ep
-        .rma_put(b"hello", target.as_mut_ptr() as u64, &rkey, &param)
+    if let Some(request) = ep
+        .rma_put(&worker, b"hello", target.as_mut_ptr() as u64, &rkey, &param)
         .expect("RMA put")
     {
-        wait(&worker, request);
+        request.free();
     }
     assert_eq!(&target, b"hello");
 
     let mut result = [0u8; 5];
-    if let Pending::InProgress(request) = ep
-        .rma_get(&mut result, target.as_mut_ptr() as u64, &rkey, &param)
+    if let Some(request) = ep
+        .rma_get(
+            &worker,
+            &mut result,
+            target.as_mut_ptr() as u64,
+            &rkey,
+            &param,
+        )
         .expect("RMA get")
     {
-        wait(&worker, request);
+        request.free();
     }
     assert_eq!(&result, b"hello");
     ep.close(&worker, 0).expect("close endpoint");
