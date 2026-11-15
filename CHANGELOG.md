@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Breaking (#127, #112 slice 1):** `Ep::rma_put` and `Ep::rma_get` now return
+  buffer-borrowing `rma::RmaRequest<'w, 'a>` guards, following the
+  `FetchAmoRequest` pattern.
+  - The guard borrows the worker and buffer, and its `Drop` progresses the
+    worker to completion before releasing the buffer borrow (bounded loop;
+    on timeout the request is deliberately leaked).
+  - New guard methods: `check_finished()`, `free()`, and `into_inner()`.
+  - Migration: pass the worker as the first argument, e.g.
+    `ep.rma_put(&worker, &data, ...)` and `ep.rma_get(&worker, &mut buf, ...)`.
+    Use `guard.check_finished()` and `guard.free()` instead of direct
+    `Request` access. Dropping or reusing the buffer while a request is
+    pending no longer compiles: this prevents the use-after-free tracked
+    in #112.
+
 - **Fix (#110, slice 1):** Non-fetch AMO wrappers (`amo_add64/32`, `amo_xor64/32`,
   `amo_swap64/32`, `amo_and64/32`, `amo_or64/32`, `amo_cswap64/32`) now pass
   `count=1` and set the datatype internally via `ucp_dt_make_contig`, matching
