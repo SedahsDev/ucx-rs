@@ -270,8 +270,8 @@ mod status_tests {
 
     #[test]
     fn pending_complete_has_no_request() {
-        assert!(Pending::Complete.is_complete());
-        assert!(Pending::Complete.into_request().is_none());
+        assert!(Pending::<Request>::Complete.is_complete());
+        assert!(Pending::<Request>::Complete.into_request().is_none());
     }
 
     #[test]
