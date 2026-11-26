@@ -255,6 +255,7 @@ mod status_tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "UCX returned UCS_INPROGRESS through a ucs_status_ptr_t API")]
     fn status_ptr_to_result_panics_on_in_progress_in_debug() {
         let _ = status_ptr_to_result(ucs_status_t::UCS_INPROGRESS as usize as ucs_status_ptr_t);

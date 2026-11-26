@@ -112,7 +112,8 @@ application thread or channel.
 
 | Rule | Why |
 |------|-----|
-| Never call `Worker::progress()` concurrently on one worker | Use one owning progress thread per worker. Under MULTI in an MT-enabled build it is *safe* but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs; in non-MT or SINGLE it is UB — see §2.1. Debug builds panic on overlapping entry for diagnostics. |
+| Never call `Worker::progress()` concurrently on one worker | Use one owning progress thread per worker. Under MULTI in an MT-enabled build it is *safe* but *slow*: losers busy-wait on a `pthread_spinlock_t` and thrash the shared lock word with atomic RMWs; in non-MT or SINGLE it is UB — see §2.1. Debug builds panic on overlapping entry for diagnostics; release builds skip the nested call. |
+| Progress from code that may run inside a callback with `try_progress()` | `Worker::try_progress()` returns `0` without re-entering UCX when the worker is already progressing (re-entrancy is the only overlap on a `!Sync` `Worker`). `MtWorker::try_progress()` uses a mutex `try_lock` and returns `0` instead of blocking/deadlocking. Completion fail-safes (e.g. `Drop`) must use these, never `progress()`. |
 | Create workers only with exclusive `&mut Context` access | `ucp_worker_create` performs an unprotected cache-on-first-worker read-modify-write of context state; use a single context owner or synchronize it (for example, `Arc<Mutex<Context>>`). |
 | Do not block inside an AM recv handler or listener accept callback | Callbacks run in the progress context; blocking stalls all completions on that worker. |
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |

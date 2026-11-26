@@ -17,30 +17,30 @@ use std::ptr::NonNull;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-#[cfg(debug_assertions)]
+/// Marks a worker as "inside `ucp_worker_progress`" for the guard's lifetime.
+///
+/// Always compiled (not just in debug builds): [`Worker::try_progress`] relies
+/// on it to refuse re-entrant progress, e.g. from a UCX callback that runs
+/// during progress and then tries to progress the same worker again.
 struct ProgressGuard<'a> {
     progressing: &'a AtomicBool,
 }
 
-#[cfg(debug_assertions)]
 impl<'a> ProgressGuard<'a> {
-    fn new(progressing: &'a AtomicBool) -> Self {
-        if progressing
+    /// Acquire the progress flag, or `None` if progress is already running.
+    fn try_acquire(progressing: &'a AtomicBool) -> Option<Self> {
+        progressing
             .compare_exchange(
                 false,
                 true,
-                std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
+                std::sync::atomic::Ordering::Relaxed,
             )
-            .is_err()
-        {
-            panic!("concurrent progress() on the same worker");
-        }
-        Self { progressing }
+            .ok()
+            .map(|_| Self { progressing })
     }
 }
 
-#[cfg(debug_assertions)]
 impl Drop for ProgressGuard<'_> {
     fn drop(&mut self) {
         self.progressing
@@ -57,7 +57,7 @@ pub struct Worker {
     pub(crate) handle: ucp_worker_h,
     pub(crate) alive: Arc<AtomicBool>,
     pub(crate) am_handlers: Vec<std::sync::Arc<crate::am::AmHandler>>,
-    #[cfg(debug_assertions)]
+    /// Set while this worker is inside `ucp_worker_progress`.
     pub(crate) progressing: AtomicBool,
 }
 
@@ -87,6 +87,152 @@ mod tests {
     fn progress_works_with_a_real_worker() {
         let (_context, worker) = setup_worker();
         let _ = worker.progress();
+    }
+
+    #[test]
+    fn try_progress_works_with_a_real_worker() {
+        let (_context, worker) = setup_worker();
+        assert!(!worker.is_progressing());
+        let _events: u32 = worker.try_progress();
+        assert!(
+            !worker.is_progressing(),
+            "flag must be released after progress"
+        );
+    }
+
+    #[test]
+    fn try_progress_returns_zero_while_progress_flag_is_held() {
+        let (_context, worker) = setup_worker();
+        let guard = ProgressGuard::try_acquire(&worker.progressing).expect("flag free");
+        assert!(worker.is_progressing());
+        assert_eq!(worker.try_progress(), 0);
+        assert!(ProgressGuard::try_acquire(&worker.progressing).is_none());
+        drop(guard);
+        assert!(!worker.is_progressing());
+        assert!(ProgressGuard::try_acquire(&worker.progressing).is_some());
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn progress_skips_nested_call_in_release() {
+        let (_context, worker) = setup_worker();
+        let _guard = ProgressGuard::try_acquire(&worker.progressing).expect("flag free");
+        assert!(!worker.progress());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "concurrent progress() on the same worker")]
+    fn progress_panics_on_nested_call_in_debug() {
+        let (_context, worker) = setup_worker();
+        let _guard = ProgressGuard::try_acquire(&worker.progressing).expect("flag free");
+        let _ = worker.progress();
+    }
+
+    thread_local! {
+        static CB_WORKER: std::cell::Cell<*const Worker> = const { std::cell::Cell::new(std::ptr::null()) };
+        static CB_FLAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        static CB_NESTED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    unsafe extern "C" fn reentrant_send_cb(
+        _request: *mut std::os::raw::c_void,
+        _status: Status,
+        _user_data: *mut std::os::raw::c_void,
+    ) {
+        let worker = CB_WORKER.with(|w| w.get());
+        if worker.is_null() {
+            return;
+        }
+        // SAFETY: the test stores a pointer to a worker that outlives every
+        // progress call that can invoke this callback, and clears it after.
+        let worker = unsafe { &*worker };
+        CB_FLAG.with(|f| f.set(Some(worker.is_progressing())));
+        CB_NESTED.with(|n| n.set(Some(worker.try_progress())));
+    }
+
+    /// A UCX completion callback that runs during `progress()` and tries to
+    /// progress the same worker again must observe 0 and must not re-enter UCX.
+    #[test]
+    fn try_progress_from_completion_callback_during_progress_returns_zero() {
+        use crate::ep::ParamsBuilder as EpParamsBuilder;
+        use crate::worker::RemoteWorkerAddress;
+
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config read"), &context_params)
+                .expect("context create");
+        let worker = context
+            .worker_create(&ParamsBuilder::new().build())
+            .expect("worker create");
+        let packed = worker.pack_address().expect("pack address");
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .expect("self endpoint");
+
+        CB_WORKER.with(|w| w.set(&worker as *const Worker));
+        let request_param = crate::RequestParamBuilder::new()
+            .no_imm_cmpl()
+            .send_callback(Some(reentrant_send_cb))
+            .build();
+        // Matching receive so the eager send can complete on the self endpoint.
+        let mut recv_buf = vec![0u8; 8 << 20];
+        let send_buf = vec![7u8; 8 << 20];
+        let recv = worker
+            .tag_recv(
+                &worker,
+                &mut recv_buf,
+                7,
+                u64::MAX,
+                &crate::RequestParamBuilder::new().build(),
+            )
+            .expect("tag_recv");
+        let send = endpoint
+            .tag_send(&worker, &send_buf, 7, &request_param)
+            .expect("tag_send");
+        assert!(
+            CB_FLAG.with(|f| f.get()).is_none(),
+            "no_imm_cmpl: completion callback must not run inside tag_send"
+        );
+        for _ in 0..10_000 {
+            worker.progress();
+            if CB_NESTED.with(|n| n.get()).is_some() {
+                break;
+            }
+        }
+        CB_WORKER.with(|w| w.set(std::ptr::null()));
+        drop(send);
+        drop(recv);
+        assert_eq!(
+            CB_FLAG.with(|f| f.get()),
+            Some(true),
+            "callback must run inside progress and observe the progress flag"
+        );
+        assert_eq!(
+            CB_NESTED.with(|n| n.get()),
+            Some(0),
+            "nested try_progress must return 0"
+        );
+        assert!(!worker.is_progressing());
+    }
+
+    #[test]
+    fn mt_try_progress_returns_zero_while_locked() {
+        let (_context, worker) = setup_worker();
+        let worker = MtWorker::new(worker).expect("UCX should grant a threaded worker");
+        let _events: u32 = worker.try_progress();
+        let held = worker.inner.worker.lock().expect("lock");
+        let other = worker.clone();
+        let observed = std::thread::spawn(move || other.try_progress())
+            .join()
+            .expect("thread");
+        assert_eq!(observed, 0);
+        drop(held);
     }
 
     #[test]
@@ -212,6 +358,23 @@ impl MtWorker {
         self.lock().progress()
     }
 
+    /// Make one progress attempt unless another caller holds this worker.
+    ///
+    /// Uses a non-blocking `Mutex::try_lock`: if any thread (or a re-entrant
+    /// call from a callback running under this `MtWorker`'s lock) currently
+    /// holds the worker, returns `0` immediately instead of blocking or
+    /// deadlocking. Otherwise delegates to [`Worker::try_progress`] and returns
+    /// the number of events UCX processed. Never blocks and never panics.
+    pub fn try_progress(&self) -> u32 {
+        match self.inner.worker.try_lock() {
+            Ok(worker) => worker.try_progress(),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                poisoned.into_inner().try_progress()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => 0,
+        }
+    }
+
     pub fn flush(&self, params: &RequestParam) -> Result<Pending, Status> {
         self.lock().flush(params)
     }
@@ -302,7 +465,6 @@ impl Worker {
                 handle: worker,
                 alive: Arc::new(AtomicBool::new(true)),
                 am_handlers: Vec::new(),
-                #[cfg(debug_assertions)]
                 progressing: AtomicBool::new(false),
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
@@ -338,15 +500,57 @@ impl Worker {
     ///
     /// Prefer one thread owning each worker's progress loop. To wake that loop
     /// from other threads, use [`Self::arm`] and [`Self::get_efd`] rather than
-    /// polling from multiple callers. Debug builds panic if this method is
-    /// re-entered concurrently on the same worker.
+    /// polling from multiple callers.
+    ///
+    /// Re-entrant progress (calling this from a UCX callback that is itself
+    /// running inside progress on the same worker) is a bug: debug builds
+    /// panic; release builds skip the nested `ucp_worker_progress` call and
+    /// return `false`. Code that may legitimately run inside a callback, such
+    /// as completion fail-safes in `Drop`, must use [`Self::try_progress`].
     ///
     /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
     pub fn progress(&self) -> bool {
-        #[cfg(debug_assertions)]
-        let _progress_guard = ProgressGuard::new(&self.progressing);
+        let Some(_progress_guard) = ProgressGuard::try_acquire(&self.progressing) else {
+            debug_assert!(false, "concurrent progress() on the same worker");
+            return false;
+        };
         let progress = unsafe { ucp_worker_progress(self.handle) };
         progress > 0
+    }
+
+    /// Make one progress attempt unless this worker is already progressing.
+    ///
+    /// Returns the number of events UCX processed, or `0` without calling
+    /// `ucp_worker_progress` when progress is already running on this worker
+    /// (for example when called from a UCX callback during [`Self::progress`]).
+    /// Never blocks and never panics.
+    ///
+    /// `Worker` is `!Send + !Sync`, so the only overlap possible on a plain
+    /// `Worker` is re-entrancy. For progress shared across threads use
+    /// [`MtWorker::try_progress`], which uses a non-blocking mutex try-lock.
+    ///
+    /// ```no_run
+    /// # let worker: &ucx_sys::worker::Worker = todo!();
+    /// // Shared progress loop: one call advances the worker; nested or
+    /// // overlapping callers observe 0 and fall through.
+    /// let _events = worker.try_progress();
+    /// ```
+    #[inline]
+    pub fn try_progress(&self) -> u32 {
+        match ProgressGuard::try_acquire(&self.progressing) {
+            // SAFETY: self owns a live worker; the guard guarantees this is not
+            // a nested ucp_worker_progress call on the same worker.
+            Some(_progress_guard) => unsafe { ucp_worker_progress(self.handle) },
+            None => 0,
+        }
+    }
+
+    /// Whether this worker is currently inside `ucp_worker_progress`.
+    ///
+    /// `true` only when observed from a UCX callback running during progress.
+    #[inline]
+    pub fn is_progressing(&self) -> bool {
+        self.progressing.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Print worker diagnostics to `fd`. Invalid descriptors are ignored.

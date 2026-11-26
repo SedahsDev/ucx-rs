@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **New (#202):** `Worker::try_progress() -> u32` and `MtWorker::try_progress() -> u32`,
+  a non-blocking, re-entrancy-safe progress primitive (dependency of the
+  owned-data completion model, #211).
+  - `Worker::try_progress` returns `0` without calling `ucp_worker_progress`
+    when the worker is already progressing (e.g. from a UCX callback during
+    `progress()`); otherwise it returns UCX's event count. Never blocks or panics.
+  - `MtWorker::try_progress` uses `Mutex::try_lock` and returns `0` instead of
+    blocking or deadlocking when the worker is held by another caller.
+  - New `Worker::is_progressing()` reports whether the worker is currently
+    inside progress.
+  - **Behavior change:** the per-worker progress flag is now tracked in all
+    builds, not only debug. Nested `Worker::progress()` still panics in debug
+    builds; release builds now skip the nested `ucp_worker_progress` call and
+    return `false` instead of re-entering UCX.
+  - Design note: `Worker` stays `!Send + !Sync`, so on a plain `Worker` the
+    only overlap is re-entrancy. Cross-thread shared progress goes through
+    `MtWorker::try_progress`.
+
 - **Breaking (#130, #112 slice 4):** `Ep::am_send` now returns a
   buffer-borrowing `am::AmRequest<'w, 'a>` guard, following the `TagRequest`
   and `StreamRequest` pattern.
