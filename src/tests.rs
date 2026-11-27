@@ -5,6 +5,7 @@ use crate::context::Context;
 use crate::ep;
 use crate::worker;
 use crate::worker::RemoteWorkerAddress;
+use std::ptr;
 use std::rc::Rc;
 
 extern "C" fn init(_request: *mut ::std::os::raw::c_void) {}
@@ -45,11 +46,8 @@ pub fn setup_default() -> Rc<CommsContext> {
         .thread_mode(crate::ThreadMode::Multi)
         .build();
 
-    let mut context = Context::new(
-        &context::Config::read("", "").expect("config read"),
-        &params,
-    )
-    .unwrap();
+    let config = context::Config::read("", "").expect("config read");
+    let mut context = Context::new(&config, &params).unwrap();
 
     let worker = context.worker_create(&worker_features).unwrap();
     let packed_addr = worker.pack_address().unwrap();
@@ -65,6 +63,7 @@ pub fn setup_default() -> Rc<CommsContext> {
     while progressed {
         progressed = worker.progress();
     }
+
     Rc::new(CommsContext {
         context,
         worker,

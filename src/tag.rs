@@ -484,17 +484,36 @@ mod tests {
 
     #[test]
     fn tag_owned_immediate_recv_reports_info() {
-        let comms = setup_default();
+        let mut config = std::ptr::null_mut();
+        let status = unsafe { ucp_config_read(std::ptr::null(), std::ptr::null(), &mut config) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        unsafe {
+            let tls_name = std::ffi::CString::new("TLS").unwrap();
+            let tls_value = std::ffi::CString::new("self").unwrap();
+            let modify_status = ucp_config_modify(config, tls_name.as_ptr(), tls_value.as_ptr());
+            assert_eq!(modify_status, ucs_status_t::UCS_OK);
+        }
+        let mut ctx = Context::new(
+            &std::mem::ManuallyDrop::new(context::Config { handle: config }),
+            &context::ParamsBuilder::new()
+                .features(context::Flags::Tag)
+                .mt_workers_shared(1)
+                .build(),
+        )
+        .unwrap();
+        unsafe { ucp_config_release(config) };
+        let worker = ctx
+            .worker_create(&worker::ParamsBuilder::new().build())
+            .unwrap();
+        let ep = self_ep(&worker, crate::ErrorHandlerMode::None).unwrap();
         let param = RequestParamBuilder::new().build();
-        let sent = comms
-            .ep
-            .tag_send(&comms.worker, b"hey".to_vec(), 0x77, &param)
+        let sent = ep
+            .tag_send(&worker, b"hey".to_vec(), 0x77, &param)
             .expect("send");
-        assert_eq!(drive(&comms.worker, sent, send_done), b"hey");
+        assert_eq!(drive(&worker, sent, send_done), b"hey");
         // The message is now unexpected, so the receive matches inside the
         // call and UCX fills the receive info supplied by `tag_recv`.
-        let received = comms
-            .worker
+        let received = worker
             .tag_recv(vec![0u8; 8], 0x77, u64::MAX, &param)
             .expect("recv");
         assert!(
