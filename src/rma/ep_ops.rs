@@ -89,7 +89,9 @@ impl Ep {
     /// `param` contributes flags, callback, and user data. The datatype
     /// (always contiguous bytes), reply buffer, memory handle, memory type, and
     /// request allocation fields are controlled by this method and ignored if
-    /// set.
+    /// set. A callback may run before this returns, must not progress the
+    /// worker, and must not free the request. An empty buffer always completes
+    /// immediately, even with `NO_IMM_CMPL`.
     ///
     /// ```no_run
     /// # use ucx_sys::{ep::Ep, rma::RemoteKey, worker::Worker, RequestParamBuilder, Completion};
@@ -923,6 +925,33 @@ mod tests {
         ep.close(&worker, 0).expect("close endpoint");
     }
 
+    /// `FORCE_IMM_CMPL` must keep working: a small self put completes inline
+    /// and returns the buffer (UCX's short-put path must not be disabled by
+    /// the owned param handling).
+    #[test]
+    fn rma_owned_put_force_imm_cmpl_completes_inline() {
+        let mut target = vec![0u8; 8];
+        let target_addr = target.as_mut_ptr() as u64;
+        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().force_imm_cmpl().build();
+        let put = ep
+            .rma_put(&worker, vec![0x42u8; 8], target_addr, &rkey, &param)
+            .unwrap_or_else(|status| panic!("force_imm put: {status} ({})", transport()));
+        assert_eq!(
+            put.into_immediate().expect("must complete inline"),
+            vec![0x42u8; 8]
+        );
+        let flush = ep
+            .flush(&RequestParamBuilder::new().build())
+            .expect("flush");
+        wait(&worker, flush, "endpoint flush");
+        drop(rkey);
+        drop(memh);
+        assert_eq!(target, vec![0x42u8; 8]);
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
     /// The owned API forces contiguous bytes: a caller datatype of 2-byte
     /// elements must not make UCX write `2 * len` bytes past the buffer.
     #[test]
@@ -965,6 +994,10 @@ mod tests {
         let get = ep
             .rma_get(&worker, vec![0u8; 4096], target_addr, &rkey, &param)
             .expect("post get");
+        assert!(
+            get.is_pending(),
+            "NO_IMM_CMPL get must exercise the fail-safe"
+        );
         drop(get);
         drop(rkey);
         drop(memh);
