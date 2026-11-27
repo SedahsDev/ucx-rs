@@ -13,13 +13,15 @@ replaces the borrowing guards from #112, whose buffers could be freed while UCX
 was still using them. Freeing an in-flight request does not stop the operation
 (#68).
 
+Posting methods return `Result<_, Status>`; the table shows the success type.
+
 | Before | After |
 |---|---|
 | `Ep::rma_put(&[u8], ..)` / `rma_get(&mut [u8], ..)` → `RmaRequest` | `rma_put(&worker, D: OwnedBuf, ..)` / `rma_get(&worker, D: OwnedBufMut, ..)` → `Completion<D, OwningRequest<'w, D>>` (#204) |
-| `Ep::tag_send(&[u8], ..)`, `Worker::tag_recv(&mut [u8], ..)` → `TagRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
+| `Ep::tag_send(&[u8], ..)`, `Ep::tag_send_sync(&[u8], ..)`, `Worker::tag_recv(&mut [u8], ..)` → `TagRequest` | owned `D` → `Completion<D, OwningRequest>` (both sends) / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
 | `Ep::stream_send` / `stream_recv` → `StreamRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, usize), StreamRecvRequest>` (#205) |
 | `Ep::am_send(&[u8], &[u8], ..)` → `AmRequest` | `am_send(&worker, id, H, P, ..)` → `Completion<(H, P), OwningRequest>` (#206) |
-| `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → owned completion (#206, #214) |
+| `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → `Result<Completion<D, OwningRequest<'_, D>>, Status>` (#206, #214) |
 | fetch AMOs with a borrowed reply (`FetchAmoRequest<'w, 'a, T>`) | `amo_f*` → `FetchAmoCompletion<'w, T>`, which returns the old value; no-fetch AMOs → `AmoCompletion<'w>` (#207) |
 | `Ep::flush(&params)`, `Worker::flush(&params)` → `Pending` | `Ep::flush(&worker, &params)`, `Worker::flush(&params)` → `ep::OpCompletion<'w>` (#208) |
 | `Ep::close(&worker, flags: u32)` → `Pending` | `Ep::close(&worker, CloseMode::{Flush, Force})` → `Result<OpCompletion, CloseError>` (#208) |
@@ -30,7 +32,7 @@ was still using them. Freeing an in-flight request does not stop the operation
 | `Pending` | kept only for the `unsafe` raw-pointer APIs (`rma_put_ptr`, `tag_send_ptr`, ...) |
 
 Behaviors to know:
-- **`cancel()` only marks.** The request completes later, from progress, with `UCS_ERR_CANCELED`, and gives its data back in `Failed`. UCX 1.18–1.22 honors cancel only for tag receives. Use `CloseMode::Force` to abort an endpoint's operations.
+- **`cancel()` is not a general abort.** UCX 1.18–1.22 honors it only for tag receives. A software tag receive completes inside the `cancel()` call; an offloaded one completes from a later progress call. Either way it gives its data back in `Failed` with `UCS_ERR_CANCELED`. Sends, RMA, AMO, AM, stream and flush ignore cancel. Use `CloseMode::Force` to abort an endpoint's operations.
 - **`CloseMode::Force` needs `ErrorHandlerMode::Peer`.** `self`/`shm` can't provide it (`UCS_ERR_UNREACHABLE`). Without Peer, UCX refuses Force and the endpoint comes back in `CloseError::ep`.
 - **`Drop` of a pending request** cancels it and progresses up to `DROP_PROGRESS_BUDGET` times, then **leaks** the request and its data. Destroying the worker after such a leak can hit UCX's own assertions (SIGABRT). Drain requests instead of dropping them.
 - **Never progress the worker, or drop a pending request, from a UCX callback.**
@@ -176,8 +178,9 @@ Behaviors to know:
     worker. `try_complete(self)` is a non-blocking poll returning
     `Ok(Ok(data))`, `Ok(Err(Failed { status, data }))` (errors, including
     `CANCELED`, hand the data back), or `Err(self)` while in flight.
-    `cancel(&mut self)` only marks the request (`ucp_request_cancel`; no free,
-    no progress). There is no public single-request wait.
+    `cancel(&mut self)` calls `ucp_request_cancel` (no free, no progress). Only
+    tag receives honor it, and a software tag receive completes inside that
+    call. There is no public single-request wait.
   - `Drop` is the only progress-until-complete loop: cancel, at most
     `DROP_PROGRESS_BUDGET` (1,000,000) `Worker::progress()` rounds, then free
     and drop the data; on timeout both the request and the data are leaked.

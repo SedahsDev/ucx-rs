@@ -2,13 +2,14 @@
 //!
 //! # Threading model
 //!
-//! The default policy is a single-threaded progress loop. `Context`, `Worker`,
-//! and `Ep` are intentionally `!Send` and `!Sync` today (as are the associated
-//! handle wrappers such as `MemHandle` and `RemoteKey`). This is the current
-//! safe Rust API policy, not a promise that UCX can never use these objects from
-//! multiple threads. In particular, this crate does not provide unsafe `Send`
-//! or `Sync` implementations, and making the handles transferable under
-//! `ThreadMode::Multi` is future work.
+//! The default policy is a single-threaded progress loop. `Context` is
+//! `Send + Sync` (UCX documents the context as shareable; worker creation still
+//! needs exclusive `&mut Context`). `Worker`, `Ep`, the owned requests and the
+//! handle wrappers such as `MemHandle` and `RemoteKey` are intentionally `!Send`
+//! and `!Sync` (pinned in `src/threading_assert.rs`). For cross-thread access to
+//! one worker, `worker::MtWorker` is the audited `Send + Sync` wrapper; making
+//! the other handles transferable under `ThreadMode::Multi` is future work. See
+//! `THREADING.md` for the full inventory.
 //!
 //! `worker::ParamsBuilder::thread_mode` selects the UCX contract for calls on
 //! that worker:
@@ -71,12 +72,15 @@
 //! * **Never progress the worker, and never drop a pending request, inside a
 //!   UCX callback** (AM handlers, send/receive callbacks, listener callbacks).
 //!   A request's `Drop` progresses the worker.
-//! * **`cancel()` only marks.** The request completes later, from a progress
-//!   call, and `try_complete` returns its data in [`Failed`] (status
-//!   `UCS_ERR_CANCELED`). In UCX 1.18–1.22 only tag receives honor cancel; to
-//!   abort an endpoint's operations, close it with
-//!   [`ep::CloseMode::Force`]. Force requires an endpoint created with
-//!   [`ErrorHandlerMode::Peer`], which `self`/`shm` don't support.
+//! * **`cancel()` is not a general abort.** In UCX 1.18–1.22 only tag
+//!   receives honor it: a software tag receive completes inside the
+//!   `cancel()` call itself, and an offloaded one from a later progress call.
+//!   Either way `try_complete` then returns its data in [`Failed`] (status
+//!   `UCS_ERR_CANCELED`). Sends, RMA, AMO, AM, stream and flush requests
+//!   ignore cancel and complete normally (see [`OwningRequest::cancel`]). To
+//!   abort an endpoint's operations, close it with [`ep::CloseMode::Force`].
+//!   Force requires an endpoint created with [`ErrorHandlerMode::Peer`], which
+//!   `self`/`shm` don't support.
 //! * **`Drop` is a bounded fail-safe, not a wait.** Dropping a pending request
 //!   cancels it and progresses the worker up to [`DROP_PROGRESS_BUDGET`]
 //!   times. If it still hasn't completed, the request **and its data are

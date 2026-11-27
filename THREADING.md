@@ -121,7 +121,7 @@ application thread or channel.
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |
 | Never call `Worker::progress()` from a UCX callback, and never drop a pending owned request there | Callbacks already run inside progress; an owned request's `Drop` fail-safe progresses the worker. Move requests out (e.g. to a channel) and complete them in the main loop. |
 | Complete requests by progressing once and polling all of them (`try_complete`) | There is no public single-request wait; the shared loop is the only completion model. |
-| Drop order: Requests → RemoteKeys → Eps → Listener → Worker → Context | Requests borrow the worker and keys borrow their endpoint, so the compiler enforces most of this. `Ep::Drop`'s `worker_alive` guard is a diagnostic safety net, not a license to reorder. |
+| Drop order: Requests → RemoteKeys → Eps → Listener → Worker → Context | The compiler enforces two edges: requests before their worker (`OwningRequest<'w, _>` borrows `&Worker`) and keys before their endpoint (`RemoteKey<'ep>` borrows `&Ep`). It does **not** enforce requests before endpoints or endpoints before the worker (`Ep` has no lifetime; an in-flight put can outlive `drop(ep)`). For those, `Ep::Drop`'s `worker_alive` guard is a diagnostic safety net, not a license to reorder. |
 
 ---
 

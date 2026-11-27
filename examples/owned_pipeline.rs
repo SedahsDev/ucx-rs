@@ -1,8 +1,10 @@
 //! The owned-data completion model end to end, on a self endpoint.
 //!
-//! Many operations of different kinds (RMA puts, tag sends and receives, a
-//! fetching AMO) are posted into ONE pending set and completed by ONE shared
-//! `worker.progress()` + `try_complete` loop. A subset is canceled, the
+//! Many operations of different kinds (RMA puts, tag sends and receives, and
+//! a fetching AMO when UCX defers it) are posted into ONE pending set and
+//! completed by ONE shared `worker.progress()` + `try_complete` loop. The
+//! fetch-AMO API takes no request params, so `NO_IMM_CMPL` can't force it to
+//! defer: on the self transport it usually completes inline. A subset is canceled, the
 //! endpoint is flushed and closed through the same loop shape, and every
 //! buffer comes back to the caller, including those of canceled operations.
 //!
@@ -12,8 +14,10 @@
 //!   the worker, so it can never outlive it.
 //! - There is no public single-request `wait`. Progress the worker and poll
 //!   everything you have in flight.
-//! - `cancel()` only marks a request. It completes (with `UCS_ERR_CANCELED`)
-//!   from a later progress call, and `try_complete` hands the buffer back.
+//! - `cancel()` is honored only by tag receives. A software tag receive
+//!   completes (with `UCS_ERR_CANCELED`) inside the `cancel()` call, and an
+//!   offloaded one from a later progress call. Either way `try_complete` hands
+//!   the buffer back. Other operations ignore cancel.
 //! - The rkey is dropped before the endpoint is closed (UCX destroy order).
 //! - Never progress the worker or drop a pending request inside a UCX
 //!   callback.
@@ -168,7 +172,7 @@ fn main() {
             .expect("post put")
         {
             Completion::Pending(request) => pending.push(Op::Put(i, request)),
-            Completion::Immediate(_) => {}
+            Completion::Immediate(_) => unreachable!("NO_IMM_CMPL put"),
         }
     }
     for tag in [1u64, 2] {
@@ -206,6 +210,7 @@ fn main() {
             true
         }
         Ok(Completion::Immediate(old)) => {
+            assert_eq!(old, 40, "fetch-add returns the previous value");
             println!("fetch-add completed inline, old value {old}");
             true
         }
@@ -215,8 +220,9 @@ fn main() {
         }
     };
 
-    // Cancel a subset: only the unmatched receives. Cancel just marks them;
-    // they complete with CANCELED inside the shared loop below.
+    // Cancel a subset: only the unmatched receives. On the software tag path
+    // UCX completes them with CANCELED inside cancel() itself (offloaded ones
+    // would need progress); either way the shared loop below collects them.
     for op in &mut pending {
         if matches!(op, Op::Recv(tag, _) if *tag >= UNMATCHED_TAG) {
             op.cancel();
@@ -252,7 +258,7 @@ fn main() {
             }
         }
     }
-    assert_eq!((sent, received, canceled), (2, 2, 2));
+    assert_eq!((puts, sent, received, canceled), (PUTS, 2, 2, 2));
 
     // Remote visibility: flush the endpoint (same completion loop shape).
     let flush = ep
