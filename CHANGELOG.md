@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Breaking (#208, part of #211):** flush, close and modify are owned,
+  data-less operations returning `ep::OpCompletion<'w>` (= `Completion<(),
+  OwningRequest<'w, ()>>`), driven by the same shared progress loop as data
+  operations. There is no public single-request wait.
+  - `Ep::flush(&self, worker, params)`, `Ep::modify(&self, worker, params)`,
+    `Worker::flush(&self, params)`.
+  - `Ep::close(self, worker, CloseMode)` returns `Result<OpCompletion,
+    CloseError>`. The new `CloseMode { Flush, Force }` replaces raw `u32` flags.
+    `CloseError::ep` hands the endpoint back when it was not consumed: a wrong
+    worker was passed, or `Force` was refused for lack of peer error handling.
+  - `CloseMode::Force` completes the endpoint's outstanding operations with
+    `UCS_ERR_CANCELED`, which returns their buffers in `Failed`. It requires an
+    endpoint created with `ErrorHandlerMode::Peer`, which `self`/`shm` don't
+    support.
+  - `flush`/`modify`/`close` check that the worker passed in is the
+    endpoint's own (by its `alive` Arc identity, not the raw handle, which can be
+    reused after a worker is destroyed). Otherwise they fail with
+    `UCS_ERR_INVALID_PARAM`.
+  - **Removed:** `Pending::wait`, `Worker::wait_request`,
+    `Worker::cancel_request`, `MtWorker::wait_request`,
+    `MtWorker::cancel_request`, `MtWorker::flush` (post and drive the
+    flush inside `MtWorker::with_worker` with `w.progress()`; see its docs, since
+    calling `MtWorker::progress` there deadlocks), and `Ep::disconnect_nb` (deprecated UCX API; use
+    `close(_, CloseMode::Force)`). `Pending` remains only for the `unsafe`
+    raw-pointer APIs.
+  - Migration: `ep.close(&worker, 0)` becomes `ep.close(&worker,
+    CloseMode::Flush)`, then drive the completion. `ep.flush(&p)` becomes
+    `ep.flush(&worker, &p)`.
 - **Fix (#214), safety:** the safe AM handler (`Worker::am_register_handler`)
   treated rendezvous data descriptors as payload, an out-of-bounds read from
   safe code. Rendezvous messages are now received into an owned buffer via

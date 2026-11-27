@@ -9,7 +9,7 @@ use ucx_sys::memh::MemHandle;
 use ucx_sys::rma::RemoteKey;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
 use ucx_sys::worker::Worker;
-use ucx_sys::{Completion, OwningRequest, Pending, RequestParamBuilder};
+use ucx_sys::{Completion, OwningRequest, RequestParamBuilder};
 
 /// Progress the worker until an owned operation hands its buffer back.
 fn complete<D>(worker: &Worker, completion: Completion<D, OwningRequest<'_, D>>) -> D {
@@ -60,14 +60,11 @@ fn main() {
         )
         .expect("RMA put");
     let _source = complete(&worker, put);
+    // Flush and close are data-less owned operations: same completion loop.
     let flush = ep
-        .flush(&RequestParamBuilder::new().build())
+        .flush(&worker, &RequestParamBuilder::new().build())
         .expect("flush");
-    if let Pending::InProgress(request) = flush {
-        while !request.check_finished().expect("flush") {
-            worker.progress();
-        }
-    }
+    complete(&worker, flush);
     assert_eq!(&target, b"hello");
 
     let get = ep
@@ -81,5 +78,8 @@ fn main() {
         .expect("RMA get");
     let result = complete(&worker, get);
     assert_eq!(&result, b"hello");
-    ep.close(&worker, 0).expect("close endpoint");
+    let close = ep
+        .close(&worker, ucx_sys::ep::CloseMode::Flush)
+        .expect("close endpoint");
+    complete(&worker, close);
 }

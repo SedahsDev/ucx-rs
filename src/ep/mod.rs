@@ -1,10 +1,11 @@
 //! # Teardown
 //!
-//! [`Ep::close`] is the explicit graceful teardown path and returns the
-//! pending close operation. [`Drop`] performs a best-effort graceful close
-//! when the worker is still alive. [`Ep::destroy`] and [`Ep::disconnect_nb`]
-//! are force/error-path escape hatches; use them only for broken endpoints and
-//! never while operations are pending on the endpoint.
+//! [`Ep::close`] is the teardown path: it returns an owned close completion
+//! ([`OpCompletion`]) driven by the same shared progress loop as data
+//! operations; [`CloseMode::Force`] also cancels the endpoint's outstanding
+//! operations. [`Drop`] performs a best-effort graceful close when the worker
+//! is still alive. [`Ep::destroy`] is the error-path escape hatch; use it only
+//! for broken endpoints and never while operations are pending on them.
 
 pub mod attr;
 pub mod modify;
@@ -43,6 +44,36 @@ pub struct Ep {
     pub(crate) worker_alive: Arc<AtomicBool>,
 }
 
+/// How [`Ep::close`] tears down the endpoint (`UCP_EP_CLOSE_FLAG_FORCE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloseMode {
+    /// Flush outstanding operations, then disconnect (graceful).
+    #[default]
+    Flush,
+    /// Disconnect without flushing. Outstanding operations on the endpoint
+    /// complete with an error status (typically `UCS_ERR_CANCELED`).
+    ///
+    /// UCX accepts this only for endpoints created with
+    /// [`crate::ErrorHandlerMode::Peer`], which needs a transport with peer
+    /// failure support (tcp, IB/RoCE; not `self` or `shm`, where creating such
+    /// an endpoint fails with `UCS_ERR_UNREACHABLE`). Otherwise `close` fails with
+    /// `UCS_ERR_INVALID_PARAM` (and UCX has consumed nothing: the endpoint is
+    /// handed back in [`CloseError::ep`]).
+    Force,
+}
+
+impl CloseMode {
+    fn flags(self) -> u32 {
+        match self {
+            CloseMode::Flush => 0,
+            CloseMode::Force => ucp_ep_close_flags_t::UCP_EP_CLOSE_FLAG_FORCE as u32,
+        }
+    }
+}
+
+/// Completion of an operation that carries no data (flush, close, modify).
+pub type OpCompletion<'w> = crate::Completion<(), crate::OwningRequest<'w, ()>>;
+
 /// Native Rust wrapper for the raw `ucp_ep_h` handle.
 #[derive(Debug, Clone, Copy)]
 pub struct EpHandle(pub(crate) ucp_ep_h);
@@ -60,6 +91,19 @@ impl From<EpHandle> for ucp_ep_h {
 }
 
 impl Ep {
+    /// `INVALID_PARAM` unless `worker` is the worker this endpoint belongs to.
+    ///
+    /// Identity is the worker's `alive` Arc, not its raw handle: after a
+    /// worker is destroyed, a new one can reuse the `ucp_worker_h` address,
+    /// and a stale `Ep` must not pass for it.
+    fn check_worker(&self, worker: &Worker) -> Result<(), Status> {
+        if Arc::ptr_eq(&self.worker_alive, &worker.alive) {
+            Ok(())
+        } else {
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
+        }
+    }
+
     /// Expose the raw UCP endpoint handle for FFI callers.
     pub fn handle(&self) -> EpHandle {
         EpHandle(self.handle)
@@ -96,8 +140,25 @@ impl Ep {
     /// undefined behavior in a non-MT build or `ThreadMode::Single`. See
     /// `THREADING.md` §2.1. Prefer one thread to own each worker's progress
     /// loop, using `Worker::arm()` and `Worker::get_efd()` for wakeups.
-    pub fn flush(&self, params: &crate::RequestParam) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe { ucp_ep_flush_nbx(self.handle, &params.handle) })
+    ///
+    /// `worker` must be the endpoint's worker (else `UCS_ERR_INVALID_PARAM`).
+    /// A deferred flush is an [`crate::OwningRequest`]: drive it with the same
+    /// shared `worker.progress()` + `try_complete` loop as data operations.
+    /// `params` contributes flags, callback and user data; request allocation
+    /// is controlled here. A flush that completes inline returns
+    /// `Immediate(())` without invoking the callback, and UCX does not honor
+    /// `NO_IMM_CMPL` for flushes.
+    pub fn flush<'w>(
+        &self,
+        worker: &'w Worker,
+        params: &crate::RequestParam,
+    ) -> Result<OpCompletion<'w>, Status> {
+        self.check_worker(worker)?;
+        let raw = crate::completion::owned_op_param(params);
+        // SAFETY: live endpoint on `worker`; the request carries no buffer.
+        unsafe {
+            crate::completion::status_ptr_with_data(ucp_ep_flush_nbx(self.handle, &raw), (), worker)
+        }
     }
 
     /// Immediately destroy a broken or erroring endpoint.
@@ -113,35 +174,29 @@ impl Ep {
         }
     }
 
-    /// Start the deprecated legacy disconnect operation.
-    ///
-    /// This is an error-path/force-teardown escape hatch and must not be used
-    /// while operations are pending. [`Ep::close`] is recommended for normal
-    /// graceful teardown; `ucp_ep_close_nb` replaces this deprecated UCX API.
-    /// The returned request, when present, is owned by the caller.
-    pub fn disconnect_nb(self) -> Result<Pending, Status> {
-        let this = std::mem::ManuallyDrop::new(self);
-        if !this.worker_alive.load(std::sync::atomic::Ordering::Acquire) {
-            return status_ptr_to_result(std::ptr::null_mut());
-        }
-        // SAFETY: this endpoint is owned and its worker is alive. On an
-        // immediate error, UCX did not take ownership, so destroy the handle.
-        let result = status_ptr_to_result(unsafe { ucp_disconnect_nb(this.handle) });
-        if result.is_err() {
-            // SAFETY: the disconnect call returned an error without taking
-            // ownership of this endpoint; `this` is its sole owner.
-            unsafe { ucp_ep_destroy(this.handle) };
-        }
-        result
-    }
-
     /// Modify endpoint error handling and user data.
     ///
     /// `ucp_ep_modify_nb` is an upstream deprecated compatibility API declared
     /// in `ucp_compat.h`.
-    pub fn modify(&self, params: &ModifyParams) -> Result<Pending, Status> {
+    ///
+    /// `worker` must be the endpoint's worker (else `UCS_ERR_INVALID_PARAM`).
+    /// `ucp_ep_modify_nb` always completes inline, so this returns
+    /// `Immediate(())` or an error; the completion type matches the other
+    /// endpoint operations.
+    pub fn modify<'w>(
+        &self,
+        worker: &'w Worker,
+        params: &ModifyParams,
+    ) -> Result<OpCompletion<'w>, Status> {
+        self.check_worker(worker)?;
         // SAFETY: self.handle is a live endpoint and params owns initialized storage.
-        status_ptr_to_result(unsafe { ucp_ep_modify_nb(self.handle, &params.handle) })
+        unsafe {
+            crate::completion::status_ptr_with_data(
+                ucp_ep_modify_nb(self.handle, &params.handle),
+                (),
+                worker,
+            )
+        }
     }
 
     /// Estimate the time needed to send a message of `message_size` bytes.
@@ -202,19 +257,102 @@ impl Ep {
         })
     }
 
-    /// Start closing this endpoint and return the completion request, if any.
-    /// The caller owns progress of a returned request and should check it while
-    /// progressing the associated worker.
-    pub fn close(self, worker: &Worker, flags: u32) -> Result<Pending, Status> {
-        let _ = worker;
+    /// Start closing this endpoint.
+    ///
+    /// The close is a data-less owned operation: `Immediate(())` when UCX
+    /// finished inline, otherwise an [`crate::OwningRequest`] driven by the
+    /// same shared progress loop as everything else. `worker` must be the
+    /// endpoint's worker; on a mismatch, or when UCX refuses
+    /// [`CloseMode::Force`] (no peer error handling), the endpoint is handed
+    /// back in [`CloseError::ep`] with `UCS_ERR_INVALID_PARAM`. Other errors
+    /// mean UCX already consumed it. `CloseMode::Force` completes immediately
+    /// (UCX discards the lanes inline); `CloseMode::Flush` may be pending until
+    /// the endpoint's outstanding operations drain, which needs the same
+    /// progress loop that completes them.
+    ///
+    /// # Disconnect recipe
+    ///
+    /// 1. Either [`cancel`](crate::OwningRequest::cancel) the endpoint's
+    ///    outstanding requests, or close with [`CloseMode::Force`], which
+    ///    completes them with an error status (typically `UCS_ERR_CANCELED`).
+    /// 2. Push the close request into the same pending set as those requests.
+    /// 3. Progress the worker and `try_complete` everything until the set is
+    ///    empty. Buffers of canceled operations come back in
+    ///    [`crate::Failed`].
+    ///
+    /// ```no_run
+    /// # use ucx_sys::{ep::{CloseMode, Ep}, worker::Worker, Completion};
+    /// # fn demo(worker: &Worker, ep: Ep) {
+    /// match ep.close(worker, CloseMode::Force) {
+    ///     Ok(Completion::Immediate(())) => {}
+    ///     Ok(Completion::Pending(mut close)) => loop {
+    ///         worker.progress();
+    ///         match close.try_complete() {
+    ///             Ok(_status) => break,
+    ///             Err(still) => close = still,
+    ///         }
+    ///     },
+    ///     Err(error) => eprintln!("{error}"),
+    /// }
+    /// # }
+    /// ```
+    pub fn close(self, worker: &Worker, mode: CloseMode) -> Result<OpCompletion<'_>, CloseError> {
+        if let Err(status) = self.check_worker(worker) {
+            return Err(CloseError {
+                status,
+                ep: Some(self),
+            });
+        }
         let this = std::mem::ManuallyDrop::new(self);
         // SAFETY: UCX request parameter structs are valid when zeroed.
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
-        param.flags = flags;
-        // SAFETY: this.handle is owned by the endpoint and param is initialized.
-        status_ptr_to_result(unsafe { ucp_ep_close_nbx(this.handle, &param) })
+        param.op_attr_mask = ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
+        param.flags = mode.flags();
+        // SAFETY: this.handle is a live endpoint on `worker` (checked above).
+        // The request carries no buffer.
+        let result = unsafe {
+            crate::completion::status_ptr_with_data(
+                ucp_ep_close_nbx(this.handle, &param),
+                (),
+                worker,
+            )
+        };
+        match result {
+            Ok(completion) => Ok(completion),
+            // The one exit before UCX consumes the endpoint (ucp_ep.c: FORCE
+            // without peer error handling returns before marking it CLOSED):
+            // hand it back intact.
+            Err(status) if mode == CloseMode::Force && status == Status::INVALID_PARAM => {
+                Err(CloseError {
+                    status,
+                    ep: Some(std::mem::ManuallyDrop::into_inner(this)),
+                })
+            }
+            // Every other error happens after UCX marked the endpoint closed
+            // (flush or CM-disconnect failures): it is consumed.
+            Err(status) => Err(CloseError { status, ep: None }),
+        }
     }
 }
+
+/// Error from [`Ep::close`].
+#[derive(Debug)]
+pub struct CloseError {
+    /// Why the close did not start.
+    pub status: Status,
+    /// The endpoint, when it was not consumed: a wrong worker was passed, or
+    /// `CloseMode::Force` was refused for lack of peer error handling. `None`
+    /// when UCX already consumed it.
+    pub ep: Option<Ep>,
+}
+
+impl std::fmt::Display for CloseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "endpoint close failed: {}", self.status)
+    }
+}
+
+impl std::error::Error for CloseError {}
 
 impl Drop for Ep {
     fn drop(&mut self) {
@@ -230,7 +368,7 @@ impl Drop for Ep {
         let status = unsafe { ucp_ep_close_nbx(self.handle, &param) };
         match status_ptr_to_result(status) {
             Ok(_req) if !status.is_null() => {
-                eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first");
+                eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, CloseMode::Flush) first");
                 // Do not free a request whose close has not completed.
                 std::mem::forget(_req);
             }
@@ -246,12 +384,17 @@ mod tests {
 
     #[test]
     fn test_endpoint_flush_api_signature() {
-        let _flush: fn(&Ep, &crate::RequestParam) -> Result<Pending, Status> = Ep::flush;
+        let _flush: for<'w> fn(
+            &Ep,
+            &'w Worker,
+            &crate::RequestParam,
+        ) -> Result<OpCompletion<'w>, Status> = Ep::flush;
     }
 
     #[test]
     fn endpoint_issue_37_api_signatures() {
-        let _: fn(&Ep, &ModifyParams) -> Result<Pending, Status> = Ep::modify;
+        let _: for<'w> fn(&Ep, &'w Worker, &ModifyParams) -> Result<OpCompletion<'w>, Status> =
+            Ep::modify;
         let _: fn(&Ep, usize) -> Result<EpPerf, Status> = Ep::evaluate_perf;
     }
 
@@ -320,13 +463,13 @@ mod tests {
 
     #[test]
     fn close_api_has_worker_signature() {
-        let _close: fn(Ep, &Worker, u32) -> Result<Pending, Status> = Ep::close;
+        let _close: for<'w> fn(Ep, &'w Worker, CloseMode) -> Result<OpCompletion<'w>, CloseError> =
+            Ep::close;
     }
 
     #[test]
     fn teardown_api_has_expected_signatures() {
         let _: fn(Ep) = Ep::destroy;
-        let _: fn(Ep) -> Result<Pending, Status> = Ep::disconnect_nb;
     }
 
     #[test]
@@ -349,10 +492,79 @@ mod tests {
         let ep_params = ParamsBuilder::new().address(&remote).build();
         let ep = worker.create_ep(ep_params).expect("endpoint create");
         drop(address);
-        ep.close(&worker, 0)
-            .expect("endpoint close should complete");
+        {
+            let close = ep
+                .close(&worker, CloseMode::Flush)
+                .expect("endpoint close should start");
+            if let crate::Completion::Pending(mut request) = close {
+                let mut done = false;
+                for _ in 0..1_000_000 {
+                    worker.progress();
+                    match request.try_complete() {
+                        Ok(result) => {
+                            result.expect("endpoint close");
+                            done = true;
+                            break;
+                        }
+                        Err(still) => request = still,
+                    }
+                }
+                assert!(done, "endpoint close did not complete");
+            }
+        }
         drop(worker);
         drop(context);
+    }
+
+    /// Passing another worker hands the endpoint back instead of consuming it.
+    #[test]
+    fn close_with_wrong_worker_returns_endpoint() {
+        let context_params = crate::context::ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = crate::context::Context::new(
+            &crate::context::Config::read("", "").expect("config read"),
+            &context_params,
+        )
+        .expect("context create");
+        let worker = context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("worker");
+        let other = context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("other worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = crate::worker::RemoteWorkerAddress::new(address.to_vec());
+        drop(address);
+        let ep = worker
+            .create_ep(ParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        assert!(matches!(
+            ep.flush(&other, &crate::RequestParamBuilder::new().build()),
+            Err(status) if status == Status(ucs_status_t::UCS_ERR_INVALID_PARAM)
+        ));
+        let error = match ep.close(&other, CloseMode::Flush) {
+            Err(error) => error,
+            Ok(_) => panic!("close on the wrong worker must fail"),
+        };
+        assert_eq!(error.status, Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
+        let ep = error.ep.expect("endpoint handed back");
+        let close = ep
+            .close(&worker, CloseMode::Flush)
+            .expect("close on its own worker");
+        if let crate::Completion::Pending(mut request) = close {
+            for _ in 0..1_000_000 {
+                worker.progress();
+                match request.try_complete() {
+                    Ok(result) => {
+                        result.expect("close");
+                        break;
+                    }
+                    Err(still) => request = still,
+                }
+            }
+        }
     }
 
     #[test]

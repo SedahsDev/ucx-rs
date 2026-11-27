@@ -180,20 +180,27 @@ mod tests {
 
     /// Progress `worker` until `request` completes. Bounded, so a transport that
     /// cannot complete the operation fails the test instead of hanging it.
-    fn wait(worker: &Worker, request: Pending, what: &str) {
-        let Pending::InProgress(request) = request else {
+    /// Test-only driver for data-less completions (flush, close).
+    fn wait(worker: &Worker, completion: crate::ep::OpCompletion<'_>, what: &str) {
+        let Completion::Pending(mut request) = completion else {
             return;
         };
         for _ in 0..1_000_000 {
-            match request.check_finished() {
-                Ok(true) => return,
-                Ok(false) => {
-                    worker.progress();
-                }
-                Err(status) => panic!("{what} failed with {status} ({})", transport()),
+            worker.progress();
+            match request.try_complete() {
+                Ok(Ok(())) => return,
+                Ok(Err(failed)) => panic!("{what} failed with {} ({})", failed.status, transport()),
+                Err(still) => request = still,
             }
         }
         panic!("{what} did not complete ({})", transport());
+    }
+
+    fn close(worker: &Worker, ep: crate::ep::Ep) {
+        let completion = ep
+            .close(worker, crate::ep::CloseMode::Flush)
+            .unwrap_or_else(|error| panic!("{error} ({})", transport()));
+        wait(worker, completion, "endpoint close");
     }
 
     use crate::{Completion, OwningRequest};
@@ -252,6 +259,135 @@ mod tests {
         (context, worker, ep, memh, packed)
     }
 
+    /// Write a diagnostic straight to fd 2. libtest captures `eprintln!`, and
+    /// a failure that ends in a UCX abort (worker destroyed under leaked
+    /// requests) loses captured output, so CI would show no message.
+    fn diag(message: &str) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), "{message}");
+    }
+
+    /// #208 acceptance (shared progress loop): N in-flight RMA puts and a
+    /// pending endpoint flush are completed by ONE loop, and the flush only
+    /// completes once every put has (UCX flush semantics cover RMA). Then
+    /// the rkey is dropped (UCX requires that before the endpoint goes away)
+    /// and the endpoint is closed through the same loop shape. Pinned to tcp:
+    /// on `self` the puts complete inline.
+    #[test]
+    fn rma_puts_flush_and_close_share_one_progress_loop() {
+        let (n, len) = (4usize, 1usize << 20);
+        let mut target = vec![0u8; n * len];
+        let target_addr = target.as_mut_ptr() as u64;
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma)
+            .mt_workers_shared(1)
+            .build();
+        let config = Config::read("", "").expect("config");
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status = unsafe {
+            crate::ffi::ucp_config_modify(config.handle, c"TLS".as_ptr(), c"tcp".as_ptr())
+        };
+        assert_eq!(status, crate::ffi::ucs_status_t::UCS_OK, "pin TLS=tcp");
+        let mut context = Context::new(&config, &params).expect("context");
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        drop(address);
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle())
+            .expect("pack rkey")
+            .to_vec();
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut puts: Vec<_> = (0..n)
+            .map(|i| {
+                match ep
+                    .rma_put(
+                        &worker,
+                        vec![i as u8 + 1; len],
+                        target_addr + (i * len) as u64,
+                        &rkey,
+                        &param,
+                    )
+                    .expect("post put")
+                {
+                    Completion::Pending(request) => request,
+                    Completion::Immediate(_) => panic!("NO_IMM_CMPL put must defer"),
+                }
+            })
+            .collect();
+        let mut flush = match ep.flush(&worker, &RequestParamBuilder::new().build()) {
+            Ok(Completion::Pending(request)) => Some(request),
+            Ok(Completion::Immediate(())) => None,
+            Err(status) => panic!("flush: {status} ({})", transport()),
+        };
+        diag(&format!(
+            "rma shared loop: flush pending={} ({})",
+            flush.is_some(),
+            transport()
+        ));
+        let mut flushed = flush.is_none();
+        let mut puts_done = 0;
+        for _ in 0..1_000_000 {
+            if flushed && puts.is_empty() {
+                break;
+            }
+            worker.progress();
+            if let Some(request) = flush.take() {
+                match request.try_complete() {
+                    Ok(result) => {
+                        result.unwrap_or_else(|failed| panic!("flush: {failed}"));
+                        flushed = true;
+                    }
+                    Err(pending) => flush = Some(pending),
+                }
+            }
+            let flushed_now = flushed;
+            puts = puts
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(result) => {
+                        let buffer = result.unwrap_or_else(|failed| panic!("put: {failed}"));
+                        assert_eq!(buffer.len(), len);
+                        puts_done += 1;
+                        None
+                    }
+                    Err(pending) => {
+                        if flushed_now {
+                            // Flush completion implies every earlier put is
+                            // complete; its request must report so now.
+                            diag("put still pending after its flush completed");
+                        }
+                        Some(pending)
+                    }
+                })
+                .collect();
+            assert!(
+                !flushed_now || puts.is_empty(),
+                "flush completed while puts were still pending ({})",
+                transport()
+            );
+        }
+        assert!(flushed, "flush did not complete ({})", transport());
+        assert_eq!(puts_done, n, "every put handed its buffer back");
+        drop(rkey);
+        drop(memh);
+        close(&worker, ep);
+        for i in 0..n {
+            assert!(
+                target[i * len..(i + 1) * len]
+                    .iter()
+                    .all(|&byte| byte == i as u8 + 1),
+                "put {i} landed"
+            );
+        }
+    }
+
     /// `NO_IMM_CMPL` forces the deferred path: both put and get return an
     /// `OwningRequest` that hands the buffer back from `try_complete`.
     #[test]
@@ -275,7 +411,7 @@ mod tests {
         assert!(put.is_pending(), "NO_IMM_CMPL put must be deferred");
         assert_eq!(&*drive_owned(&worker, put, "put"), &payload[..]);
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
 
@@ -288,7 +424,7 @@ mod tests {
         drop(rkey);
         drop(memh);
         assert_eq!(target, payload);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// `FORCE_IMM_CMPL` must keep working: a small self put completes inline
@@ -309,13 +445,13 @@ mod tests {
             vec![0x42u8; 8]
         );
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         drop(rkey);
         drop(memh);
         assert_eq!(target, vec![0x42u8; 8]);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// The owned API forces contiguous bytes: a caller datatype of 2-byte
@@ -334,7 +470,7 @@ mod tests {
             .expect("post put");
         drive_owned(&worker, put, "put");
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         drop(rkey);
@@ -345,7 +481,7 @@ mod tests {
             &[0xEEu8; 8],
             "bytes past the buffer untouched"
         );
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// Dropping a pending owned get is safe: the fail-safe completes it before
@@ -367,7 +503,7 @@ mod tests {
         drop(get);
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     fn setup_amo_test() -> (Context, Worker, Ep) {
@@ -444,7 +580,7 @@ mod tests {
             assert!(completed, "{what} did not complete ({})", transport());
         }
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -453,7 +589,7 @@ mod tests {
 
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -643,7 +779,7 @@ mod tests {
             }
         };
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -653,7 +789,7 @@ mod tests {
 
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -728,13 +864,13 @@ mod tests {
         std::hint::black_box(&scribble);
         drop(completion); // Drop fail-safe completes it before freeing the slots
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         assert_eq!(unsafe { *(remote_addr as *const u64) }, 42);
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -826,7 +962,7 @@ mod tests {
         // guaranteed to be at the target, and visible to a later get, only after a
         // flush (see the ucp_put_nbx docs).
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -843,6 +979,6 @@ mod tests {
             "(RMA put target, RMA get result) ({})",
             transport()
         );
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 }

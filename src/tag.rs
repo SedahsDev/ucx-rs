@@ -643,6 +643,154 @@ mod tests {
         assert_eq!(SEND_CB_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
+    /// Context + worker for the close tests (tag feature only), pinned to the
+    /// tcp transport: `self`/`shm` lack peer error handling, so the
+    /// forced-close path would never be exercised there.
+    fn close_fixture() -> (crate::context::Context, crate::worker::Worker) {
+        let params = crate::context::ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let config = crate::context::Config::read("", "").expect("config");
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status = unsafe { ucp_config_modify(config.handle, c"TLS".as_ptr(), c"tcp".as_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK, "pin TLS=tcp");
+        let mut context = crate::context::Context::new(&config, &params).expect("context");
+        let worker = context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("worker");
+        (context, worker)
+    }
+
+    fn self_ep(
+        worker: &crate::worker::Worker,
+        mode: crate::ErrorHandlerMode,
+    ) -> Result<crate::ep::Ep, Status> {
+        let packed = worker.pack_address().expect("address");
+        let remote = crate::worker::RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        worker.create_ep(
+            crate::ep::ParamsBuilder::new()
+                .address(&remote)
+                .err_mode(mode)
+                .build(),
+        )
+    }
+
+    /// `close(Force)` cancels the endpoint's outstanding sends: each comes
+    /// back `CANCELED` with its buffer. Needs peer error handling (skips on
+    /// transports without it, e.g. `self`/`shm`).
+    #[test]
+    fn force_close_cancels_outstanding_sends() {
+        let (_context, worker) = close_fixture();
+        let worker = &worker;
+        let ep = match self_ep(worker, crate::ErrorHandlerMode::Peer) {
+            Ok(ep) => ep,
+            Err(status) if status == Status::UNREACHABLE => {
+                eprintln!("skipping: no transport with peer error handling ({status})");
+                return;
+            }
+            Err(status) => panic!("endpoint: {status}"),
+        };
+        let (n, len) = (4u64, 1 << 20); // rendezvous: waits for a receive that never comes
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut sends: Vec<_> = (0..n)
+            .map(|i| {
+                ep.tag_send(worker, vec![i as u8; len], 0x7000 + i, &param)
+                    .expect("post send")
+                    .into_pending()
+                    .expect("NO_IMM_CMPL send is pending")
+            })
+            .collect();
+        match ep.close(worker, crate::ep::CloseMode::Force) {
+            // UCX discards the lanes inline for a forced close.
+            Ok(Completion::Immediate(())) => {}
+            Ok(Completion::Pending(_)) => panic!("forced close unexpectedly deferred"),
+            Err(error) => panic!("{error}"),
+        }
+        let mut canceled = 0;
+        for _ in 0..1_000_000 {
+            if sends.is_empty() {
+                break;
+            }
+            worker.progress();
+            sends = sends
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(Err(crate::Failed { status, data })) => {
+                        assert_eq!(status, Status::CANCELED);
+                        assert_eq!(data.len(), len, "buffer handed back");
+                        canceled += 1;
+                        None
+                    }
+                    Ok(Ok(_)) => panic!("send without a receiver must not succeed"),
+                    Err(pending) => Some(pending),
+                })
+                .collect();
+        }
+        assert_eq!(canceled, n, "every send canceled by close(Force)");
+    }
+
+    /// UCX refuses `close(Force)` on an endpoint without peer error handling
+    /// before consuming it: the endpoint comes back intact and closes
+    /// normally afterwards. Runs on every transport.
+    #[test]
+    fn force_close_without_peer_returns_endpoint() {
+        let (_context, worker) = close_fixture();
+        let ep = self_ep(&worker, crate::ErrorHandlerMode::None).expect("endpoint");
+        let error = match ep.close(&worker, crate::ep::CloseMode::Force) {
+            Err(error) => error,
+            Ok(_) => panic!("UCX must refuse Force without peer error handling"),
+        };
+        assert_eq!(error.status, Status::INVALID_PARAM);
+        let ep = error.ep.expect("endpoint handed back, not leaked");
+        let close = ep
+            .close(&worker, crate::ep::CloseMode::Flush)
+            .expect("graceful close");
+        match close {
+            Completion::Immediate(()) => {}
+            Completion::Pending(mut request) => {
+                let mut done = false;
+                for _ in 0..1_000_000 {
+                    worker.progress();
+                    match request.try_complete() {
+                        Ok(result) => {
+                            result.unwrap_or_else(|failed| panic!("close: {failed}"));
+                            done = true;
+                            break;
+                        }
+                        Err(still) => request = still,
+                    }
+                }
+                assert!(done, "close did not complete");
+            }
+        };
+    }
+
+    /// An endpoint whose worker was destroyed must not accept a new worker
+    /// that happens to reuse the old `ucp_worker_h` address.
+    #[test]
+    fn endpoint_rejects_worker_created_after_its_own_died() {
+        let (mut context, worker) = close_fixture();
+        let old_handle = worker.handle;
+        let ep = self_ep(&worker, crate::ErrorHandlerMode::None).expect("endpoint");
+        drop(worker);
+        let fresh = context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("fresh worker");
+        eprintln!("handle reused: {}", fresh.handle == old_handle);
+        assert!(matches!(
+            ep.flush(&fresh, &RequestParamBuilder::new().build()),
+            Err(status) if status == Status::INVALID_PARAM
+        ));
+        let error = match ep.close(&fresh, crate::ep::CloseMode::Flush) {
+            Err(error) => error,
+            Ok(_) => panic!("close on a different worker must fail"),
+        };
+        assert!(error.ep.is_some(), "endpoint handed back");
+        // Dropping it skips UCX: its worker is dead.
+    }
+
     #[test]
     fn msg_recv_error_returns_message_only_when_provably_unconsumed() {
         assert!(msg_recv_error_returns_message(true, Status::NO_RESOURCE));
