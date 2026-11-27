@@ -21,6 +21,8 @@
     such as `[u8; N]` or `u64` is rejected at compile time.
   - `unsafe fn status_ptr_with_data` adapts a raw `ucs_status_ptr_t` plus its
     owned data into a `Completion`.
+  - `Failed<D>` `Debug`/`Display` show only the status, so `expect` works for
+    any buffer type.
   - Operations move onto this model in #204–#208; `Pending` stays until then.
 
 - **Breaking (#130, #112 slice 4):** `Ep::am_send` now returns a

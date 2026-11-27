@@ -203,8 +203,9 @@ impl<D, R> Completion<D, R> {
 
 /// A request that completed with an error (including `UCS_ERR_CANCELED`).
 ///
-/// UCX is finished with the data, so it is handed back for reuse.
-#[derive(Debug)]
+/// UCX is finished with the data, so it is handed back for reuse. `Debug`
+/// and `Display` show only the status (buffers can be large), so
+/// `result.expect(..)` works for any `D`.
 pub struct Failed<D> {
     /// The UCX completion status.
     pub status: Status,
@@ -226,13 +227,22 @@ impl<D> Failed<D> {
     }
 }
 
-impl<D> std::fmt::Display for Failed<D> {
+impl<D> std::fmt::Debug for Failed<D> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "UCX request failed: {:?}", self.status)
+        formatter
+            .debug_struct("Failed")
+            .field("status", &self.status)
+            .finish_non_exhaustive()
     }
 }
 
-impl<D: std::fmt::Debug> std::error::Error for Failed<D> {}
+impl<D> std::fmt::Display for Failed<D> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "UCX request failed: {}", self.status)
+    }
+}
+
+impl<D> std::error::Error for Failed<D> {}
 
 /// A UCX request that owns its data until the request completes (or is
 /// canceled and the cancel completes).
@@ -496,6 +506,19 @@ mod tests {
         fn as_mut_ptr(&mut self) -> *mut u8 {
             self.bytes.as_mut_ptr()
         }
+    }
+
+    #[test]
+    fn failed_debug_and_display_do_not_need_debug_data() {
+        struct Opaque;
+        let failed = Failed {
+            status: Status::CANCELED,
+            data: Opaque,
+        };
+        assert!(format!("{failed:?}").contains("status"));
+        assert!(format!("{failed}").starts_with("UCX request failed"));
+        let result: Result<(), Failed<Opaque>> = Err(failed);
+        assert!(result.is_err());
     }
 
     #[test]
