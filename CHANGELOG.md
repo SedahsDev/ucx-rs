@@ -45,9 +45,13 @@ Behaviors to know:
 
 - **Build, CI (#132, #113):** `UCX_GENERATE_BINDINGS=1` is now strict, and CI's
   Tier 1 job (UCX 1.22.0) builds, lints and tests with it.
-  - The UCX version guard never ran before. It compiled a C program calling
-    `ucp_get_version()` without linking `libucp`, so the compile always failed
-    and the guard printed "skipping version validation". It now reads
+  - The UCX version guard never ran before. Its C probe could not compile: it
+    called `ucp_get_version()` with no arguments and used the result
+    (`unsigned version = ucp_get_version();`), but the function is
+    `void ucp_get_version(unsigned *, unsigned *, unsigned *)` (`too few
+    arguments`). It also decoded the value with `/ 10000`, which doesn't
+    match `UCP_VERSION`'s `<< 24 | << 16` layout, and never linked `libucp`.
+    So the guard always printed "skipping version validation". It now reads
     `UCP_API_MAJOR`/`UCP_API_MINOR` from `ucp_version.h` (the headers bindgen
     reads), so nothing is compiled or linked. It runs before bindgen and panics
     outside 1.19–1.22.
@@ -257,7 +261,7 @@ Behaviors to know:
   `.datatype()` for these operations. Added self-endpoint loopback tests for
   all 12 non-fetch AMO operations.
 
-- UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
+- UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported. With `UCX_GENERATE_BINDINGS=1` they are a build-time error (since #132; before that the guard never actually ran).
 - **Breaking (#128, #112):** `Ep::tag_send` and `Worker::tag_recv` now return
   buffer-borrowing `tag::TagRequest<'w, 'a>` guards, following the
   `stream::StreamRequest` pattern.

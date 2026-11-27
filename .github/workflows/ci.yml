@@ -188,7 +188,8 @@ jobs:
       # must fail the build in the guard, before bindgen runs. Last step on
       # purpose: changing UCX_PREFIX reruns build.rs for the shared target dir.
       - name: version guard rejects UCX 1.16 headers
-        shell: bash -o pipefail {0}
+        # -e is safe here: a failing command in an `if` condition does not exit.
+        shell: bash -eo pipefail {0}
         run: |
           fake=/tmp/fake-ucx-1.16
           mkdir -p "$fake/include/ucp/api" "$fake/lib"
