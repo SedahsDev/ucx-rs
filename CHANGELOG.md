@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **New (#203, part of #211):** ownership-transferring completion model in
+  `ucx_sys::completion` (re-exported at the crate root).
+  - `Completion<D, R>`: `Immediate(D)` returns the data at once;
+    `Pending(R)` holds an `OwningRequest` that owns it until UCX is done.
+  - `OwningRequest<'w, D>`: tied to `&'w Worker`, so it cannot outlive its
+    worker. `try_complete(self)` is a non-blocking poll returning
+    `Ok(Ok(data))`, `Ok(Err(Failed { status, data }))` (errors, including
+    `CANCELED`, hand the data back), or `Err(self)` while in flight.
+    `cancel(&mut self)` only marks the request (`ucp_request_cancel`; no free,
+    no progress). There is no public single-request wait.
+  - `Drop` is the only progress-until-complete loop: cancel, at most
+    `DROP_PROGRESS_BUDGET` (1,000,000) `Worker::progress()` rounds, then free
+    and drop the data; on timeout both the request and the data are leaked.
+    Never drop an `OwningRequest` inside a UCX callback.
+  - `unsafe trait OwnedBuf` / `OwnedBufMut`: data must have a stable address
+    across moves (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`); inline storage
+    such as `[u8; N]` or `u64` is rejected at compile time.
+  - `unsafe fn status_ptr_with_data` adapts a raw `ucs_status_ptr_t` plus its
+    owned data into a `Completion`.
+  - `Failed<D>` `Debug`/`Display` show only the status, so `expect` works for
+    any buffer type.
+  - Operations move onto this model in #204–#208; `Pending` stays until then.
+
 - **Breaking (#130, #112 slice 4):** `Ep::am_send` now returns a
   buffer-borrowing `am::AmRequest<'w, 'a>` guard, following the `TagRequest`
   and `StreamRequest` pattern.

@@ -56,9 +56,13 @@ pub mod thread_mode;
 pub mod version;
 pub mod worker;
 
+pub mod completion;
 pub mod request;
 pub mod status;
 
+pub use completion::{
+    Completion, Failed, OwnedBuf, OwnedBufMut, OwningRequest, DROP_PROGRESS_BUDGET,
+};
 pub use request::*;
 pub use status::*;
 
