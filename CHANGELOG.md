@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Breaking (#206, part of #211):** `Ep::am_send(&worker, id, header, data,
+  &params)` takes ownership of the header and payload (`OwnedBuf`) and returns
+  `Completion<(H, P), OwningRequest<'w, (H, P)>>`; `AmRequest` is removed.
+  Byte literals still work (`b"..."`, `b""`).
+  - `Worker::am_recv_data(desc, buffer, &params)` takes ownership of the
+    receive buffer (`OwnedBufMut`) and returns `Completion<D, OwningRequest<'_,
+    D>>`. **Fix:** it previously borrowed `&mut [u8]` and returned a bare
+    request, so safe code could free the buffer while UCX wrote into it.
+  - `OwnedBuf` is now also implemented for `&'static [u8]` and
+    `&'static [u8; N]` (read-only, never moved or freed).
+  - Known issue: the safe AM handler mishandles rendezvous messages (#214).
+
 - **Breaking (#205, part of #211):** tag and stream operations take ownership
   of their buffers (`OwnedBuf` / `OwnedBufMut`) and return `Completion`.
   `tag::TagRequest` and `stream::StreamRequest` are removed.

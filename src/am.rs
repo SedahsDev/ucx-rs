@@ -2,13 +2,14 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
-pub use crate::request::AmRequest;
+use crate::completion::{owned_op_param, status_ptr_with_data};
 use crate::request::Pending;
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
 use crate::RequestParam;
 use crate::Status;
+use crate::{Completion, OwnedBuf, OwningRequest};
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
@@ -228,35 +229,45 @@ impl Ep {
     /// receiving worker is the caller's own worker. Calling `am_send` with
     /// an unregistered `id` on a self endpoint will cause undefined behavior
     /// (SIGSEGV in UCX).
+    ///
+    /// The header and payload are moved in and come back together as
+    /// `(header, data)` from [`Completion::Immediate`] or
+    /// [`OwningRequest::try_complete`]; neither can be touched while UCX may
+    /// read it. Use `Vec::new()` for an empty header or payload. `worker`
+    /// must be the worker this endpoint was created on. `params` contributes
+    /// flags (including `UCP_AM_SEND_FLAG_*`), callback, and user data; the
+    /// datatype (contiguous bytes), reply buffer, receive info, memory handle,
+    /// memory type, and request allocation fields are controlled here.
     #[inline]
-    pub fn am_send<'w, 'a>(
+    #[allow(clippy::type_complexity)]
+    pub fn am_send<'w, H: OwnedBuf, P: OwnedBuf>(
         &self,
         worker: &'w Worker,
         id: u32,
-        header: &'a [u8],
-        data: &'a [u8],
+        header: H,
+        data: P,
         params: &RequestParam,
-    ) -> Result<Pending<AmRequest<'w, 'a>>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_am_send_nbx(
+    ) -> Result<Completion<(H, P), OwningRequest<'w, (H, P)>>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "am_send: the passed worker is not the endpoint's worker"
+        );
+        let raw = owned_op_param(params);
+        // SAFETY: the request (if any) reads only the header's and payload's
+        // stable storage (`OwnedBuf`), which the returned value owns until
+        // UCX is done with both.
+        unsafe {
+            let ptr = ucp_am_send_nbx(
                 self.handle,
                 id,
                 header.as_ptr() as _,
                 header.len(),
                 data.as_ptr() as _,
                 data.len(),
-                &params.handle,
-            )
-        })
-        .map(|pending| match pending {
-            Pending::Complete => Pending::Complete,
-            Pending::InProgress(request) => Pending::InProgress(AmRequest {
-                worker,
-                header,
-                data,
-                request,
-            }),
-        })
+                &raw,
+            );
+            status_ptr_with_data(ptr, (header, data), worker)
+        }
     }
 }
 
@@ -382,12 +393,13 @@ mod tests {
     use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress};
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    type AmRecvDataFn = fn(
-        &Worker,
-        std::ptr::NonNull<std::ffi::c_void>,
-        &mut [u8],
-        &RequestParam,
-    ) -> Result<Pending, Status>;
+    type AmRecvDataFn =
+        for<'w> fn(
+            &'w Worker,
+            std::ptr::NonNull<std::ffi::c_void>,
+            Vec<u8>,
+            &RequestParam,
+        ) -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status>;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {
@@ -432,6 +444,60 @@ mod tests {
         }
         drop(request);
         assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    /// `am_send` hands back both owned buffers through the deferred path.
+    /// Eager-sized on purpose: the safe handler trampoline does not handle
+    /// rendezvous descriptors yet (#214).
+    #[test]
+    fn owned_am_send_returns_header_and_payload() {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Am)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let mut worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .unwrap();
+        let packed = worker.pack_address().unwrap();
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .unwrap();
+        let received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&received);
+        worker
+            .am_register_handler(25, CbFlags::WholeMsg, move |header, data| {
+                assert_eq!(header, b"hdr");
+                assert!(data.iter().all(|&byte| byte == 0x5A));
+                seen.store(data.len(), Ordering::Release);
+                Ok(())
+            })
+            .unwrap();
+        let len = 1024;
+        let param = crate::RequestParamBuilder::new().no_imm_cmpl().build();
+        let completion = endpoint
+            .am_send(&worker, 25, b"hdr".to_vec(), vec![0x5Au8; len], &param)
+            .unwrap();
+        assert!(completion.is_pending(), "NO_IMM_CMPL must defer");
+        let mut request = completion.into_pending().unwrap();
+        let (header, data) = loop {
+            worker.progress();
+            match request.try_complete() {
+                Ok(result) => break result.expect("am_send"),
+                Err(still) => request = still,
+            }
+        };
+        assert_eq!(header, b"hdr");
+        assert_eq!(data.len(), len);
+        for _ in 0..1000 {
+            if received.load(Ordering::Acquire) == len {
+                break;
+            }
+            worker.progress();
+        }
+        assert_eq!(received.load(Ordering::Acquire), len);
     }
 
     #[test]

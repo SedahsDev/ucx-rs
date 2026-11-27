@@ -8,7 +8,7 @@ use ucx_sys::am::{CbFlags, HandlerParamsBuilder};
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{AmRequest, Pending, RequestParamBuilder, Status};
+use ucx_sys::{Completion, OwningRequest, RequestParamBuilder, Status};
 
 unsafe extern "C" fn receive(
     arg: *mut c_void,
@@ -29,12 +29,18 @@ unsafe extern "C" fn receive(
     ucx_sys::Status::OK
 }
 
-fn wait(worker: &ucx_sys::worker::Worker, guard: AmRequest<'_, '_>) {
+/// Progress until the owned send hands its header and payload back.
+fn wait<D>(worker: &ucx_sys::worker::Worker, completion: Completion<D, OwningRequest<'_, D>>) -> D {
+    let mut request = match completion {
+        Completion::Immediate(buffers) => return buffers,
+        Completion::Pending(request) => request,
+    };
     for _ in 0..1_000_000 {
-        if guard.check_finished().expect("AM request failed") {
-            return;
-        }
         worker.progress();
+        match request.try_complete() {
+            Ok(result) => return result.expect("AM request failed"),
+            Err(still) => request = still,
+        }
     }
     panic!("AM request timed out");
 }
@@ -66,12 +72,10 @@ fn main() {
         .build();
     worker.am_register(&handler).expect("register AM handler");
     let request_param = RequestParamBuilder::new().no_imm_cmpl().build();
-    if let Pending::InProgress(request) = ep
-        .am_send(&worker, 7, b"Z", &[], &request_param)
-        .expect("AM send")
-    {
-        wait(&worker, request);
-    }
+    let sent = ep
+        .am_send(&worker, 7, b"Z", b"", &request_param)
+        .expect("AM send");
+    let _buffers = wait(&worker, sent);
     assert_eq!(received, [b'Z']);
     ep.close(&worker, 0).expect("close endpoint");
 }

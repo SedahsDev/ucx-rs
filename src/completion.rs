@@ -76,7 +76,9 @@ pub const DROP_PROGRESS_BUDGET: usize = 1_000_000;
 /// value is moved around (into [`OwningRequest`], out of `try_complete`, into
 /// a `Vec`) during that time.
 ///
-/// Inline storage is rejected:
+/// Implemented for `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`, and read-only
+/// `&'static [u8]` / `&'static [u8; N]` (e.g. `b"hello"`). Inline storage is
+/// rejected, and so is a non-`'static` borrow:
 ///
 /// ```compile_fail
 /// fn needs<D: ucx_sys::OwnedBuf>() {}
@@ -86,6 +88,12 @@ pub const DROP_PROGRESS_BUDGET: usize = 1_000_000;
 /// ```compile_fail
 /// fn needs<D: ucx_sys::OwnedBuf>() {}
 /// needs::<u64>();
+/// ```
+///
+/// ```compile_fail
+/// fn needs<D: ucx_sys::OwnedBuf>(_: D) {}
+/// let local = vec![0u8; 4];
+/// needs(&local[..]);
 /// ```
 pub unsafe trait OwnedBuf {
     /// Start of the buffer.
@@ -156,6 +164,26 @@ unsafe impl<const N: usize> OwnedBuf for Box<[u8; N]> {
 unsafe impl<const N: usize> OwnedBufMut for Box<[u8; N]> {
     fn as_mut_ptr(&mut self) -> *mut u8 {
         <[u8]>::as_mut_ptr(&mut **self)
+    }
+}
+
+// SAFETY: 'static shared data is never moved, freed, or mutated.
+unsafe impl OwnedBuf for &'static [u8] {
+    fn as_ptr(&self) -> *const u8 {
+        <[u8]>::as_ptr(self)
+    }
+    fn len(&self) -> usize {
+        <[u8]>::len(self)
+    }
+}
+
+// SAFETY: as for `&'static [u8]`; byte-string literals (`b"..."`) have this type.
+unsafe impl<const N: usize> OwnedBuf for &'static [u8; N] {
+    fn as_ptr(&self) -> *const u8 {
+        <[u8]>::as_ptr(*self)
+    }
+    fn len(&self) -> usize {
+        N
     }
 }
 
@@ -738,6 +766,11 @@ mod tests {
         let address = OwnedBuf::as_ptr(&boxed);
         let moved = boxed;
         assert_eq!(OwnedBuf::as_ptr(&moved), address, "address survives a move");
+        let literal: &'static [u8; 5] = b"hello";
+        assert_eq!(OwnedBuf::as_ptr(&literal), literal.as_ptr());
+        assert_eq!(OwnedBuf::len(&literal), 5);
+        let empty: &'static [u8] = &[];
+        assert!(OwnedBuf::is_empty(&empty));
         let array: Box<[u8; 4]> = Box::new([9; 4]);
         assert_eq!(OwnedBuf::len(&array), 4);
         assert!(!OwnedBuf::is_empty(&array));
