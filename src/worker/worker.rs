@@ -435,7 +435,23 @@ impl Worker {
     ///
     /// Do not drop a pending completion inside the AM callback: its `Drop`
     /// fail-safe progresses the worker.
-    pub fn am_recv_data<D: crate::OwnedBufMut>(
+    ///
+    /// The safe [`Worker::am_register_handler`] already receives rendezvous
+    /// messages itself; this is for raw handlers ([`Worker::am_register`]).
+    ///
+    /// # Safety
+    ///
+    /// `data_desc` must be the `data` pointer of an AM callback invocation on
+    /// this worker whose `recv_attr` had `UCP_AM_RECV_ATTR_FLAG_RNDV` or
+    /// `UCP_AM_RECV_ATTR_FLAG_DATA` set, that callback must have returned
+    /// `UCS_INPROGRESS` (or this is called from inside it), and the descriptor
+    /// must not have been passed to this method or to `ucp_am_data_release`
+    /// already. UCX dereferences it as its internal descriptor.
+    ///
+    /// For a rendezvous descriptor, `buffer.len()` must be at least the
+    /// `length` the AM callback reported (UCX asserts it covers the message),
+    /// or zero to drop the payload.
+    pub unsafe fn am_recv_data<D: crate::OwnedBufMut>(
         &self,
         data_desc: NonNull<std::ffi::c_void>,
         mut buffer: D,
