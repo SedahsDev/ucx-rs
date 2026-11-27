@@ -75,9 +75,11 @@
 //! * **`cancel()` is not a general abort.** In UCX 1.18–1.22 only tag
 //!   receives honor it: a software tag receive completes inside the
 //!   `cancel()` call itself, and an offloaded one from a later progress call.
-//!   Either way `try_complete` then returns its data in [`Failed`] (status
-//!   `UCS_ERR_CANCELED`). Sends, RMA, AMO, AM, stream and flush requests
-//!   ignore cancel and complete normally (see [`OwningRequest::cancel`]). To
+//!   The status is usually `UCS_ERR_CANCELED` (data back in [`Failed`]), but
+//!   success if the receive was already matched or the offloaded cancel lost
+//!   the race — then the data comes back on the success side. Sends, RMA,
+//!   AMO, AM, stream and flush requests ignore cancel and complete normally
+//!   (see [`OwningRequest::cancel`]). To
 //!   abort an endpoint's operations, close it with [`ep::CloseMode::Force`].
 //!   Force requires an endpoint created with [`ErrorHandlerMode::Peer`], which
 //!   `self`/`shm` don't support.

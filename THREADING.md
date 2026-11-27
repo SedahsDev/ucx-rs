@@ -82,9 +82,10 @@ safety must be decided per *type*, conservatively, at compile time.
 
 ## 3. Current inventory (verified on master @ 201351c)
 
-The crate currently declares **no** `unsafe impl Send/Sync` anywhere
-(`grep -rn 'unsafe impl' src --exclude bindings.rs` is empty). Auto-traits are
-therefore derived structurally:
+The crate declares `unsafe impl Send + Sync` for exactly three types —
+`Context` (context.rs), `MtWorker` (worker.rs) and `AmHandler` (am.rs) — plus
+`unsafe impl Send` for the `OwnedBuf`/`OwnedBufMut` blanket impls (heap
+buffers). Everything else is derived structurally:
 
 | Type | Derivation | Intended |
 |------|-----------|----------|
@@ -100,8 +101,11 @@ therefore derived structurally:
 | `MemHandle` | raw memh + context handle → `!Send !Sync` | candidate `Send` after audit |
 | `MemHandleGuard<'a>` | `PhantomData<&'a mut [u8]>` → `!Send` | correct as-is |
 
-Nothing pins these decisions today: a refactor that adds/removes a field can
-silently flip any auto-trait. Closing that gap is the first issue below.
+`src/threading_assert.rs` pins this table: `assert_impl_all!` /
+`assert_not_impl_any!` over Context, MtWorker and AmHandler (Send+Sync) and
+Worker, Ep, Request, RemoteKey, MemHandle, the owned requests and more
+(!Send/!Sync). A refactor that silently flips one breaks the build.
+Keep every row below consistent with that module.
 
 ---
 

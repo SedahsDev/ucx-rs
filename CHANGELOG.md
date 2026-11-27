@@ -13,12 +13,14 @@ replaces the borrowing guards from #112, whose buffers could be freed while UCX
 was still using them. Freeing an in-flight request does not stop the operation
 (#68).
 
-Posting methods return `Result<_, Status>`; the table shows the success type.
+Posting methods return `Result<_, Status>`; the table's After cells show the
+success type unless spelled out (the `am_recv_data` row keeps its full `Result`
+because `unsafe` matters there).
 
 | Before | After |
 |---|---|
 | `Ep::rma_put(&[u8], ..)` / `rma_get(&mut [u8], ..)` → `RmaRequest` | `rma_put(&worker, D: OwnedBuf, ..)` / `rma_get(&worker, D: OwnedBufMut, ..)` → `Completion<D, OwningRequest<'w, D>>` (#204) |
-| `Ep::tag_send(&[u8], ..)`, `Ep::tag_send_sync(&[u8], ..)`, `Worker::tag_recv(&mut [u8], ..)` → `TagRequest` | owned `D` → `Completion<D, OwningRequest>` (both sends) / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
+| `Ep::tag_send(&[u8], ..)` / `Worker::tag_recv(&mut [u8], ..)` → `TagRequest`; `Ep::tag_send_sync(&[u8], ..)` → bare `Pending` | owned `D` → `Completion<D, OwningRequest>` (both sends) / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
 | `Ep::stream_send` / `stream_recv` → `StreamRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, usize), StreamRecvRequest>` (#205) |
 | `Ep::am_send(&[u8], &[u8], ..)` → `AmRequest` | `am_send(&worker, id, H, P, ..)` → `Completion<(H, P), OwningRequest>` (#206) |
 | `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → `Result<Completion<D, OwningRequest<'_, D>>, Status>` (#206, #214) |
@@ -32,7 +34,7 @@ Posting methods return `Result<_, Status>`; the table shows the success type.
 | `Pending` | kept only for the `unsafe` raw-pointer APIs (`rma_put_ptr`, `tag_send_ptr`, ...) |
 
 Behaviors to know:
-- **`cancel()` is not a general abort.** UCX 1.18–1.22 honors it only for tag receives. A software tag receive completes inside the `cancel()` call; an offloaded one completes from a later progress call. Either way it gives its data back in `Failed` with `UCS_ERR_CANCELED`. Sends, RMA, AMO, AM, stream and flush ignore cancel. Use `CloseMode::Force` to abort an endpoint's operations.
+- **`cancel()` is not a general abort.** UCX 1.18–1.22 honors it only for tag receives. A software tag receive completes inside the `cancel()` call; an offloaded one completes from a later progress call. Usually the status is `UCS_ERR_CANCELED` and the data comes back in `Failed`, but it is success (data on the success side) if the receive was already matched or the offloaded cancel lost the race. Sends, RMA, AMO, AM, stream and flush ignore cancel. Use `CloseMode::Force` to abort an endpoint's operations.
 - **`CloseMode::Force` needs `ErrorHandlerMode::Peer`.** `self`/`shm` can't provide it (`UCS_ERR_UNREACHABLE`). Without Peer, UCX refuses Force and the endpoint comes back in `CloseError::ep`.
 - **`Drop` of a pending request** cancels it and progresses up to `DROP_PROGRESS_BUDGET` times, then **leaks** the request and its data. Destroying the worker after such a leak can hit UCX's own assertions (SIGABRT). Drain requests instead of dropping them.
 - **Never progress the worker, or drop a pending request, from a UCX callback.**
