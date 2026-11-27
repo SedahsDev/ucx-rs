@@ -2,13 +2,13 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
-pub use crate::request::AmRequest;
-use crate::request::Pending;
+use crate::completion::{owned_op_param, status_ptr_with_data};
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
 use crate::RequestParam;
 use crate::Status;
+use crate::{Completion, OwnedBuf, OwningRequest};
 use bitflags::bitflags;
 use std::sync::{Arc, Mutex};
 
@@ -228,35 +228,45 @@ impl Ep {
     /// receiving worker is the caller's own worker. Calling `am_send` with
     /// an unregistered `id` on a self endpoint will cause undefined behavior
     /// (SIGSEGV in UCX).
+    ///
+    /// The header and payload are moved in and come back together as
+    /// `(header, data)` from [`Completion::Immediate`] or
+    /// [`OwningRequest::try_complete`]; neither can be touched while UCX may
+    /// read it. Use `b""` for an empty header or payload. `worker`
+    /// must be the worker this endpoint was created on. `params` contributes
+    /// flags (including `UCP_AM_SEND_FLAG_*`), callback, and user data; the
+    /// datatype (contiguous bytes), reply buffer, receive info, memory handle,
+    /// memory type, and request allocation fields are controlled here.
     #[inline]
-    pub fn am_send<'w, 'a>(
+    #[allow(clippy::type_complexity)]
+    pub fn am_send<'w, H: OwnedBuf, P: OwnedBuf>(
         &self,
         worker: &'w Worker,
         id: u32,
-        header: &'a [u8],
-        data: &'a [u8],
+        header: H,
+        data: P,
         params: &RequestParam,
-    ) -> Result<Pending<AmRequest<'w, 'a>>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_am_send_nbx(
+    ) -> Result<Completion<(H, P), OwningRequest<'w, (H, P)>>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "am_send: the passed worker is not the endpoint's worker"
+        );
+        let raw = owned_op_param(params);
+        // SAFETY: the request (if any) reads only the header's and payload's
+        // stable storage (`OwnedBuf`), which the returned value owns until
+        // UCX is done with both.
+        unsafe {
+            let ptr = ucp_am_send_nbx(
                 self.handle,
                 id,
                 header.as_ptr() as _,
                 header.len(),
                 data.as_ptr() as _,
                 data.len(),
-                &params.handle,
-            )
-        })
-        .map(|pending| match pending {
-            Pending::Complete => Pending::Complete,
-            Pending::InProgress(request) => Pending::InProgress(AmRequest {
-                worker,
-                header,
-                data,
-                request,
-            }),
-        })
+                &raw,
+            );
+            status_ptr_with_data(ptr, (header, data), worker)
+        }
     }
 }
 
@@ -382,12 +392,13 @@ mod tests {
     use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress};
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    type AmRecvDataFn = fn(
-        &Worker,
-        std::ptr::NonNull<std::ffi::c_void>,
-        &mut [u8],
-        &RequestParam,
-    ) -> Result<Pending, Status>;
+    type AmRecvDataFn =
+        for<'w> fn(
+            &'w Worker,
+            std::ptr::NonNull<std::ffi::c_void>,
+            Vec<u8>,
+            &RequestParam,
+        ) -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status>;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {
@@ -432,6 +443,178 @@ mod tests {
         }
         drop(request);
         assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    /// `am_send` hands back both owned buffers through the deferred path.
+    /// Eager-sized on purpose: the safe handler trampoline does not handle
+    /// rendezvous descriptors yet (#214).
+    #[test]
+    fn owned_am_send_returns_header_and_payload() {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Am)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let mut worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .unwrap();
+        let packed = worker.pack_address().unwrap();
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .unwrap();
+        let received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&received);
+        worker
+            .am_register_handler(25, CbFlags::WholeMsg, move |header, data| {
+                assert_eq!(header, b"hdr");
+                assert!(data.iter().all(|&byte| byte == 0x5A));
+                seen.store(data.len(), Ordering::Release);
+                Ok(())
+            })
+            .unwrap();
+        let len = 1024;
+        // EAGER: the safe trampoline cannot handle rendezvous descriptors (#214),
+        // so never let a low UCX_RNDV_THRESH turn this into an OOB read.
+        let param = crate::RequestParamBuilder::new()
+            .no_imm_cmpl()
+            .flags(ucp_send_am_flags::UCP_AM_SEND_FLAG_EAGER as u32)
+            .build();
+        let completion = endpoint
+            .am_send(&worker, 25, b"hdr".to_vec(), vec![0x5Au8; len], &param)
+            .unwrap();
+        assert!(completion.is_pending(), "NO_IMM_CMPL must defer");
+        let mut request = completion.into_pending().unwrap();
+        let mut done = None;
+        for _ in 0..1_000_000 {
+            worker.progress();
+            match request.try_complete() {
+                Ok(result) => {
+                    done = Some(result.expect("am_send"));
+                    break;
+                }
+                Err(still) => request = still,
+            }
+        }
+        let (header, data) = done.expect("am_send did not complete");
+        assert_eq!(header, b"hdr");
+        assert_eq!(data, vec![0x5Au8; len], "payload handed back unchanged");
+        for _ in 0..1000 {
+            if received.load(Ordering::Acquire) == len {
+                break;
+            }
+            worker.progress();
+        }
+        assert_eq!(received.load(Ordering::Acquire), len);
+    }
+
+    /// Descriptor + length recorded by `keep_rndv_desc` (test only).
+    struct RndvSeen {
+        desc: usize,
+        length: usize,
+        rndv: bool,
+    }
+
+    unsafe extern "C" fn keep_rndv_desc(
+        arg: *mut std::os::raw::c_void,
+        _header: *const std::os::raw::c_void,
+        _header_length: usize,
+        data: *mut std::os::raw::c_void,
+        length: usize,
+        param: *const AmRecvParam,
+    ) -> Status {
+        // SAFETY: `arg` points at the test's RndvSeen, alive for the test.
+        let seen = unsafe { &mut *(arg as *mut RndvSeen) };
+        seen.desc = data as usize;
+        seen.length = length;
+        seen.rndv = unsafe { param.as_ref() }
+            .map(|param| param.recv_attr().contains(AmRecvAttr::RNDV))
+            .unwrap_or(false);
+        // Keep the rendezvous descriptor; it is received outside the callback.
+        Status::IN_PROGRESS
+    }
+
+    /// `am_recv_data` owns its buffer: a rendezvous descriptor kept by the
+    /// callback is received afterwards into an owned `Vec`, which comes back
+    /// filled from the completion.
+    #[test]
+    fn owned_am_recv_data_rendezvous_round_trip() {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Am)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .unwrap();
+        let packed = worker.pack_address().unwrap();
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .unwrap();
+        let mut seen = Box::new(RndvSeen {
+            desc: 0,
+            length: 0,
+            rndv: false,
+        });
+        let handler = HandlerParamsBuilder::new()
+            .id(26)
+            .cb(keep_rndv_desc)
+            .arg(&mut *seen as *mut RndvSeen as *mut std::os::raw::c_void)
+            .build();
+        worker.am_register(&handler).unwrap();
+        let len = 1 << 20;
+        let payload: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
+        let send_param = crate::RequestParamBuilder::new()
+            .flags(ucp_send_am_flags::UCP_AM_SEND_FLAG_RNDV as u32)
+            .build();
+        let mut send = Some(
+            endpoint
+                .am_send(&worker, 26, b"", payload.clone(), &send_param)
+                .unwrap(),
+        );
+        for _ in 0..1_000_000 {
+            if seen.desc != 0 {
+                break;
+            }
+            worker.progress();
+        }
+        assert!(seen.rndv, "RNDV flag must make UCX hand over a descriptor");
+        assert_eq!(seen.length, len);
+        let desc = std::ptr::NonNull::new(seen.desc as *mut std::ffi::c_void).unwrap();
+        let recv = worker
+            .am_recv_data(
+                desc,
+                vec![0u8; len],
+                &crate::RequestParamBuilder::new().build(),
+            )
+            .expect("am_recv_data");
+        let mut received = None;
+        let mut recv = Some(recv);
+        for _ in 0..1_000_000 {
+            if let Some(Completion::Pending(request)) = send.take() {
+                match request.try_complete() {
+                    Ok(result) => drop(result.expect("am_send")),
+                    Err(still) => send = Some(Completion::Pending(still)),
+                }
+            }
+            match recv.take() {
+                Some(Completion::Immediate(buffer)) => received = Some(buffer),
+                Some(Completion::Pending(request)) => match request.try_complete() {
+                    Ok(result) => received = Some(result.expect("am_recv_data")),
+                    Err(still) => recv = Some(Completion::Pending(still)),
+                },
+                None => {}
+            }
+            if received.is_some() && !matches!(send, Some(Completion::Pending(_))) {
+                break;
+            }
+            worker.progress();
+        }
+        let received = received.expect("am_recv_data did not complete");
+        assert!(received == payload, "received bytes differ");
     }
 
     #[test]

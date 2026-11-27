@@ -4,7 +4,7 @@ use ucx_sys::am::CbFlags;
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Pending, RequestParamBuilder};
+use ucx_sys::{Completion, Pending, RequestParamBuilder};
 
 fn wait_request<R, E: std::fmt::Debug>(
     worker: &ucx_sys::worker::Worker,
@@ -60,10 +60,25 @@ fn main() {
     // A self endpoint is enough to make this example runnable without a peer.
     let request_param = RequestParamBuilder::new().build();
     let operation = ep
-        .am_send(&worker, 0, &[], &[], &request_param)
+        .am_send(&worker, 0, b"", b"", &request_param)
         .expect("active-message send");
     let flush = ep.flush(&request_param).expect("start flush");
     wait_request(&worker, flush, |request| request.check_finished());
-    wait_request(&worker, operation, |request| request.check_finished());
+    // The AM send owns its (empty) header and payload until it completes.
+    if let Completion::Pending(mut request) = operation {
+        let mut completed = false;
+        for _ in 0..1_000_000 {
+            match request.try_complete() {
+                Ok(result) => {
+                    let _ = result.expect("active-message send");
+                    completed = true;
+                    break;
+                }
+                Err(still) => request = still,
+            }
+            worker.progress();
+        }
+        assert!(completed, "active-message send timed out");
+    }
     ep.close(&worker, 0).expect("close endpoint");
 }

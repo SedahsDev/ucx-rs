@@ -418,26 +418,41 @@ impl Worker {
         status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
     }
 
-    /// Receive the data described by an active-message callback descriptor.
+    /// Receive the data described by an active-message callback descriptor
+    /// into `buffer`, taking ownership of it.
     ///
     /// UCX takes ownership of `data_desc` after this call, including when the
-    /// operation fails. The returned request, when present, owns its UCX
-    /// request handle and can be polled with [`Request::check_finished`].
-    pub fn am_recv_data(
+    /// operation fails. The filled buffer comes back from
+    /// [`crate::Completion::Immediate`] or [`crate::OwningRequest::try_complete`].
+    /// `params` contributes flags only: a callback or user data is ignored
+    /// (the receive member of UCX's callback union has a different signature
+    /// than `RequestParamBuilder::send_callback`), and datatype, reply buffer,
+    /// receive info, memory handle, memory type, and request allocation are
+    /// controlled here. The received length is not reported; use the `length`
+    /// passed to the AM callback, and size `buffer` to it (a zero-length
+    /// buffer on a rendezvous descriptor makes UCX drop the payload).
+    ///
+    /// Do not drop a pending completion inside the AM callback: its `Drop`
+    /// fail-safe progresses the worker.
+    pub fn am_recv_data<D: crate::OwnedBufMut>(
         &self,
         data_desc: NonNull<std::ffi::c_void>,
-        buffer: &mut [u8],
+        mut buffer: D,
         params: &RequestParam,
-    ) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_am_recv_data_nbx(
+    ) -> Result<crate::Completion<D, crate::OwningRequest<'_, D>>, Status> {
+        let raw = crate::completion::owned_recv_param(params);
+        // SAFETY: the request (if any) writes only into `buffer`'s stable
+        // storage, which the returned value owns until UCX is done.
+        unsafe {
+            let ptr = ucp_am_recv_data_nbx(
                 self.handle,
                 data_desc.as_ptr(),
                 buffer.as_mut_ptr() as _,
                 buffer.len(),
-                &params.handle,
-            )
-        })
+                &raw,
+            );
+            crate::completion::status_ptr_with_data(ptr, buffer, self)
+        }
     }
 
     /// Release active-message data retained after an AM callback.
