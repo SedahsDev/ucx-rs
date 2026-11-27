@@ -5,7 +5,7 @@
 
 use crate::ep::{Ep, EpHandle};
 
-use crate::completion::{owned_op_param, owned_recv_param, status_ptr_with_data, RecvInfo};
+use crate::completion::{owned_data_param, owned_recv_data_param, status_ptr_with_data, RecvInfo};
 use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
@@ -202,7 +202,7 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "stream_send: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_op_param(param);
+        let raw = owned_data_param(param, &data, worker)?;
         // SAFETY: the request (if any) reads only `data`'s stable storage
         // (`OwnedBuf`), which the returned value owns until UCX is done.
         unsafe {
@@ -239,7 +239,7 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "stream_recv: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_recv_param(param);
+        let raw = owned_recv_data_param(param, &buffer, worker)?;
         let mut length: usize = 0;
         // SAFETY: the request (if any) writes only into `buffer`'s stable
         // storage, which the returned value owns until UCX is done; `length`

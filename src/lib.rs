@@ -95,6 +95,14 @@
 //! * **Stable addresses only.** Buffers implement [`OwnedBuf`] /
 //!   [`OwnedBufMut`]: heap storage (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`)
 //!   or `'static` data, whose address doesn't change when the request moves.
+//! * **Buffers describe their memory.** [`OwnedBuf::memory_type`] and
+//!   [`OwnedBuf::memh`] reach UCX with every operation, so registered host
+//!   memory ([`memh::RegisteredBuf`]) and device memory
+//!   ([`memh::AllocatedBuf`], or your own `OwnedBuf` owner of a CUDA
+//!   allocation) use the same safe calls and [`Completion`] types as a
+//!   `Vec<u8>`. A memory handle that doesn't belong to the worker's context,
+//!   doesn't cover the buffer, or disagrees with its memory type fails the
+//!   post with `UCS_ERR_INVALID_PARAM` (#210).
 //! * **Flush scope.** A flush ([`ep::Ep::flush`], [`worker::Worker::flush`])
 //!   covers RMA and AMO operations at both ends. It does not wait for an
 //!   unmatched rendezvous tag send, which is only a request-to-send until a

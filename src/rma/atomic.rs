@@ -664,6 +664,7 @@ mod tests {
         let worker = Worker {
             am_handlers: Vec::new(),
             handle: std::ptr::null_mut(),
+            context: std::ptr::null_mut(),
             alive,
             #[cfg(debug_assertions)]
             progressing: std::sync::atomic::AtomicBool::new(false),

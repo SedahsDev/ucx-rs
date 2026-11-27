@@ -55,6 +55,9 @@ impl Drop for ProgressGuard<'_> {
 #[derive(Debug)]
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
+    /// The context this worker was created on. Lets operations check that a
+    /// buffer's memory handle belongs to the same context (#210).
+    pub(crate) context: ucp_context_h,
     pub(crate) alive: Arc<AtomicBool>,
     pub(crate) am_handlers: Vec<std::sync::Arc<crate::am::AmHandler>>,
     #[cfg(debug_assertions)]
@@ -305,6 +308,7 @@ impl Worker {
         match result {
             Ok(()) => Ok(Worker {
                 handle: worker,
+                context: context.handle,
                 alive: Arc::new(AtomicBool::new(true)),
                 am_handlers: Vec::new(),
                 #[cfg(debug_assertions)]
@@ -434,7 +438,7 @@ impl Worker {
         mut buffer: D,
         params: &RequestParam,
     ) -> Result<crate::Completion<D, crate::OwningRequest<'_, D>>, Status> {
-        let raw = crate::completion::owned_recv_param(params);
+        let raw = crate::completion::owned_recv_data_param(params, &buffer, self)?;
         // SAFETY: the request (if any) writes only into `buffer`'s stable
         // storage, which the returned value owns until UCX is done.
         unsafe {

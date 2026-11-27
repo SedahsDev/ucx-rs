@@ -31,7 +31,8 @@ because `unsafe` matters there).
 | `Pending::wait`, `Worker::wait_request`, `Worker::cancel_request`, `MtWorker::{wait_request, cancel_request, flush}`, guard `free()` methods | **removed**. Drive the shared loop instead. `OwningRequest::cancel` marks a request canceled. With `MtWorker`, complete requests inside `with_worker` using `w.progress()` (#208) |
 | `Ep::disconnect_nb` | **removed**. Use `close(&worker, CloseMode::Force)` (#208) |
 | `RemoteKey` | `RemoteKey<'ep>` borrows its endpoint. Drop the key before closing the endpoint (#223) |
-| `Pending` | kept only for the `unsafe` raw-pointer APIs (`rma_put_ptr`, `tag_send_ptr`, ...) |
+| `Ep::tag_send_ptr` / `Worker::tag_recv_ptr` / `Ep::rma_put_ptr` / `Ep::rma_get_ptr` (`unsafe`, raw or device pointer, caller-set `memory_type`) → `Pending` | **removed** (#210). Wrap the memory in an owner that implements `OwnedBuf` (+ `OwnedBufMut`) and reports `memory_type()`, then use the owned `tag_send` / `tag_recv` / `rma_put` / `rma_get`. Use `memh::AllocatedBuf` for UCX-allocated (e.g. CUDA) memory, or `memh::RegisteredBuf` to keep a registration with the buffer |
+| `Pending` | kept only as the return type of the low-level `status_ptr_to_result` |
 
 Behaviors to know:
 - **`cancel()` is not a general abort.** UCX 1.18–1.22 honors it only for tag receives. A software tag receive completes inside the `cancel()` call; an offloaded one completes from a later progress call. Usually the status is `UCS_ERR_CANCELED` and the data comes back in `Failed`, but cancel never forces it: an already-matched receive keeps its normal transfer outcome (not necessarily success), and an offloaded cancel that loses the race to a software rendezvous completes with that rendezvous' status. Sends, RMA, AMO, AM, stream and flush ignore cancel. Use `CloseMode::Force` to abort an endpoint's operations.
@@ -39,10 +40,52 @@ Behaviors to know:
 - **`Drop` of a pending request** cancels it and progresses up to `DROP_PROGRESS_BUDGET` times, then **leaks** the request and its data. Destroying the worker after such a leak can hit UCX's own assertions (SIGABRT). Drain requests instead of dropping them.
 - **Never progress the worker, or drop a pending request, from a UCX callback.**
 - **Flush covers RMA and AMO**, not unmatched rendezvous tag sends.
-- **Buffers must have stable addresses** (`OwnedBuf`: `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`, `'static` data).
+- **Buffers must have stable addresses** (`OwnedBuf`: `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`, `'static` data, `memh::RegisteredBuf`, `memh::AllocatedBuf`).
+- **Buffers carry their memory type and registration** (#210). Every owned operation passes `OwnedBuf::memory_type()` (UCX detects it if `Unknown`) and `OwnedBuf::memh()` to UCX, so a caller-built `RequestParam` can no longer claim the wrong memory type for a buffer.
 
 ### Changes
 
+- **New, breaking (#210):** registered and device memory through the owned
+  operations, with the same `Completion` / `OwningRequest` types as `Vec<u8>`.
+  - `OwnedBuf` gains two provided methods: `memory_type()` (default
+    `MemoryType::Unknown`, so UCX detects it) and `memh()` (default `None`).
+    Every owned tag, stream, RMA and AM operation now passes them to UCX
+    (`UCP_OP_ATTR_FIELD_MEMORY_TYPE` / `UCP_OP_ATTR_FIELD_MEMH`). The safety
+    contract adds one promise: a memory type other than `Unknown` must be the
+    true type of the storage.
+  - Before posting, the memory handle is checked: it must come from the
+    worker's context, cover the whole buffer, and match the buffer's memory
+    type. Otherwise the post fails with `UCS_ERR_INVALID_PARAM` and nothing
+    reaches UCX. (UCX checks only the range, and only in parameter-checking
+    builds.) `tag_msg_recv` hands the probed message back on that error.
+  - The `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>` and `&'static` impls report
+    `MemoryType::Host`. On a CUDA-enabled UCX this is what lets a host
+    `FORCE_IMM_CMPL` tag send complete inline. Before, UCX had to detect the
+    memory type and refused the short path with `UCS_ERR_NO_RESOURCE`
+    (`completion::tests::immediate_send_returns_data` failed on UCX 1.20.1
+    built `--with-cuda` for every `UCX_TLS` except `self`).
+  - New `memh::RegisteredBuf<B>`: `RegisteredBuf::new(&context, buffer)` maps
+    the buffer's storage and keeps the handle with it. The handle is unmapped
+    before the buffer is dropped, and it can't be unmapped while a request
+    owns the buffer. `into_inner` unmaps and returns the buffer.
+  - New `memh::AllocatedBuf`: memory allocated and registered by UCX
+    (`ucp_mem_map` + `UCP_MEM_MAP_ALLOCATE`), e.g.
+    `AllocatedBuf::new(&context, len, MemoryType::Cuda)`. It fails with
+    `UCS_ERR_UNSUPPORTED` if UCX allocates a different memory type. CUDA needs a
+    current CUDA context on the calling thread, as in any CUDA program.
+  - `am_send` rejects a header whose memory type isn't host or unknown, since UCX
+    copies the header with a host `memcpy`. The payload carries its own type
+    and handle.
+  - **Removed** `Ep::tag_send_ptr`, `Worker::tag_recv_ptr`, `Ep::rma_put_ptr`
+    and `Ep::rma_get_ptr` (see the migration table). A buffer type that owns
+    the memory is the escape hatch now. Unlike a raw pointer, it also makes
+    the `OwningRequest` drop fail-safe's leak-on-timeout sound for device memory.
+  - Tests: registered host buffers (tag eager + rendezvous, RMA put/get,
+    `owned_data_param` field checks, rejection of a foreign-context,
+    non-covering or wrong-type handle) and an `#[ignore]`d CUDA test (tag
+    host→device→host and RMA device→host / host→device, with UCX-allocated
+    device memory). Run it with
+    `cargo test --lib cuda_device_buffers -- --ignored` on a CUDA-enabled UCX.
 - **Docs (#209):** crate-level "Owned-data model" section, `examples/owned_pipeline.rs`
   (many operation kinds, one shared progress loop, subset cancel, flush, close),
   refreshed `THREADING.md`, this migration section, the README example fixed
@@ -181,8 +224,8 @@ Behaviors to know:
     `dt_make_contig(2)` made UCX read `2 * len` bytes from a `len`-byte slice
     (out-of-bounds read from safe code). Flags, callback, and user data still
     apply.
-  - `rma_put_ptr` / `rma_get_ptr` (raw and device pointers) are unchanged
-    (#210).
+  - `rma_put_ptr` / `rma_get_ptr` (raw and device pointers) were kept here
+    and later removed by #210.
 
 - **New (#203, part of #211):** ownership-transferring completion model in
   `ucx_sys::completion` (re-exported at the crate root).

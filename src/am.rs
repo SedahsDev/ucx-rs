@@ -2,10 +2,11 @@ use crate::ep::Ep;
 use crate::ep::EpHandle;
 use crate::ffi::*;
 
-use crate::completion::{owned_op_param, status_ptr_with_data};
+use crate::completion::{owned_data_param, status_ptr_with_data};
 use crate::status_ptr_to_result;
 use crate::status_to_result;
 use crate::worker::Worker;
+use crate::MemoryType;
 use crate::RequestParam;
 use crate::Status;
 use crate::{Completion, OwnedBuf, OwningRequest};
@@ -390,7 +391,12 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "am_send: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_op_param(params);
+        // UCX copies the header with a host memcpy, so it must be host
+        // memory; the payload's memory type and handle go to UCX.
+        if !matches!(header.memory_type(), MemoryType::Host | MemoryType::Unknown) {
+            return Err(Status::INVALID_PARAM);
+        }
+        let raw = owned_data_param(params, &data, worker)?;
         // SAFETY: the request (if any) reads only the header's and payload's
         // stable storage (`OwnedBuf`), which the returned value owns until
         // UCX is done with both.

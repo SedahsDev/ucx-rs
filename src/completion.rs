@@ -29,6 +29,12 @@
 //!   still touch.
 //! * **Data must have a stable address** ([`OwnedBuf`]): the request is moved
 //!   by `try_complete`, `Vec::push`, etc., while UCX keeps the raw pointer.
+//! * **The data describes its own memory** ([`OwnedBuf::memory_type`],
+//!   [`OwnedBuf::memh`]): every operation passes the buffer's memory type and
+//!   registration to UCX. A [`crate::memh::RegisteredBuf`] (host memory kept
+//!   registered) or a [`crate::memh::AllocatedBuf`] (UCX-allocated, e.g. CUDA
+//!   device memory) uses the same [`Completion`] / [`OwningRequest`] as a
+//!   `Vec<u8>`.
 //!
 //! ```no_run
 //! # use ucx_sys::{Completion, OwningRequest, worker::Worker};
@@ -49,9 +55,11 @@
 //! ```
 
 use crate::ffi::*;
+use crate::memh::MemHandle;
 use crate::request::status_ptr_is_err;
 use crate::status::status_from_ptr;
 use crate::worker::Worker;
+use crate::MemoryType;
 use crate::Request;
 use crate::Status;
 
@@ -59,7 +67,12 @@ use crate::Status;
 /// up and leaks the request and its data.
 pub const DROP_PROGRESS_BUDGET: usize = 1_000_000;
 
-/// A byte buffer whose storage address is stable while it is owned.
+/// A buffer UCX can transfer from or into: storage with a stable address, a
+/// memory type, and optionally a UCX registration (#203, #210).
+///
+/// The storage need not be host memory. [`OwnedBuf::as_ptr`] is only ever
+/// handed to UCX, never dereferenced by this crate, so a device (GPU)
+/// allocation is fine as long as [`OwnedBuf::memory_type`] says so.
 ///
 /// # Safety
 ///
@@ -67,18 +80,60 @@ pub const DROP_PROGRESS_BUDGET: usize = 1_000_000;
 /// mutated through its own API:
 ///
 /// * [`OwnedBuf::as_ptr`] and [`OwnedBuf::len`] return the same values on
-///   every call, and
+///   every call, and `len` bytes from `as_ptr` are one live allocation that
+///   the value owns (or borrows for at least its own lifetime),
 /// * the pointed-to storage does **not** move when the value itself is moved
 ///   (heap or otherwise externally owned storage; never inline storage such as
-///   `[u8; N]` or a bare integer).
+///   `[u8; N]` or a bare integer), and
+/// * [`OwnedBuf::memory_type`] is either [`MemoryType::Unknown`] (UCX detects
+///   the type) or the true memory type of that storage. UCX trusts it: a
+///   device buffer reported as `Host` is read with a host `memcpy`.
+///
+/// [`OwnedBuf::memh`] needs no extra promise: every operation checks that the
+/// handle belongs to the worker's context, covers the whole buffer, and has a
+/// matching memory type, and fails with `UCS_ERR_INVALID_PARAM` otherwise.
+/// The `&MemHandle` borrow already keeps the registration alive for as long
+/// as the buffer.
 ///
 /// UCX keeps the raw pointer while an operation is in flight, and the owning
 /// value is moved around (into [`OwningRequest`], out of `try_complete`, into
 /// a `Vec`) during that time.
 ///
 /// Implemented for `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`, and read-only
-/// `&'static [u8]` / `&'static [u8; N]` (e.g. `b"hello"`). Inline storage is
-/// rejected, and so is a non-`'static` borrow:
+/// `&'static [u8]` / `&'static [u8; N]` (e.g. `b"hello"`), all reported as
+/// host memory without a registration. [`crate::memh::RegisteredBuf`] adds a
+/// registration to any of them. [`crate::memh::AllocatedBuf`] is memory UCX
+/// allocates, including CUDA device memory.
+///
+/// Memory allocated elsewhere (a CUDA framework's `cudaMalloc`, for
+/// example) gets the same treatment from an owning wrapper that frees it in
+/// `Drop`:
+///
+/// ```no_run
+/// use ucx_sys::{MemoryType, OwnedBuf, OwnedBufMut};
+///
+/// /// Owns `len` bytes of CUDA device memory at `ptr`.
+/// struct DeviceBuffer { ptr: *mut u8, len: usize }
+///
+/// // SAFETY: the device allocation never moves, lives until `Drop`, and is
+/// // CUDA device memory.
+/// unsafe impl OwnedBuf for DeviceBuffer {
+///     fn as_ptr(&self) -> *const u8 { self.ptr }
+///     fn len(&self) -> usize { self.len }
+///     fn memory_type(&self) -> MemoryType { MemoryType::Cuda }
+/// }
+/// // SAFETY: as above; UCX may write all `len` bytes.
+/// unsafe impl OwnedBufMut for DeviceBuffer {
+///     fn as_mut_ptr(&mut self) -> *mut u8 { self.ptr }
+/// }
+/// ```
+///
+/// The owner matters: if an [`OwningRequest`]'s `Drop` fail-safe times out it
+/// leaks the buffer rather than freeing memory UCX may still write, which only
+/// works when freeing is the buffer's own job. This replaces the raw-pointer
+/// `tag_send_ptr` / `tag_recv_ptr` / `rma_put_ptr` / `rma_get_ptr` methods.
+///
+/// Inline storage is rejected, and so is a non-`'static` borrow:
 ///
 /// ```compile_fail
 /// fn needs<D: ucx_sys::OwnedBuf>() {}
@@ -104,6 +159,20 @@ pub unsafe trait OwnedBuf {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Memory type of the storage, passed to UCX with every operation
+    /// (`UCP_OP_ATTR_FIELD_MEMORY_TYPE`) so it does not have to detect it.
+    ///
+    /// The default, [`MemoryType::Unknown`], leaves detection to UCX. Must be
+    /// accurate otherwise (see the trait's safety section).
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Unknown
+    }
+    /// A UCX registration covering the storage, passed to UCX with every
+    /// operation (`UCP_OP_ATTR_FIELD_MEMH`) so it skips registering the
+    /// buffer itself. Checked before each operation; the default is none.
+    fn memh(&self) -> Option<&MemHandle> {
+        None
+    }
 }
 
 /// A mutable [`OwnedBuf`] that UCX may write into (receive / get).
@@ -127,6 +196,9 @@ unsafe impl OwnedBuf for Vec<u8> {
     fn len(&self) -> usize {
         Vec::len(self)
     }
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Host
+    }
 }
 // SAFETY: see the `OwnedBuf` impl.
 unsafe impl OwnedBufMut for Vec<u8> {
@@ -142,6 +214,9 @@ unsafe impl OwnedBuf for Box<[u8]> {
     }
     fn len(&self) -> usize {
         <[u8]>::len(self)
+    }
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Host
     }
 }
 // SAFETY: see the `OwnedBuf` impl.
@@ -159,6 +234,9 @@ unsafe impl<const N: usize> OwnedBuf for Box<[u8; N]> {
     fn len(&self) -> usize {
         N
     }
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Host
+    }
 }
 // SAFETY: see the `OwnedBuf` impl.
 unsafe impl<const N: usize> OwnedBufMut for Box<[u8; N]> {
@@ -175,6 +253,9 @@ unsafe impl OwnedBuf for &'static [u8] {
     fn len(&self) -> usize {
         <[u8]>::len(self)
     }
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Host
+    }
 }
 
 // SAFETY: as for `&'static [u8]`; byte-string literals (`b"..."`) have this type.
@@ -184,6 +265,9 @@ unsafe impl<const N: usize> OwnedBuf for &'static [u8; N] {
     }
     fn len(&self) -> usize {
         N
+    }
+    fn memory_type(&self) -> MemoryType {
+        MemoryType::Host
     }
 }
 
@@ -454,7 +538,8 @@ impl<D> Drop for OwningRequest<'_, D> {
 /// `ucp_request_free` wrong), a datatype that would make UCX read or write
 /// past the owned buffer (`DATATYPE`), pointers to memory the request does not
 /// own (`REPLY_BUFFER`, `RECV_INFO`, `MEMH`), and a memory type that may not
-/// match the owned buffer (`MEMORY_TYPE`; UCX detects it instead).
+/// match the owned buffer (`MEMORY_TYPE`). The memory type and memory handle
+/// come from the owned data instead ([`owned_data_param`]).
 const OWNED_OP_RESERVED_FIELDS: u32 = ucp_op_attr_t::UCP_OP_ATTR_FIELD_REQUEST as u32
     | ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32
     | ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32
@@ -505,6 +590,55 @@ pub(crate) fn owned_recv_param(param: &crate::RequestParam) -> ucp_request_param
     raw.cb.send = None;
     raw.user_data = std::ptr::null_mut();
     raw
+}
+
+/// [`owned_op_param`] for an operation over `data`'s storage: additionally
+/// passes [`OwnedBuf::memory_type`] (unless `Unknown`) and [`OwnedBuf::memh`]
+/// (after [`MemHandle::check_covers`]) to UCX.
+///
+/// Fails with `UCS_ERR_INVALID_PARAM` before anything is posted if the memory
+/// handle does not belong to `worker`'s context, does not cover `data`, or
+/// disagrees with `data`'s memory type. An empty buffer gets no memory handle:
+/// there is nothing to cover.
+pub(crate) fn owned_data_param<D: OwnedBuf + ?Sized>(
+    param: &crate::RequestParam,
+    data: &D,
+    worker: &Worker,
+) -> Result<ucp_request_param_t, Status> {
+    let mut raw = owned_op_param(param);
+    apply_data_memory(&mut raw, data, worker)?;
+    Ok(raw)
+}
+
+/// [`owned_data_param`] for **receive** operations (see [`owned_recv_param`]).
+pub(crate) fn owned_recv_data_param<D: OwnedBuf + ?Sized>(
+    param: &crate::RequestParam,
+    data: &D,
+    worker: &Worker,
+) -> Result<ucp_request_param_t, Status> {
+    let mut raw = owned_recv_param(param);
+    apply_data_memory(&mut raw, data, worker)?;
+    Ok(raw)
+}
+
+fn apply_data_memory<D: OwnedBuf + ?Sized>(
+    raw: &mut ucp_request_param_t,
+    data: &D,
+    worker: &Worker,
+) -> Result<(), Status> {
+    let memory_type = data.memory_type();
+    if let Some(memh) = data.memh() {
+        if !data.is_empty() {
+            memh.check_covers(worker, data.as_ptr(), data.len(), memory_type)?;
+            raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32;
+            raw.memh = memh.as_raw();
+        }
+    }
+    if memory_type != MemoryType::Unknown {
+        raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32;
+        raw.memory_type = memory_type.to_ffi();
+    }
+    Ok(())
 }
 
 /// Classify a status pointer from an operation that is using `data`.
@@ -617,18 +751,10 @@ mod tests {
         tag: u64,
         param: &crate::RequestParam,
     ) -> Result<Owned<'w, D>, Status> {
-        // SAFETY: the request (if any) reads only `data`'s stable storage,
-        // which the returned value owns until completion.
-        unsafe {
-            let ptr = ucp_tag_send_nbx(
-                ep.handle,
-                data.as_ptr() as _,
-                data.len(),
-                tag,
-                &param.handle,
-            );
-            status_ptr_with_data(ptr, data, worker)
-        }
+        // The owned API, so the buffer's memory type reaches UCX: a CUDA-enabled
+        // UCX only takes the inline path FORCE_IMM_CMPL needs for host memory
+        // it does not have to detect (#210).
+        ep.tag_send(worker, data, tag, param)
     }
 
     fn post_recv<D: OwnedBufMut>(worker: &Worker, mut data: D, tag: u64) -> Owned<'_, D> {
