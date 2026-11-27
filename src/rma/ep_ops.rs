@@ -259,6 +259,135 @@ mod tests {
         (context, worker, ep, memh, packed)
     }
 
+    /// Write a diagnostic straight to fd 2. libtest captures `eprintln!`, and
+    /// a failure that ends in a UCX abort (worker destroyed under leaked
+    /// requests) loses captured output, so CI would show no message.
+    fn diag(message: &str) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), "{message}");
+    }
+
+    /// #208 acceptance (shared progress loop): N in-flight RMA puts and a
+    /// pending endpoint flush are completed by ONE loop, and the flush only
+    /// completes once every put has (UCX flush semantics cover RMA). Then
+    /// the rkey is dropped (UCX requires that before the endpoint goes away)
+    /// and the endpoint is closed through the same loop shape. Pinned to tcp:
+    /// on `self` the puts complete inline.
+    #[test]
+    fn rma_puts_flush_and_close_share_one_progress_loop() {
+        let (n, len) = (4usize, 1usize << 20);
+        let mut target = vec![0u8; n * len];
+        let target_addr = target.as_mut_ptr() as u64;
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma)
+            .mt_workers_shared(1)
+            .build();
+        let config = Config::read("", "").expect("config");
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status = unsafe {
+            crate::ffi::ucp_config_modify(config.handle, c"TLS".as_ptr(), c"tcp".as_ptr())
+        };
+        assert_eq!(status, crate::ffi::ucs_status_t::UCS_OK, "pin TLS=tcp");
+        let mut context = Context::new(&config, &params).expect("context");
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        drop(address);
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle())
+            .expect("pack rkey")
+            .to_vec();
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut puts: Vec<_> = (0..n)
+            .map(|i| {
+                match ep
+                    .rma_put(
+                        &worker,
+                        vec![i as u8 + 1; len],
+                        target_addr + (i * len) as u64,
+                        &rkey,
+                        &param,
+                    )
+                    .expect("post put")
+                {
+                    Completion::Pending(request) => request,
+                    Completion::Immediate(_) => panic!("NO_IMM_CMPL put must defer"),
+                }
+            })
+            .collect();
+        let mut flush = match ep.flush(&worker, &RequestParamBuilder::new().build()) {
+            Ok(Completion::Pending(request)) => Some(request),
+            Ok(Completion::Immediate(())) => None,
+            Err(status) => panic!("flush: {status} ({})", transport()),
+        };
+        diag(&format!(
+            "rma shared loop: flush pending={} ({})",
+            flush.is_some(),
+            transport()
+        ));
+        let mut flushed = flush.is_none();
+        let mut puts_done = 0;
+        for _ in 0..1_000_000 {
+            if flushed && puts.is_empty() {
+                break;
+            }
+            worker.progress();
+            if let Some(request) = flush.take() {
+                match request.try_complete() {
+                    Ok(result) => {
+                        result.unwrap_or_else(|failed| panic!("flush: {failed}"));
+                        flushed = true;
+                    }
+                    Err(pending) => flush = Some(pending),
+                }
+            }
+            let flushed_now = flushed;
+            puts = puts
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(result) => {
+                        let buffer = result.unwrap_or_else(|failed| panic!("put: {failed}"));
+                        assert_eq!(buffer.len(), len);
+                        puts_done += 1;
+                        None
+                    }
+                    Err(pending) => {
+                        if flushed_now {
+                            // Flush completion implies every earlier put is
+                            // complete; its request must report so now.
+                            diag("put still pending after its flush completed");
+                        }
+                        Some(pending)
+                    }
+                })
+                .collect();
+            assert!(
+                !flushed_now || puts.is_empty(),
+                "flush completed while puts were still pending ({})",
+                transport()
+            );
+        }
+        assert!(flushed, "flush did not complete ({})", transport());
+        assert_eq!(puts_done, n, "every put handed its buffer back");
+        drop(rkey);
+        drop(memh);
+        close(&worker, ep);
+        for i in 0..n {
+            assert!(
+                target[i * len..(i + 1) * len]
+                    .iter()
+                    .all(|&byte| byte == i as u8 + 1),
+                "put {i} landed"
+            );
+        }
+    }
+
     /// `NO_IMM_CMPL` forces the deferred path: both put and get return an
     /// `OwningRequest` that hands the buffer back from `try_complete`.
     #[test]

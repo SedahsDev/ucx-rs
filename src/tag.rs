@@ -644,9 +644,8 @@ mod tests {
     }
 
     /// Context + worker for the close tests (tag feature only), pinned to the
-    /// tcp transport: on `self`/`shm` a flush-close completes inline even with
-    /// sends in flight and peer error handling is unavailable, so neither the
-    /// deferred-close nor the forced-close path would be exercised.
+    /// tcp transport: `self`/`shm` lack peer error handling, so the
+    /// forced-close path would never be exercised there.
     fn close_fixture() -> (crate::context::Context, crate::worker::Worker) {
         let params = crate::context::ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
@@ -676,86 +675,6 @@ mod tests {
                 .err_mode(mode)
                 .build(),
         )
-    }
-
-    /// #208 acceptance: in-flight sends, their receives, and a *pending*
-    /// `close(Flush)` all complete through ONE shared progress loop. The close
-    /// cannot finish until the sends drain, and the sends need the receives
-    /// progressed, so a loop that only drove the close would never end.
-    #[test]
-    fn flush_close_and_ops_complete_in_one_progress_loop() {
-        let (_context, worker) = close_fixture();
-        let worker = &worker;
-        let ep = self_ep(worker, crate::ErrorHandlerMode::None).expect("endpoint");
-        let (n, len) = (4u64, 1 << 20); // rendezvous: needs the receiver
-        let param = RequestParamBuilder::new().no_imm_cmpl().build();
-        let mut sends: Vec<_> = (0..n)
-            .map(|i| {
-                ep.tag_send(worker, vec![i as u8; len], 0x7100 + i, &param)
-                    .expect("post send")
-                    .into_pending()
-                    .expect("NO_IMM_CMPL send is pending")
-            })
-            .collect();
-        let mut recvs: Vec<_> = (0..n)
-            .map(|i| {
-                worker
-                    .tag_recv(vec![0u8; len], 0x7100 + i, u64::MAX, &param)
-                    .expect("post recv")
-                    .into_pending()
-                    .expect("NO_IMM_CMPL recv is pending")
-            })
-            .collect();
-        let mut close = match ep.close(worker, crate::ep::CloseMode::Flush) {
-            Ok(Completion::Pending(request)) => Some(request),
-            Ok(Completion::Immediate(())) => panic!("close with pending sends must defer"),
-            Err(error) => panic!("{error}"),
-        };
-        let (mut sent, mut received, mut closed) = (0, 0, false);
-        for _ in 0..1_000_000 {
-            if sends.is_empty() && recvs.is_empty() && closed {
-                break;
-            }
-            worker.progress();
-            sends = sends
-                .into_iter()
-                .filter_map(|request| match request.try_complete() {
-                    Ok(result) => {
-                        let buffer = result.unwrap_or_else(|failed| panic!("send: {failed}"));
-                        assert_eq!(buffer.len(), len);
-                        sent += 1;
-                        None
-                    }
-                    Err(pending) => Some(pending),
-                })
-                .collect();
-            recvs = recvs
-                .into_iter()
-                .filter_map(|request| match request.try_complete() {
-                    Ok(result) => {
-                        let (buffer, info) =
-                            result.unwrap_or_else(|failed| panic!("recv: {failed}"));
-                        let i = (info.sender_tag() - 0x7100) as u8;
-                        assert!(buffer.iter().all(|&byte| byte == i), "payload");
-                        received += 1;
-                        None
-                    }
-                    Err(pending) => Some(pending),
-                })
-                .collect();
-            if let Some(request) = close.take() {
-                match request.try_complete() {
-                    Ok(result) => {
-                        result.unwrap_or_else(|failed| panic!("close: {failed}"));
-                        assert_eq!(sent, n, "close completed before the sends drained");
-                        closed = true;
-                    }
-                    Err(pending) => close = Some(pending),
-                }
-            }
-        }
-        assert_eq!((sent, received), (n, n));
-        assert!(closed, "close completed");
     }
 
     /// `close(Force)` cancels the endpoint's outstanding sends: each comes
