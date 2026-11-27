@@ -1,3 +1,4 @@
+use crate::completion::{owned_op_param, status_ptr_with_data};
 use crate::dt::dt_make_contig;
 use crate::ep::Ep;
 use crate::ffi::*;
@@ -6,105 +7,9 @@ use crate::status_ptr_to_result;
 use crate::worker::Worker;
 use crate::RequestParam;
 use crate::Status;
+use crate::{Completion, OwnedBuf, OwnedBufMut, OwningRequest};
 
 use super::RemoteKey;
-use std::marker::PhantomData;
-
-/// A buffer-borrowing RMA completion guard.
-///
-/// The buffer must remain valid until the request is resolved. Dropping
-/// a pending value progresses its worker to completion before releasing the
-/// buffer borrow, unless the bounded progress loop times out; in that
-/// pathological case the request is deliberately leaked and the buffer
-/// must not be reused.
-pub struct RmaRequest<'w, 'a> {
-    request: Option<crate::Request>,
-    worker: &'w Worker,
-    _buffer: PhantomData<&'a mut [u8]>,
-}
-
-impl<'w, 'a> RmaRequest<'w, 'a> {
-    /// Extract the underlying UCX request without completing it.
-    ///
-    /// # Safety
-    /// The returned request may be in flight and still own the buffer.
-    /// The caller must keep the buffer valid until the request reaches
-    /// completion (`check_finished() == Ok(true)`) and must not drop it
-    /// while in flight. Prefer `check_finished()` + `free()` on the wrapper,
-    /// or let `Drop` handle it.
-    pub unsafe fn into_inner(mut self) -> Option<crate::Request> {
-        self.request.take()
-    }
-
-    /// Check if the request has finished.
-    pub fn check_finished(&self) -> Result<bool, crate::Status> {
-        self.request
-            .as_ref()
-            .map_or(Ok(true), crate::Request::check_finished)
-    }
-
-    /// Progress the request to completion before releasing its buffer borrow.
-    ///
-    /// If completion cannot be observed within the bounded progress loop,
-    /// the request is deliberately leaked rather than freed while it may
-    /// still be in flight. This preserves the same safety contract as [`Drop`].
-    pub fn free(mut self) {
-        if let Some(request) = self.request.take() {
-            const MAX_PROGRESS: usize = 1_000_000;
-            for _ in 0..MAX_PROGRESS {
-                match request.check_finished() {
-                    Ok(true) | Err(_) => {
-                        request.free();
-                        return;
-                    }
-                    Ok(false) => {
-                        self.worker.progress();
-                    }
-                }
-            }
-            // SAFETY: The request is still in flight. It must not be freed;
-            // the caller must not reuse the buffer after this timeout.
-            std::mem::forget(request);
-        }
-    }
-}
-
-impl<'w, 'a> Drop for RmaRequest<'w, 'a> {
-    fn drop(&mut self) {
-        if let Some(request) = self.request.take() {
-            const MAX_PROGRESS: usize = 1_000_000;
-            for _ in 0..MAX_PROGRESS {
-                match request.check_finished() {
-                    Ok(true) => {
-                        request.free();
-                        return;
-                    }
-                    Ok(false) => {
-                        self.worker.progress();
-                    }
-                    Err(_) => {
-                        request.free();
-                        return;
-                    }
-                }
-            }
-            // SAFETY: The request is still in flight. It must not be freed;
-            // the caller must not reuse the buffer after this timeout.
-            std::mem::forget(request);
-        }
-    }
-}
-
-fn make_rma_request<'w, 'a>(
-    request: Option<crate::Request>,
-    worker: &'w Worker,
-) -> RmaRequest<'w, 'a> {
-    RmaRequest {
-        request,
-        worker,
-        _buffer: PhantomData,
-    }
-}
 
 /// Keep the required swap reply buffer alive until completion, discarding its value.
 fn with_amo_reply<T>(
@@ -173,54 +78,83 @@ fn amo_reply_callback<S, F: FnOnce(*mut std::ffi::c_void, S)>(
 impl Ep {
     // ── Put / Get ──
 
-    /// Put data to a remote memory location.
-    pub fn rma_put<'w, 'a>(
+    /// Put `buffer` to a remote memory location, taking ownership of it.
+    ///
+    /// Returns [`Completion::Immediate`] with the buffer when UCX finishes
+    /// inline, or [`Completion::Pending`] with an [`OwningRequest`] that hands
+    /// the buffer back from [`OwningRequest::try_complete`]. Local completion
+    /// only means the source may be reused; flush before relying on remote
+    /// visibility.
+    ///
+    /// `param` contributes flags, callback, and user data. The datatype
+    /// (always contiguous bytes), reply buffer, memory handle, memory type, and
+    /// request allocation fields are controlled by this method and ignored if
+    /// set. A callback may run before this returns, must not progress the
+    /// worker, and must not free the request. An empty buffer always completes
+    /// immediately, even with `NO_IMM_CMPL`.
+    ///
+    /// ```no_run
+    /// # use ucx_sys::{ep::Ep, rma::RemoteKey, worker::Worker, RequestParamBuilder, Completion};
+    /// # fn demo(ep: &Ep, worker: &Worker, rkey: &RemoteKey, addr: u64) {
+    /// let param = RequestParamBuilder::new().build();
+    /// match ep.rma_put(worker, b"hello".to_vec(), addr, rkey, &param).unwrap() {
+    ///     Completion::Immediate(buffer) => drop(buffer),
+    ///     Completion::Pending(request) => { /* progress + try_complete */ }
+    /// }
+    /// # }
+    /// ```
+    pub fn rma_put<'w, D: OwnedBuf>(
         &self,
         worker: &'w Worker,
-        buffer: &'a [u8],
+        buffer: D,
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<RmaRequest<'w, 'a>>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_put_nbx(
+    ) -> Result<Completion<D, OwningRequest<'w, D>>, Status> {
+        let raw = owned_op_param(param);
+        // SAFETY: the request (if any) reads only `buffer`'s stable storage
+        // (`OwnedBuf`), which the returned value owns until UCX is done; the
+        // contiguous-bytes datatype bounds the access to `buffer.len()`.
+        unsafe {
+            let ptr = ucp_put_nbx(
                 self.handle,
                 buffer.as_ptr() as _,
                 buffer.len(),
                 remote_addr,
                 rkey.handle,
-                &param.handle,
-            )
-        })
-        .map(|request| match request {
-            Pending::InProgress(request) => Some(make_rma_request(Some(request), worker)),
-            _ => None,
-        })
+                &raw,
+            );
+            status_ptr_with_data(ptr, buffer, worker)
+        }
     }
 
-    /// Get data from a remote memory location.
-    pub fn rma_get<'w, 'a>(
+    /// Get remote memory into `buffer`, taking ownership of it.
+    ///
+    /// The filled buffer is returned through [`Completion::Immediate`] or
+    /// [`OwningRequest::try_complete`]. On failure it comes back inside
+    /// [`crate::Failed`] with unspecified contents. `param` is handled as in
+    /// [`Ep::rma_put`].
+    pub fn rma_get<'w, D: OwnedBufMut>(
         &self,
         worker: &'w Worker,
-        buffer: &'a mut [u8],
+        mut buffer: D,
         remote_addr: u64,
         rkey: &RemoteKey,
         param: &RequestParam,
-    ) -> Result<Option<RmaRequest<'w, 'a>>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_get_nbx(
+    ) -> Result<Completion<D, OwningRequest<'w, D>>, Status> {
+        let raw = owned_op_param(param);
+        // SAFETY: as in `rma_put`, for writes into `buffer`'s stable storage.
+        unsafe {
+            let ptr = ucp_get_nbx(
                 self.handle,
                 buffer.as_mut_ptr() as _,
                 buffer.len(),
                 remote_addr,
                 rkey.handle,
-                &param.handle,
-            )
-        })
-        .map(|request| match request {
-            Pending::InProgress(request) => Some(make_rma_request(Some(request), worker)),
-            _ => None,
-        })
+                &raw,
+            );
+            status_ptr_with_data(ptr, buffer, worker)
+        }
     }
 
     /// Put `len` bytes from an arbitrary address, including device (GPU) memory.
@@ -896,6 +830,180 @@ mod tests {
         panic!("{what} did not complete ({})", transport());
     }
 
+    use crate::{Completion, OwningRequest};
+
+    /// Test-only driver: progress until an owned RMA completion returns its data.
+    fn drive_owned<D>(
+        worker: &Worker,
+        completion: Completion<D, OwningRequest<'_, D>>,
+        what: &str,
+    ) -> D {
+        let mut request = match completion {
+            Completion::Immediate(data) => return data,
+            Completion::Pending(request) => request,
+        };
+        for _ in 0..1_000_000 {
+            worker.progress();
+            match request.try_complete() {
+                Ok(Ok(data)) => return data,
+                Ok(Err(failed)) => panic!("{what} failed with {} ({})", failed.status, transport()),
+                Err(still) => request = still,
+            }
+        }
+        panic!("{what} did not complete ({})", transport());
+    }
+
+    /// Self endpoint plus an rkey over `target`.
+    fn rma_self_setup(
+        target: &mut [u8],
+    ) -> (
+        Context,
+        Worker,
+        Ep,
+        crate::memh::MemHandleGuard<'_>,
+        Vec<u8>,
+    ) {
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma)
+            .mt_workers_shared(1)
+            .estimated_num_eps(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config"), &params).expect("context");
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        drop(address);
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        let memh = MemHandle::map_slice(&context, target, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle())
+            .expect("pack rkey")
+            .to_vec();
+        (context, worker, ep, memh, packed)
+    }
+
+    /// `NO_IMM_CMPL` forces the deferred path: both put and get return an
+    /// `OwningRequest` that hands the buffer back from `try_complete`.
+    #[test]
+    fn rma_owned_put_get_pending_path_returns_buffers() {
+        let mut target = vec![0u8; 64];
+        let target_addr = target.as_mut_ptr() as u64;
+        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let payload: Vec<u8> = (0..64u8).collect();
+
+        let put = ep
+            .rma_put(
+                &worker,
+                payload.clone().into_boxed_slice(),
+                target_addr,
+                &rkey,
+                &param,
+            )
+            .expect("post put");
+        assert!(put.is_pending(), "NO_IMM_CMPL put must be deferred");
+        assert_eq!(&*drive_owned(&worker, put, "put"), &payload[..]);
+        let flush = ep
+            .flush(&RequestParamBuilder::new().build())
+            .expect("flush");
+        wait(&worker, flush, "endpoint flush");
+
+        let get = ep
+            .rma_get(&worker, Box::new([0u8; 64]), target_addr, &rkey, &param)
+            .expect("post get");
+        assert!(get.is_pending(), "NO_IMM_CMPL get must be deferred");
+        let fetched = drive_owned(&worker, get, "get");
+        assert_eq!(&fetched[..], &payload[..]);
+        drop(rkey);
+        drop(memh);
+        assert_eq!(target, payload);
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
+    /// `FORCE_IMM_CMPL` must keep working: a small self put completes inline
+    /// and returns the buffer (UCX's short-put path must not be disabled by
+    /// the owned param handling).
+    #[test]
+    fn rma_owned_put_force_imm_cmpl_completes_inline() {
+        let mut target = vec![0u8; 8];
+        let target_addr = target.as_mut_ptr() as u64;
+        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().force_imm_cmpl().build();
+        let put = ep
+            .rma_put(&worker, vec![0x42u8; 8], target_addr, &rkey, &param)
+            .unwrap_or_else(|status| panic!("force_imm put: {status} ({})", transport()));
+        assert_eq!(
+            put.into_immediate().expect("must complete inline"),
+            vec![0x42u8; 8]
+        );
+        let flush = ep
+            .flush(&RequestParamBuilder::new().build())
+            .expect("flush");
+        wait(&worker, flush, "endpoint flush");
+        drop(rkey);
+        drop(memh);
+        assert_eq!(target, vec![0x42u8; 8]);
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
+    /// The owned API forces contiguous bytes: a caller datatype of 2-byte
+    /// elements must not make UCX write `2 * len` bytes past the buffer.
+    #[test]
+    fn rma_owned_put_ignores_caller_datatype() {
+        let mut target = vec![0xEEu8; 16];
+        let target_addr = target.as_mut_ptr() as u64;
+        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new()
+            .datatype(crate::dt::dt_make_contig(2))
+            .build();
+        let put = ep
+            .rma_put(&worker, vec![0x11u8; 8], target_addr, &rkey, &param)
+            .expect("post put");
+        drive_owned(&worker, put, "put");
+        let flush = ep
+            .flush(&RequestParamBuilder::new().build())
+            .expect("flush");
+        wait(&worker, flush, "endpoint flush");
+        drop(rkey);
+        drop(memh);
+        assert_eq!(&target[..8], &[0x11u8; 8]);
+        assert_eq!(
+            &target[8..],
+            &[0xEEu8; 8],
+            "bytes past the buffer untouched"
+        );
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
+    /// Dropping a pending owned get is safe: the fail-safe completes it before
+    /// the buffer is freed (no use-after-free from safe code, #112).
+    #[test]
+    fn rma_owned_get_drop_while_pending_is_safe() {
+        let mut target = vec![7u8; 4096];
+        let target_addr = target.as_mut_ptr() as u64;
+        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let get = ep
+            .rma_get(&worker, vec![0u8; 4096], target_addr, &rkey, &param)
+            .expect("post get");
+        assert!(
+            get.is_pending(),
+            "NO_IMM_CMPL get must exercise the fail-safe"
+        );
+        drop(get);
+        drop(rkey);
+        drop(memh);
+        ep.close(&worker, 0).expect("close endpoint");
+    }
+
     fn setup_amo_test() -> (Context, Worker, Ep) {
         // UCP_FEATURE_AMO32 and UCP_FEATURE_AMO64.
         let params = ParamsBuilder::new()
@@ -1227,9 +1335,9 @@ mod tests {
         let param = RequestParamBuilder::new().build();
 
         let put = ep
-            .rma_put(&worker, b"ucx-rs!!", target_addr, &rkey, &param)
+            .rma_put(&worker, b"ucx-rs!!".to_vec(), target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA put: {status} ({})", transport()));
-        drop(put);
+        assert_eq!(drive_owned(&worker, put, "RMA put"), b"ucx-rs!!");
         // A completed put only means the source buffer may be reused. The data is
         // guaranteed to be at the target, and visible to a later get, only after a
         // flush (see the ucp_put_nbx docs).
@@ -1238,17 +1346,16 @@ mod tests {
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
-        let mut fetched = [0u8; 8];
         let get = ep
-            .rma_get(&worker, &mut fetched, target_addr, &rkey, &param)
+            .rma_get(&worker, vec![0u8; 8], target_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post RMA get: {status} ({})", transport()));
-        drop(get);
+        let fetched = drive_owned(&worker, get, "RMA get");
 
         drop(rkey);
         drop(memh);
         assert_eq!(
-            (&target, &fetched),
-            (b"ucx-rs!!", b"ucx-rs!!"),
+            (&target[..], &fetched[..]),
+            (&b"ucx-rs!!"[..], &b"ucx-rs!!"[..]),
             "(RMA put target, RMA get result) ({})",
             transport()
         );

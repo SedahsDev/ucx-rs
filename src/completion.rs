@@ -408,6 +408,46 @@ impl<D> Drop for OwningRequest<'_, D> {
     }
 }
 
+/// `ucp_op_attr_t` fields an ownership-transferring operation must control
+/// itself: a caller-supplied request allocation (`REQUEST`, which would make
+/// `ucp_request_free` wrong), a datatype that would make UCX read or write
+/// past the owned buffer (`DATATYPE`), pointers to memory the request does not
+/// own (`REPLY_BUFFER`, `RECV_INFO`, `MEMH`), and a memory type that may not
+/// match the owned buffer (`MEMORY_TYPE`; UCX detects it instead).
+const OWNED_OP_RESERVED_FIELDS: u32 = ucp_op_attr_t::UCP_OP_ATTR_FIELD_REQUEST as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32;
+
+/// Copy `param` for an ownership-transferring operation over a contiguous
+/// byte buffer, dropping every field the owned data model must control (see
+/// [`OWNED_OP_RESERVED_FIELDS`]).
+///
+/// With the datatype field clear, UCX treats `count` as bytes and keeps its
+/// short (inline) fast paths, so `FORCE_IMM_CMPL` still works. Only when the
+/// caller sets `NO_IMM_CMPL` is the datatype set explicitly to contiguous
+/// bytes: UCX 1.16 transfers zero bytes for a `NO_IMM_CMPL` put without one
+/// (fixed in openucx ba426c890, 1.17), and with `NO_IMM_CMPL` there is no
+/// inline path to lose. Setting the datatype unconditionally made UCX 1.18's
+/// protocol path skip `uct_ep_put_short`, so a `FORCE_IMM_CMPL` put always
+/// failed with `UCS_ERR_NO_RESOURCE`.
+///
+/// Callback, user data, and flags are kept. A caller callback may run before
+/// the posting call returns, must not progress the worker, and must not free
+/// the request: the owning request frees it.
+pub(crate) fn owned_op_param(param: &crate::RequestParam) -> ucp_request_param_t {
+    let mut raw = param.handle;
+    raw.op_attr_mask &= !OWNED_OP_RESERVED_FIELDS;
+    raw.reply_buffer = std::ptr::null_mut();
+    if raw.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32 != 0 {
+        raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+        raw.datatype = crate::dt::dt_make_contig(1);
+    }
+    raw
+}
+
 /// Classify a status pointer from an operation that is using `data`.
 ///
 /// # Safety
@@ -535,6 +575,45 @@ mod tests {
         assert!(format!("{failed}").starts_with("UCX request failed"));
         let result: Result<(), Failed<Opaque>> = Err(failed);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn owned_op_param_strips_reserved_fields_and_keeps_flags() {
+        let mut reply = 0u64;
+        let mut param = RequestParamBuilder::new()
+            .no_imm_cmpl()
+            .datatype(crate::dt::dt_make_contig(8))
+            .memory_type(crate::MemoryType::Cuda)
+            .reply_buffer(&mut reply as *mut u64 as *mut _)
+            .build();
+        param.handle.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_REQUEST as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+        let raw = owned_op_param(&param);
+        // NO_IMM_CMPL: explicit contiguous bytes (UCX 1.16 workaround).
+        let datatype = ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+        assert_eq!(raw.op_attr_mask & OWNED_OP_RESERVED_FIELDS, datatype);
+        assert_eq!(
+            raw.datatype,
+            crate::dt::dt_make_contig(1),
+            "contiguous bytes"
+        );
+        assert!(raw.reply_buffer.is_null());
+        // Without NO_IMM_CMPL (e.g. FORCE_IMM_CMPL) the datatype field stays
+        // clear so UCX keeps its short/inline paths.
+        let mut forced = RequestParamBuilder::new()
+            .force_imm_cmpl()
+            .datatype(crate::dt::dt_make_contig(8))
+            .build();
+        forced.handle.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32;
+        let raw_forced = owned_op_param(&forced);
+        assert_eq!(raw_forced.op_attr_mask & OWNED_OP_RESERVED_FIELDS, 0);
+        let force = ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32;
+        assert_eq!(raw_forced.op_attr_mask & force, force);
+        let kept = ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+        assert_eq!(raw.op_attr_mask & kept, kept);
     }
 
     #[test]

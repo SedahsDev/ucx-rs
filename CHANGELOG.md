@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Breaking (#204, part of #211):** `Ep::rma_put` / `Ep::rma_get` take
+  ownership of the buffer and return
+  `Result<Completion<D, OwningRequest<'w, D>>, Status>` (`D: OwnedBuf` for put,
+  `D: OwnedBufMut` for get, e.g. `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`).
+  The `rma::RmaRequest` borrowing guard is removed.
+  - Migration: `ep.rma_put(&worker, data.to_vec(), addr, &rkey, &param)`;
+    take the buffer back from `Completion::Immediate` or
+    `OwningRequest::try_complete` after progressing the worker. A get's
+    filled buffer comes back the same way.
+  - **Fix:** the owned RMA calls now control the datatype (always contiguous
+    bytes), reply buffer, memory handle, memory type, and request-allocation
+    fields of the caller's `RequestParam`. Previously a caller datatype such as
+    `dt_make_contig(2)` made UCX read `2 * len` bytes from a `len`-byte slice
+    (out-of-bounds read from safe code). Flags, callback, and user data still
+    apply.
+  - `rma_put_ptr` / `rma_get_ptr` (raw and device pointers) are unchanged
+    (#210).
+
 - **New (#203, part of #211):** ownership-transferring completion model in
   `ucx_sys::completion` (re-exported at the crate root).
   - `Completion<D, R>`: `Immediate(D)` returns the data at once;
