@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Breaking (#205, part of #211):** tag and stream operations take ownership
+  of their buffers (`OwnedBuf` / `OwnedBufMut`) and return `Completion`.
+  `tag::TagRequest` and `stream::StreamRequest` are removed.
+  - `Ep::tag_send(&worker, data, tag, &param)` and
+    `Ep::tag_send_sync(&worker, data, tag, &param)` (new `worker` and `param`
+    arguments) → `Completion<D, OwningRequest<'w, D>>`.
+  - `Worker::tag_recv(data, tag, mask, &param)` (the redundant `worker`
+    argument is gone) and `Worker::tag_msg_recv(data, message, &param)`
+    (consumes the `MessageHandle`) → `Completion<(D, TagInfo),
+    TagRecvRequest<'_, D>>`. The receive info comes back with the buffer on
+    both the immediate and the deferred path.
+  - `Ep::stream_send(&worker, data, &param)` →
+    `Completion<D, OwningRequest<'w, D>>`; `Ep::stream_recv(&worker, buffer,
+    &param)` → `Completion<(D, usize), StreamRecvRequest<'w, D>>` (bytes
+    received).
+  - New `RecvRequest<'w, D, I>` (aliases `TagRecvRequest`,
+    `StreamRecvRequest`) with the same `try_complete` / `cancel` / `Drop`
+    contract as `OwningRequest`.
+  - **Fixes:** `tag_send_sync` and `tag_msg_recv` returned a bare request
+    that did not borrow the buffer (use-after-free from safe code, #112);
+    `tag_recv` wrote through a `*const` pointer; caller `RequestParam`
+    datatype/reply/recv-info/memh/memory-type/request fields are now
+    controlled by the call.
+  - `TagInfo` now derives `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`.
+
 - **Breaking (#204, part of #211):** `Ep::rma_put` / `Ep::rma_get` take
   ownership of the buffer and return
   `Result<Completion<D, OwningRequest<'w, D>>, Status>` (`D: OwnedBuf` for put,

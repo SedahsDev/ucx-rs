@@ -326,20 +326,32 @@ impl<'w, D> OwningRequest<'w, D> {
     /// * `Ok(Err(failed))`: completed with an error (including
     ///   `UCS_ERR_CANCELED`); the data is returned inside [`Failed`].
     /// * `Err(self)`: still in progress.
-    pub fn try_complete(mut self) -> Result<Result<D, Failed<D>>, Self> {
+    pub fn try_complete(self) -> Result<Result<D, Failed<D>>, Self> {
+        self.try_complete_with(|_| ())
+            .map(|result| result.map(|(data, ())| data))
+    }
+
+    /// [`Self::try_complete`], additionally reading completion metadata from
+    /// the request (e.g. receive info) with `on_success` before it is freed.
+    pub(crate) fn try_complete_with<T>(
+        mut self,
+        on_success: impl FnOnce(&Request) -> T,
+    ) -> Result<Result<(D, T), Failed<D>>, Self> {
         let Some(request) = self.request.as_ref() else {
             unreachable!("OwningRequest without a request");
         };
         match poll(request) {
             Poll::InProgress => Err(self),
             Poll::Done(result) => {
+                let info = result.as_ref().ok().map(|()| on_success(request));
                 // Completed: UCX no longer touches the data, so free the
                 // request (Request::drop) and hand the data back.
                 drop(self.request.take());
                 let data = self.data.take().expect("OwningRequest without data");
-                Ok(match result {
-                    Ok(()) => Ok(data),
-                    Err(status) => Err(Failed { status, data }),
+                Ok(match (result, info) {
+                    (Ok(()), Some(info)) => Ok((data, info)),
+                    (Err(status), _) => Err(Failed { status, data }),
+                    (Ok(()), None) => unreachable!("info is read on success"),
                 })
             }
         }
@@ -472,6 +484,72 @@ pub unsafe fn status_ptr_with_data<'w, D>(
         crate::Pending::InProgress(request) => Ok(Completion::Pending(OwningRequest::new(
             request, data, worker,
         ))),
+    }
+}
+
+/// Completion metadata read from a finished receive request before it is
+/// freed. Sealed: implemented for [`crate::tag::TagInfo`] (tag receives) and
+/// `usize` (stream receives: bytes received).
+pub trait RecvInfo: sealed::Sealed + Sized {
+    #[doc(hidden)]
+    fn read(request: &Request) -> Self;
+}
+
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
+/// A receive that owns its buffer until completion and also reports
+/// completion metadata `I` ([`crate::tag::TagInfo`] or the received length).
+///
+/// Same rules as [`OwningRequest`]: non-blocking [`Self::try_complete`],
+/// mark-only [`Self::cancel`], `Drop` fail-safe, never outlives its worker.
+pub struct RecvRequest<'w, D, I: RecvInfo> {
+    inner: OwningRequest<'w, D>,
+    _info: std::marker::PhantomData<fn() -> I>,
+}
+
+/// A tag receive in flight; completes with `(buffer, TagInfo)`.
+pub type TagRecvRequest<'w, D> = RecvRequest<'w, D, crate::tag::TagInfo>;
+/// A stream receive in flight; completes with `(buffer, bytes_received)`.
+pub type StreamRecvRequest<'w, D> = RecvRequest<'w, D, usize>;
+
+impl<D, I: RecvInfo> std::fmt::Debug for RecvRequest<'_, D, I> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RecvRequest")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl<'w, D, I: RecvInfo> RecvRequest<'w, D, I> {
+    pub(crate) fn new(inner: OwningRequest<'w, D>) -> Self {
+        Self {
+            inner,
+            _info: std::marker::PhantomData,
+        }
+    }
+
+    /// Non-blocking poll; see [`OwningRequest::try_complete`]. On success the
+    /// buffer comes back with the receive metadata.
+    pub fn try_complete(self) -> Result<Result<(D, I), Failed<D>>, Self> {
+        self.inner.try_complete_with(I::read).map_err(Self::new)
+    }
+
+    /// Mark the receive canceled; see [`OwningRequest::cancel`].
+    pub fn cancel(&mut self) {
+        self.inner.cancel();
+    }
+
+    /// Whether [`Self::cancel`] has been called.
+    pub fn is_canceled(&self) -> bool {
+        self.inner.is_canceled()
+    }
+
+    /// The worker this request belongs to.
+    pub fn worker(&self) -> &'w Worker {
+        self.inner.worker()
     }
 }
 

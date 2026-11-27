@@ -1,3 +1,4 @@
+use crate::completion::{owned_op_param, sealed, status_ptr_with_data, RecvInfo};
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::request::Pending;
@@ -7,54 +8,74 @@ use crate::worker::Worker;
 use crate::Request;
 use crate::RequestParam;
 use crate::Status;
+use crate::{Completion, OwnedBuf, OwnedBufMut, OwningRequest, TagRecvRequest};
 use bitflags::bitflags;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
 
 impl Ep {
-    /// Send tagged message.
-    pub fn tag_send<'w, 'a>(
+    /// Send a tagged message, taking ownership of `data`.
+    ///
+    /// Returns [`Completion::Immediate`] with the buffer when the send
+    /// finishes inline, or [`Completion::Pending`] with an [`OwningRequest`]
+    /// that hands it back from [`OwningRequest::try_complete`]. `worker` must
+    /// be the worker this endpoint was created on.
+    ///
+    /// `param` contributes flags, callback, and user data. The datatype
+    /// (always contiguous bytes), reply buffer, receive info, memory handle,
+    /// memory type, and request allocation fields are controlled here.
+    ///
+    /// The buffer is moved in, so it cannot be touched while UCX reads it
+    /// (the use-after-free from #112 is a compile error):
+    ///
+    /// ```compile_fail
+    /// # use ucx_sys::{ep::Ep, worker::Worker, RequestParam};
+    /// fn reuse(ep: &Ep, worker: &Worker, param: &RequestParam) {
+    ///     let data = vec![0u8; 64];
+    ///     let pending = ep.tag_send(worker, data, 7, param).unwrap();
+    ///     drop(data);
+    ///     drop(pending);
+    /// }
+    /// ```
+    pub fn tag_send<'w, D: OwnedBuf>(
         &self,
         worker: &'w Worker,
-        data: &'a [u8],
+        data: D,
         tag: u64,
         param: &RequestParam,
-    ) -> Result<Option<TagRequest<'w, 'a>>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_tag_send_nbx(
-                self.handle,
-                data.as_ptr() as _,
-                data.len(),
-                tag,
-                &param.handle,
-            )
-        })
-        .map(|request| match request {
-            Pending::InProgress(request) => Some(TagRequest {
-                worker,
-                handle: Some(std::mem::ManuallyDrop::new(request).handle),
-                _buffer: PhantomData,
-            }),
-            _ => None,
-        })
+    ) -> Result<Completion<D, OwningRequest<'w, D>>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "tag_send: the passed worker is not the endpoint's worker"
+        );
+        let raw = owned_op_param(param);
+        // SAFETY: the request (if any) reads only `data`'s stable storage
+        // (`OwnedBuf`), which the returned value owns until UCX is done.
+        unsafe {
+            let ptr = ucp_tag_send_nbx(self.handle, data.as_ptr() as _, data.len(), tag, &raw);
+            status_ptr_with_data(ptr, data, worker)
+        }
     }
 
-    /// Tag send with synchronous completion (safe wrapper).
+    /// Synchronous-mode tag send, taking ownership of `data`: the request
+    /// completes only after the receiver has matched the message.
     ///
-    /// Returns a `Result` containing the request or a UCX error status.
-    /// Guarantees remote delivery before the request completes. If the send
-    /// completes immediately, the result contains `Pending::Complete`; otherwise,
-    /// it contains `Pending::InProgress` with the request.
-    pub fn tag_send_sync(&self, data: &[u8], tag: u64) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_tag_send_sync_nbx(
-                self.handle,
-                data.as_ptr() as _,
-                data.len(),
-                tag,
-                std::ptr::null(),
-            )
-        })
+    /// Same ownership and `param` rules as [`Ep::tag_send`].
+    pub fn tag_send_sync<'w, D: OwnedBuf>(
+        &self,
+        worker: &'w Worker,
+        data: D,
+        tag: u64,
+        param: &RequestParam,
+    ) -> Result<Completion<D, OwningRequest<'w, D>>, Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "tag_send_sync: the passed worker is not the endpoint's worker"
+        );
+        let raw = owned_op_param(param);
+        // SAFETY: as in `tag_send`.
+        unsafe {
+            let ptr = ucp_tag_send_sync_nbx(self.handle, data.as_ptr() as _, data.len(), tag, &raw);
+            status_ptr_with_data(ptr, data, worker)
+        }
     }
 
     /// Send `len` bytes from an arbitrary address, including device (GPU) memory.
@@ -106,74 +127,25 @@ impl MessageHandle {
     }
 }
 
+/// Receive metadata for a completed tag receive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TagInfo {
     length: usize,
     sender_tag: u64,
 }
 
-/// A tagged request that borrows its worker and buffer until completion.
-pub struct TagRequest<'w, 'a> {
-    worker: &'w Worker,
-    handle: Option<NonNull<std::os::raw::c_void>>,
-    _buffer: PhantomData<&'a [u8]>,
-}
+impl sealed::Sealed for TagInfo {}
 
-impl<'w, 'a> TagRequest<'w, 'a> {
-    pub fn check_finished(&mut self) -> Result<bool, Status> {
-        let Some(handle) = self.handle else {
-            return Ok(true);
-        };
-        let request = std::mem::ManuallyDrop::new(Request { handle });
-        request.check_finished()
-    }
-
-    pub fn free(mut self) -> Result<(), Status> {
-        self.complete()
-    }
-
-    /// Return the underlying request without waiting for completion.
-    ///
-    /// # Safety
-    ///
-    /// The caller must keep the worker and buffer valid until the request
-    /// completes, and must not access a receive buffer before completion.
-    pub unsafe fn into_inner(mut self) -> Pending {
-        match self.handle.take() {
-            Some(handle) => Pending::InProgress(Request { handle }),
-            None => Pending::Complete,
+impl RecvInfo for TagInfo {
+    fn read(request: &Request) -> Self {
+        let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::uninit();
+        // SAFETY: `request` is a live, completed tag receive request (the
+        // caller reads info before freeing it); UCX fills `info` on UCS_OK.
+        let status = unsafe { ucp_tag_recv_request_test(request.as_ptr(), info.as_mut_ptr()) };
+        match map_tag_recv_test_status(status, info) {
+            Ok(Some(info)) => info,
+            other => unreachable!("completed tag receive reported {other:?}"),
         }
-    }
-
-    pub fn worker(&self) -> &Worker {
-        self.worker
-    }
-
-    fn complete(&mut self) -> Result<(), Status> {
-        let mut remaining = 1_000_000;
-        loop {
-            match self.check_finished() {
-                Ok(false) => {
-                    if remaining == 0 {
-                        // Releasing the buffer while UCX still uses it is unsafe.
-                        std::process::abort();
-                    }
-                    remaining -= 1;
-                    self.worker.progress();
-                }
-                result => {
-                    if let Some(handle) = self.handle.take() {
-                        drop(Request { handle });
-                    }
-                    return result.map(|_| ());
-                }
-            }
-        }
-    }
-}
-
-impl Drop for TagRequest<'_, '_> {
-    fn drop(&mut self) {
-        let _ = self.complete();
     }
 }
 
@@ -200,31 +172,48 @@ impl TagInfo {
 }
 
 impl Worker {
-    pub fn tag_recv<'w, 'a>(
-        &'w self,
-        worker: &'w Worker,
-        data: &'a mut [u8],
+    /// Post a tagged receive into `data`, taking ownership of it.
+    ///
+    /// Completes with the filled buffer and its [`TagInfo`] (sender tag and
+    /// received length), either immediately or through
+    /// [`TagRecvRequest::try_complete`] after the worker is progressed. A
+    /// receive with no matching message stays pending until matched or
+    /// canceled ([`TagRecvRequest::cancel`], which hands the buffer back as
+    /// [`crate::Failed`] with `UCS_ERR_CANCELED`).
+    ///
+    /// `param` is handled as in [`Ep::tag_send`].
+    pub fn tag_recv<D: OwnedBufMut>(
+        &self,
+        mut data: D,
         tag: u64,
         mask: u64,
         param: &RequestParam,
-    ) -> Result<TagRequest<'w, 'a>, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_tag_recv_nbx(
+    ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, Status> {
+        let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::zeroed();
+        let mut raw = owned_op_param(param);
+        // UCX fills `info` only if the receive completes inside this call.
+        raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32;
+        raw.recv_info.tag_info = info.as_mut_ptr();
+        // SAFETY: the request (if any) writes only into `data`'s stable
+        // storage, which the returned value owns until UCX is done; `info` is
+        // written synchronously and is not retained.
+        let completion = unsafe {
+            let ptr = ucp_tag_recv_nbx(
                 self.handle,
-                data.as_ptr() as _,
+                data.as_mut_ptr() as _,
                 data.len(),
                 tag,
                 mask,
-                &param.handle,
-            )
-        })
-        .map(|request| TagRequest {
-            worker,
-            handle: match request {
-                Pending::InProgress(request) => Some(std::mem::ManuallyDrop::new(request).handle),
-                _ => None,
-            },
-            _buffer: PhantomData,
+                &raw,
+            );
+            status_ptr_with_data(ptr, data, self)?
+        };
+        Ok(match completion {
+            Completion::Immediate(data) => {
+                // SAFETY: zero-initialized, and filled by UCX on immediate completion.
+                Completion::Immediate((data, TagInfo::from_ffi(unsafe { info.assume_init() })))
+            }
+            Completion::Pending(request) => Completion::Pending(TagRecvRequest::new(request)),
         })
     }
 
@@ -270,23 +259,42 @@ impl Worker {
         }
     }
 
-    pub fn tag_msg_recv(
+    /// Receive a message previously removed with [`Worker::tag_probe`]
+    /// (`remove = true`), taking ownership of `data`.
+    ///
+    /// Consumes the handle: UCX allows each probed message to be received
+    /// once. Completes with the filled buffer and the message's [`TagInfo`].
+    /// `param` is handled as in [`Ep::tag_send`].
+    ///
+    /// # Panics
+    ///
+    /// If `message` was probed without removing it from the unexpected queue.
+    pub fn tag_msg_recv<D: OwnedBufMut>(
         &self,
-        data: &mut [u8],
-        message: &MessageHandle,
+        mut data: D,
+        message: MessageHandle,
         param: &RequestParam,
-    ) -> Result<Pending, Status> {
+    ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, Status> {
         if !message.removed {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
-        status_ptr_to_result(unsafe {
-            ucp_tag_msg_recv_nbx(
+        let info = message.info;
+        let raw = owned_op_param(param);
+        // SAFETY: as in `tag_recv`; `message` is a removed, not yet received
+        // message handle and is consumed here.
+        let completion = unsafe {
+            let ptr = ucp_tag_msg_recv_nbx(
                 self.handle,
-                data.as_ptr() as _,
+                data.as_mut_ptr() as _,
                 data.len(),
                 message.handle,
-                &param.handle,
-            )
+                &raw,
+            );
+            status_ptr_with_data(ptr, data, self)?
+        };
+        Ok(match completion {
+            Completion::Immediate(data) => Completion::Immediate((data, info)),
+            Completion::Pending(request) => Completion::Pending(TagRecvRequest::new(request)),
         })
     }
 }
@@ -371,9 +379,143 @@ mod tests {
 
     const TAG_FULL: u64 = u64::MAX;
 
+    /// Test-only driver: progress until an owned completion resolves.
+    fn drive<D, R, F>(worker: &worker::Worker, completion: Completion<D, R>, mut poll: F) -> D
+    where
+        F: FnMut(R) -> Result<D, R>,
+    {
+        let mut request = match completion {
+            Completion::Immediate(data) => return data,
+            Completion::Pending(request) => request,
+        };
+        for _ in 0..1_000_000 {
+            worker.progress();
+            match poll(request) {
+                Ok(data) => return data,
+                Err(still) => request = still,
+            }
+        }
+        panic!("request did not complete");
+    }
+
+    fn send_done<D>(r: OwningRequest<'_, D>) -> Result<D, OwningRequest<'_, D>> {
+        r.try_complete()
+            .map(|result| result.unwrap_or_else(|failed| panic!("send: {failed}")))
+    }
+
+    fn recv_done<D>(r: TagRecvRequest<'_, D>) -> Result<(D, TagInfo), TagRecvRequest<'_, D>> {
+        r.try_complete()
+            .map(|result| result.unwrap_or_else(|failed| panic!("recv: {failed}")))
+    }
+
     #[test]
-    fn tag_send_sync_api_signature() {
-        let _: fn(&Ep, &[u8], u64) -> Result<Pending, Status> = Ep::tag_send_sync;
+    #[allow(clippy::type_complexity)]
+    fn tag_owned_api_signatures() {
+        let _: for<'w> fn(
+            &Ep,
+            &'w worker::Worker,
+            Vec<u8>,
+            u64,
+            &RequestParam,
+        )
+            -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status> = Ep::tag_send_sync;
+        let _: for<'w> fn(
+            &'w worker::Worker,
+            Vec<u8>,
+            u64,
+            u64,
+            &RequestParam,
+        ) -> Result<
+            Completion<(Vec<u8>, TagInfo), TagRecvRequest<'w, Vec<u8>>>,
+            Status,
+        > = worker::Worker::tag_recv;
+    }
+
+    #[test]
+    fn tag_owned_immediate_recv_reports_info() {
+        let comms = setup_default();
+        let param = RequestParamBuilder::new().build();
+        let sent = comms
+            .ep
+            .tag_send(&comms.worker, b"hey".to_vec(), 0x77, &param)
+            .expect("send");
+        assert_eq!(drive(&comms.worker, sent, send_done), b"hey");
+        // The message is now unexpected, so the receive matches inside the
+        // call and UCX fills the receive info supplied by `tag_recv`.
+        let received = comms
+            .worker
+            .tag_recv(vec![0u8; 8], 0x77, u64::MAX, &param)
+            .expect("recv");
+        assert!(
+            received.is_immediate(),
+            "unexpected eager message must match inline"
+        );
+        let (buffer, info) = received.into_immediate().expect("completed");
+        assert_eq!(&buffer[..3], b"hey");
+        assert_eq!((info.len(), info.sender_tag()), (3, 0x77));
+    }
+
+    #[test]
+    fn tag_owned_pending_round_trip_returns_buffers_and_info() {
+        let comms = setup_default();
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let len = 8 << 20; // rendezvous: completes in progress, not inline
+        let recv = comms
+            .worker
+            .tag_recv(vec![0u8; len], 0x99, u64::MAX, &param)
+            .expect("recv");
+        assert!(recv.is_pending());
+        let payload: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let send = comms
+            .ep
+            .tag_send(&comms.worker, payload.clone(), 0x99, &param)
+            .expect("send");
+        assert!(send.is_pending());
+        let sent = drive(&comms.worker, send, send_done);
+        let (received, info) = drive(&comms.worker, recv, recv_done);
+        assert!(sent == payload && received == payload);
+        assert_eq!((info.len(), info.sender_tag()), (len, 0x99));
+    }
+
+    #[test]
+    fn tag_owned_recv_cancel_returns_buffer() {
+        let comms = setup_default();
+        let param = RequestParamBuilder::new().build();
+        let mut recv = comms
+            .worker
+            .tag_recv(vec![1u8; 16], 0xC0FFEE, u64::MAX, &param)
+            .expect("recv")
+            .into_pending()
+            .expect("no message: pending");
+        recv.cancel();
+        assert!(recv.is_canceled());
+        let failed = drive(
+            &comms.worker,
+            Completion::Pending(recv),
+            |r: TagRecvRequest<'_, Vec<u8>>| {
+                r.try_complete()
+                    .map(|result| result.expect_err("must be canceled"))
+            },
+        );
+        assert!(failed.is_canceled());
+        assert_eq!(failed.data, vec![1u8; 16]);
+    }
+
+    #[test]
+    fn tag_owned_send_sync_completes_after_match() {
+        let comms = setup_default();
+        let param = RequestParamBuilder::new().build();
+        let recv = comms
+            .worker
+            .tag_recv(vec![0u8; 4], 0x55, u64::MAX, &param)
+            .expect("recv");
+        let send = comms
+            .ep
+            .tag_send_sync(&comms.worker, vec![4u8; 4], 0x55, &param)
+            .expect("send_sync");
+        assert_eq!(drive(&comms.worker, send, send_done), vec![4u8; 4]);
+        let (received, info) = drive(&comms.worker, recv, recv_done);
+        assert_eq!((received, info.len()), (vec![4u8; 4], 4));
     }
 
     #[test]
@@ -416,97 +558,63 @@ mod tests {
         ));
     }
 
-    /// Exercises the real UCX completion path with a self-endpoint tag exchange.
+    /// Exercises the low-level `Request::tag_recv_test` on a real request.
     #[test]
     fn tag_recv_test_real_completed_request() {
         let comms = setup_default();
-        let mut recv_buffer = [0u8; 5];
         let tag = 0x1234;
         let param = RequestParamBuilder::new().no_imm_cmpl().build();
-        let mut recv_request = comms
+        let recv = comms
             .worker
-            .tag_recv(&comms.worker, &mut recv_buffer, tag, u64::MAX, &param)
+            .tag_recv(vec![0u8; 5], tag, u64::MAX, &param)
             .expect("post tag receive");
-        let send_buffer = *b"hello";
-        let send_request = comms
+        let sent = comms
             .ep
-            .tag_send(&comms.worker, &send_buffer, tag, &param)
+            .tag_send(&comms.worker, b"hello".to_vec(), tag, &param)
             .expect("post tag send");
-
-        while !recv_request.check_finished().expect("test tag receive") {
-            comms.worker.progress();
-        }
-
-        // SAFETY: The receive has completed, and its worker and buffer remain alive.
-        let mut recv_request = match unsafe { recv_request.into_inner() } {
-            Pending::InProgress(request) => request,
-            Pending::Complete => panic!("no_imm_cmpl should return an in-progress request"),
-        };
-        let info = recv_request
-            .tag_recv_test()
-            .expect("test completed tag receive")
-            .expect("completed receive should include info");
-        drop(recv_request);
-
+        let (buffer, info) = drive(&comms.worker, recv, recv_done);
+        drive(&comms.worker, sent, send_done);
         assert_eq!(info.sender_tag(), tag);
-        assert_eq!(info.len(), send_buffer.len());
-        assert_eq!(recv_buffer, send_buffer);
-        drop(send_request);
+        assert_eq!(info.len(), 5);
+        assert_eq!(buffer, b"hello");
     }
 
     #[test]
     fn tag_send() {
         let comms = setup_default();
-        let mut recv_buff = vec![0];
-        let send_buff = vec![32];
         let tag_flags = RequestParamBuilder::new().no_imm_cmpl().build();
-        let _send_req = comms
+        let send = comms
             .ep
-            .tag_send(&comms.worker, send_buff.as_slice(), TAG_FULL, &tag_flags)
+            .tag_send(&comms.worker, vec![32u8], TAG_FULL, &tag_flags)
             .unwrap();
-        let mut recv_req = comms
+        let recv = comms
             .worker
-            .tag_recv(
-                &comms.worker,
-                recv_buff.as_mut_slice(),
-                TAG_FULL,
-                TAG_FULL,
-                &tag_flags,
-            )
+            .tag_recv(vec![0u8], TAG_FULL, TAG_FULL, &tag_flags)
             .unwrap();
-        while !recv_req.check_finished().unwrap() {
-            comms.worker.progress();
-        }
-        drop(recv_req);
-        assert_eq!(send_buff[0], recv_buff[0]);
+        let (received, _) = drive(&comms.worker, recv, recv_done);
+        drive(&comms.worker, send, send_done);
+        assert_eq!(received, vec![32u8]);
     }
 
     #[test]
     fn tag_probe() {
         let comms = setup_default();
-        let mut recv_buff = vec![0];
-        let send_buff = vec![32];
         let tag_flags = RequestParamBuilder::new().no_imm_cmpl().build();
-        let _send_req = comms
+        let send = comms
             .ep
-            .tag_send(&comms.worker, send_buff.as_slice(), TAG_FULL, &tag_flags)
+            .tag_send(&comms.worker, vec![32u8], TAG_FULL, &tag_flags)
             .unwrap();
         let mut msg = comms.worker.tag_probe(TAG_FULL, TAG_FULL, true);
         while msg.is_none() {
             comms.worker.progress();
             msg = comms.worker.tag_probe(TAG_FULL, TAG_FULL, true);
         }
-        let msg = msg.unwrap();
-        let recv_req = comms
+        let recv = comms
             .worker
-            .tag_msg_recv(recv_buff.as_mut_slice(), &msg, &tag_flags)
+            .tag_msg_recv(vec![0u8], msg.unwrap(), &tag_flags)
             .unwrap();
-        let Pending::InProgress(recv_req) = recv_req else {
-            panic!("no_imm_cmpl should return an in-progress request");
-        };
-        while !recv_req.check_finished().unwrap() {
-            comms.worker.progress();
-        }
-        assert_eq!(send_buff[0], recv_buff[0]);
+        let (received, info) = drive(&comms.worker, recv, recv_done);
+        drive(&comms.worker, send, send_done);
+        assert_eq!((received, info.len()), (vec![32u8], 1));
     }
 }
