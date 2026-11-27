@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Breaking, safety (#223):** `RemoteKey<'ep>` now borrows the `Ep` it was
+  unpacked on (`RemoteKey::unpack(&'ep Ep, ..)`, and the deprecated
+  `rma::atomic::ep_rkey_unpack`). UCX requires an rkey to be destroyed
+  *before* its endpoint (`ucp_rkey_destroy`). Closing or dropping the endpoint
+  while a key is alive is now a compile error (E0505, `compile_fail` doctests).
+  `Drop` also skips `ucp_rkey_destroy` once the worker is destroyed (`Ep` doesn't
+  borrow the worker), leaking the key instead of calling into freed UCX state.
+  This fixed `examples/rma_put_get.rs`, which closed its endpoint under a live key.
+  - Migration: `drop(rkey)` (after the operations using it are flushed) before
+    `ep.close(..)`. Types that stored `RemoteKey` gain a lifetime.
 - **Breaking (#208, part of #211):** flush, close and modify are owned,
   data-less operations returning `ep::OpCompletion<'w>` (= `Completion<(),
   OwningRequest<'w, ()>>`), driven by the same shared progress loop as data
