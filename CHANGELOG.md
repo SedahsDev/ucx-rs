@@ -45,6 +45,33 @@ Behaviors to know:
 
 ### Changes
 
+- **Bindings, tests, CI (#231):** follow-ups from the #210 / #132 reviews.
+  - `src/bindings.rs` is regenerated with bindgen 0.72.1 from the UCX
+    **1.19.0** release headers, the supported minimum. Before, it came from
+    1.18 headers (`UCP_API_MINOR = 18`). `Context::new` now asks
+    `ucp_init_version` for API 1.19, so a 1.18 or older library logs UCX's
+    "UCP API version is incompatible" warning, which is correct now. No UCX
+    item was added or removed. The only other difference is glibc's
+    `_IO_FILE`, which is now opaque, as `build.rs` already asks of bindgen
+    (its `_flags2` bitfield accessors are gone). `build.rs` now passes the
+    crate's `rust-version` to bindgen (`.rust_target(..)`). bindgen 0.72
+    otherwise targets the newest stable and writes `unsafe extern "C"`
+    blocks, which the MSRV (1.78) rejects.
+  - `completion::tests::immediate_send_returns_data` runs everywhere again.
+    #232 skipped it unless the environment's `UCX_TLS` started with `self`,
+    so it no longer ran in CI. It now pins `UCX_TLS=self,cuda_copy` through
+    `ucp_config_modify` (new `tests::setup_with_tls`). `self` gives the inline
+    completion, and `cuda_copy` keeps the CUDA memtype cache active on a
+    CUDA-enabled UCX, so the test still guards the #210 `Host` short-path fix.
+  - `Worker::am_recv_data` docs: the broken intra-doc link from #232
+    (`crate::MemHandle::check_covers`, which is neither at the crate root nor
+    public) now points at `OwnedBuf::memh`. The `# Safety` text says which
+    descriptors count as consumed (released, or posted by an earlier call),
+    and that one handed back in `AmRecvDataError::data_desc` may be passed again.
+  - CI: Tier 0 runs `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`, so broken
+    intra-doc links fail the build. The smoke job's UCX build also adds
+    `--without-mad --without-ugni` (cache rev 3).
+
 - **CI (#131, #113):** the RMA smoke-test job now builds UCX 1.20.0 from the
   release tarball (sha256-pinned) and caches `/opt/ucx-1.20.0` with
   `actions/cache`, instead of installing Ubuntu 24.04's `libucx-dev` (1.16.0,

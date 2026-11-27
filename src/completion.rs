@@ -169,7 +169,15 @@ pub unsafe trait OwnedBuf {
     }
     /// A UCX registration covering the storage, passed to UCX with every
     /// operation (`UCP_OP_ATTR_FIELD_MEMH`) so it skips registering the
-    /// buffer itself. Checked before each operation; the default is none.
+    /// buffer itself. The default is none.
+    ///
+    /// Checked before each operation: the handle must have been mapped on the
+    /// context of the worker the operation runs on, cover all
+    /// [`OwnedBuf::len`] bytes from [`OwnedBuf::as_ptr`], and have the same
+    /// memory type as [`OwnedBuf::memory_type`] (unless that is
+    /// [`MemoryType::Unknown`]). Otherwise the operation fails with
+    /// `UCS_ERR_INVALID_PARAM` before anything is posted. An empty buffer is
+    /// posted without the handle.
     fn memh(&self) -> Option<&MemHandle> {
         None
     }
@@ -903,14 +911,16 @@ mod tests {
         assert!(!OwnedBuf::is_empty(&array));
     }
 
+    /// A small `FORCE_IMM_CMPL` send completes inline on `self`. Pinned to
+    /// `self,cuda_copy` instead of reading `UCX_TLS`, so it always runs (#231):
+    /// only `self` completes inline, while `cuda_copy` loads the CUDA memory
+    /// domain wherever UCX has one. That fills UCX's memtype cache, and then
+    /// the short path needs the `Host` memory type the owned send passes
+    /// (#210). Without CUDA support UCX warns that `cuda_copy` is not
+    /// available and ignores it.
     #[test]
     fn immediate_send_returns_data() {
-        let tls = std::env::var("UCX_TLS").unwrap_or_default();
-        if tls.split(',').next() != Some("self") {
-            eprintln!("skipping: inline completion requires UCX_TLS=self");
-            return;
-        }
-        let comms = setup_default();
+        let comms = crate::tests::setup_with_tls(c"self,cuda_copy");
         let param = RequestParamBuilder::new().force_imm_cmpl().build();
         let sent = post_send(&comms.ep, &comms.worker, vec![5u8; 16], 0x10, &param)
             .expect("small eager send completes inline on self");

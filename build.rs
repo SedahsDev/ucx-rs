@@ -87,6 +87,10 @@ fn main() {
     }
 
     let mut builder = bindgen::Builder::default()
+        // Emit code for the crate's MSRV (`rust-version` in Cargo.toml), not
+        // bindgen's default of the newest stable: bindgen 0.72 otherwise writes
+        // `unsafe extern "C"` blocks, which Rust < 1.82 rejects (#231).
+        .rust_target(msrv_rust_target())
         .generate_comments(false)
         .rustified_enum(".*")
         .must_use_type("ucs_status_t")
@@ -148,6 +152,23 @@ fn header_version(include_dir: &Path) -> Result<(u32, u32, PathBuf), String> {
             "{} does not define numeric UCP_API_MAJOR and UCP_API_MINOR",
             header.display()
         )),
+    }
+}
+
+/// `bindgen::RustTarget` for `CARGO_PKG_RUST_VERSION` (`1.<minor>[.<patch>]`).
+fn msrv_rust_target() -> bindgen::RustTarget {
+    let msrv = env::var("CARGO_PKG_RUST_VERSION").unwrap_or_default();
+    let mut parts = msrv.split('.').map(|part| part.parse::<u64>());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Ok(1)), Some(Ok(minor)), patch) => {
+            let patch = match patch {
+                Some(Ok(patch)) => patch,
+                _ => 0,
+            };
+            bindgen::RustTarget::stable(minor, patch)
+                .unwrap_or_else(|e| panic!("bindgen cannot target rust-version {msrv}: {e}"))
+        }
+        _ => panic!("cannot parse rust-version {msrv:?} from Cargo.toml"),
     }
 }
 

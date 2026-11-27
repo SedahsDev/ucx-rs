@@ -406,7 +406,8 @@ impl Worker {
     /// UCX takes ownership of `data_desc` once the receive is posted,
     /// including when the operation then fails (`AmRecvDataError::data_desc`
     /// is `None`). The one exception is a `buffer` rejected **before** posting
-    /// (its memory handle fails the check in [`crate::MemHandle::check_covers`]): UCX
+    /// (its memory handle fails the pre-post check described at
+    /// [`crate::OwnedBuf::memh`]: wrong context, range or memory type): UCX
     /// never saw the descriptor, so the error hands it back in
     /// `AmRecvDataError::data_desc` and the caller still owns it. Retry with
     /// another buffer, or release it: [`Worker::am_data_release`] outside the
@@ -435,8 +436,11 @@ impl Worker {
     /// this worker whose `recv_attr` had `UCP_AM_RECV_ATTR_FLAG_RNDV` or
     /// `UCP_AM_RECV_ATTR_FLAG_DATA` set, that callback must have returned
     /// `UCS_INPROGRESS` (or this is called from inside it), and the descriptor
-    /// must not have been consumed by UCX. UCX dereferences it as its internal
-    /// descriptor.
+    /// must not have been consumed already: not released (`ucp_am_data_release`
+    /// / [`Worker::am_data_release`]) and not posted by an earlier call of this
+    /// method. A call whose error handed it back in
+    /// `AmRecvDataError::data_desc` did not post it, so it may be passed again.
+    /// UCX dereferences it as its internal descriptor.
     ///
     /// For a rendezvous descriptor, `buffer.len()` must be at least the
     /// `length` the AM callback reported (UCX asserts it covers the message),

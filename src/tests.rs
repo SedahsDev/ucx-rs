@@ -23,6 +23,17 @@ pub struct CommsContext {
 }
 
 pub fn setup_default() -> Rc<CommsContext> {
+    setup(None)
+}
+
+/// [`setup_default`] with `UCX_TLS` pinned to `tls` through
+/// `ucp_config_modify`, so the test is independent of the environment's
+/// `UCX_TLS`.
+pub fn setup_with_tls(tls: &std::ffi::CStr) -> Rc<CommsContext> {
+    setup(Some(tls))
+}
+
+fn setup(tls: Option<&std::ffi::CStr>) -> Rc<CommsContext> {
     let features = context::Flags::Am
         | context::Flags::Rma
         | context::Flags::Amo32
@@ -47,6 +58,12 @@ pub fn setup_default() -> Rc<CommsContext> {
         .build();
 
     let config = context::Config::read("", "").expect("config read");
+    if let Some(tls) = tls {
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status =
+            unsafe { crate::ffi::ucp_config_modify(config.handle, c"TLS".as_ptr(), tls.as_ptr()) };
+        assert_eq!(status, crate::ffi::ucs_status_t::UCS_OK, "pin TLS={tls:?}");
+    }
     let mut context = Context::new(&config, &params).unwrap();
 
     let worker = context.worker_create(&worker_features).unwrap();
