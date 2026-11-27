@@ -43,6 +43,22 @@ Behaviors to know:
 
 ### Changes
 
+- **Build, CI (#132, #113):** `UCX_GENERATE_BINDINGS=1` is now strict, and CI's
+  Tier 1 job (UCX 1.22.0) builds, lints and tests with it.
+  - The UCX version guard never ran before. It compiled a C program calling
+    `ucp_get_version()` without linking `libucp`, so the compile always failed
+    and the guard printed "skipping version validation". It now reads
+    `UCP_API_MAJOR`/`UCP_API_MINOR` from `ucp_version.h` (the headers bindgen
+    reads), so nothing is compiled or linked. It runs before bindgen and panics
+    outside 1.19–1.22.
+  - A bindgen failure now fails the build. Before, it fell back silently to
+    the committed `src/bindings.rs`, so a CI job with the flag set could not
+    catch broken bindgen output.
+  - `UCX_GENERATE_BINDINGS` is now a `rerun-if-env-changed` input. Toggling it
+    used to leave stale bindings in `OUT_DIR`.
+  - CI checks the guard both ways: Tier 1 greps the guard's "within supported
+    range" line for the 1.22 headers, and a final step expects a build against
+    headers claiming 1.16 to fail with "minimum supported is 1.19".
 - **Docs (#209):** crate-level "Owned-data model" section, `examples/owned_pipeline.rs`
   (many operation kinds, one shared progress loop, subset cancel, flush, close),
   refreshed `THREADING.md`, this migration section, the README example fixed

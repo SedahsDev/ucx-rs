@@ -57,16 +57,27 @@ fn main() {
     // The committed src/bindings.rs is the source of truth. Bindgen is opt-in
     // via UCX_GENERATE_BINDINGS=1 and writes ONLY to OUT_DIR — it must never
     // overwrite files in src/ (issue #1).
+    //
+    // With UCX_GENERATE_BINDINGS=1 the build is strict: the headers must be a
+    // supported UCX version and bindgen must succeed, or the build fails. There
+    // is no silent fallback to the committed bindings, so CI (#132) really
+    // tests the bindgen path and the version guard.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("bindings.rs");
     let src_path = PathBuf::from("src").join("bindings.rs");
     println!("cargo:rerun-if-changed={}", src_path.display());
 
+    println!("cargo:rerun-if-env-changed=UCX_GENERATE_BINDINGS");
     if env::var("UCX_GENERATE_BINDINGS").as_deref() != Ok("1") {
         std::fs::copy(&src_path, &out_path)
             .unwrap_or_else(|e| panic!("Failed to copy pre-generated bindings.rs to OUT_DIR: {e}"));
         println!("cargo:warning=using pre-generated src/bindings.rs (set UCX_GENERATE_BINDINGS=1 to regenerate)");
         return;
     }
+
+    // UCX_GENERATE_BINDINGS=1: check the version of the headers bindgen is
+    // about to read before running it, so an unsupported UCX fails with a clear
+    // message rather than a bindgen or compile error.
+    check_ucx_version(&include_dir);
 
     // Prefer UCP API include layout when present
     let mut clang_args = vec![format!("-I{}", include_dir.display())];
@@ -90,96 +101,90 @@ fn main() {
         builder = builder.clang_arg(arg);
     }
 
-    match builder.generate() {
-        Ok(bindings) => {
-            println!("cargo:warning=bindgen succeeded — fresh bindings written to OUT_DIR only");
-            bindings
-                .write_to_file(&out_path)
-                .expect("Failed to write bindings to OUT_DIR");
-        }
-        Err(e) => {
-            println!("cargo:warning=bindgen failed ({e}) — using pre-generated src/bindings.rs as fallback");
-            std::fs::copy(&src_path, &out_path)
-                .expect("Failed to copy fallback bindings to OUT_DIR");
-        }
-    }
-
-    // Validate UCX version at build time
-    let version_check_code = r#"
-#include <ucp/api/ucp.h>
-#include <stdio.h>
-
-int main() {
-    unsigned version = ucp_get_version();
-    int major = version / 10000;
-    int minor = (version % 10000) / 100;
-    int release = version % 100;
-    printf("UCX_VERSION=%d.%d.%d\n", major, minor, release);
-    return 0;
+    let bindings = builder.generate().unwrap_or_else(|e| {
+        panic!(
+            "UCX_GENERATE_BINDINGS=1 but bindgen failed against {}: {e}",
+            include_dir.display()
+        )
+    });
+    bindings
+        .write_to_file(&out_path)
+        .expect("Failed to write bindings to OUT_DIR");
+    println!("cargo:warning=bindgen succeeded — fresh bindings written to OUT_DIR only");
 }
-"#;
 
-    let tmpdir = std::env::temp_dir();
-    let src_file = tmpdir.join("ucx_version_check.c");
-    std::fs::write(&src_file, version_check_code).expect("Failed to write version check C file");
-
-    let bin_file = tmpdir.join("ucx_version_check");
-    let status = std::process::Command::new("cc")
-        .arg(&src_file)
-        .arg("-o")
-        .arg(&bin_file)
-        .arg(format!("-I{}", include_dir.display()))
-        .status()
-        .expect("Failed to compile version check program");
-
-    if !status.success() {
-        println!("cargo:warning=Failed to compile UCX version check — skipping version validation");
-        return;
-    }
-
-    let output = std::process::Command::new(&bin_file)
-        .output()
-        .expect("Failed to run version check program");
-
-    let version_str = String::from_utf8_lossy(&output.stdout);
-    let version_line = version_str
-        .lines()
-        .find(|l| l.starts_with("UCX_VERSION="))
-        .unwrap_or("UCX_VERSION=0.0.0");
-
-    let parts: Vec<&str> = version_line
-        .trim_start_matches("UCX_VERSION=")
-        .split('.')
-        .collect();
-    if parts.len() < 3 {
-        println!("cargo:warning=Could not parse UCX version — skipping version validation");
-        return;
-    }
-
-    let (major, minor): (u32, u32) = match (parts[0].parse(), parts[1].parse()) {
-        (Ok(maj), Ok(min)) => (maj, min),
-        _ => {
-            println!("cargo:warning=Could not parse UCX version — skipping version validation");
-            return;
-        }
+/// Read `UCP_API_MAJOR` / `UCP_API_MINOR` from `ucp_version.h` under
+/// `include_dir` (either `ucp/api/ucp_version.h` or a flat layout).
+///
+/// These are the versions of the headers bindgen reads. The header carries no
+/// release number. Nothing has to be compiled or linked, so the check also
+/// works when the UCX libraries are not on the loader path at build time.
+fn header_version(include_dir: &Path) -> Result<(u32, u32, PathBuf), String> {
+    let candidates = [
+        include_dir.join("ucp").join("api").join("ucp_version.h"),
+        include_dir.join("ucp_version.h"),
+    ];
+    let Some(header) = candidates.iter().find(|p| p.exists()) else {
+        return Err(format!(
+            "no ucp_version.h under {} (looked for ucp/api/ucp_version.h and ucp_version.h)",
+            include_dir.display()
+        ));
     };
+    println!("cargo:rerun-if-changed={}", header.display());
+    let text = std::fs::read_to_string(header)
+        .map_err(|e| format!("cannot read {}: {e}", header.display()))?;
+    let define = |name: &str| -> Option<u32> {
+        text.lines().find_map(|line| {
+            let mut words = line.split_whitespace();
+            match (words.next(), words.next(), words.next()) {
+                (Some("#define"), Some(n), Some(value)) if n == name => value.parse().ok(),
+                _ => None,
+            }
+        })
+    };
+    match (define("UCP_API_MAJOR"), define("UCP_API_MINOR")) {
+        (Some(major), Some(minor)) => Ok((major, minor, header.clone())),
+        _ => Err(format!(
+            "{} does not define numeric UCP_API_MAJOR and UCP_API_MINOR",
+            header.display()
+        )),
+    }
+}
 
-    if major < MIN_MAJOR || (major == MIN_MAJOR && minor < MIN_MINOR) {
+/// The UCX version guard: panics unless the headers under `include_dir` are a
+/// supported UCX version. Runs only with `UCX_GENERATE_BINDINGS=1`.
+fn check_ucx_version(include_dir: &Path) {
+    let (major, minor, header) = header_version(include_dir).unwrap_or_else(|e| {
+        panic!("UCX version guard: {e}");
+    });
+    if (major, minor) < (MIN_MAJOR, MIN_MINOR) {
         panic!(
-            "UCX version {}.{}, but minimum supported is {}.{}",
-            major, minor, MIN_MAJOR, MIN_MINOR
+            "UCX version {}.{} ({}), but minimum supported is {}.{}",
+            major,
+            minor,
+            header.display(),
+            MIN_MAJOR,
+            MIN_MINOR
         );
     }
-
-    if major > MAX_MAJOR || (major == MAX_MAJOR && minor > MAX_MINOR) {
+    if (major, minor) > (MAX_MAJOR, MAX_MINOR) {
         panic!(
-            "UCX version {}.{}, but maximum supported is {}.{}",
-            major, minor, MAX_MAJOR, MAX_MINOR
+            "UCX version {}.{} ({}), but maximum supported is {}.{}",
+            major,
+            minor,
+            header.display(),
+            MAX_MAJOR,
+            MAX_MINOR
         );
     }
-
     println!(
-        "cargo:warning=UCX version {}.{}.{} is within supported range ({}.{}, {}.{})",
-        major, minor, parts[2], MIN_MAJOR, MIN_MINOR, MAX_MAJOR, MAX_MINOR
+        "cargo:warning=UCX version {}.{} ({}) is within supported range ({}.{}, {}.{})",
+        major,
+        minor,
+        header.display(),
+        MIN_MAJOR,
+        MIN_MINOR,
+        MAX_MAJOR,
+        MAX_MINOR
     );
 }
