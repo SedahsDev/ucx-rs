@@ -122,8 +122,15 @@ jobs:
         run: tail -n 80 /tmp/ucx_rma_smoke.log || echo "no UCX log written"
 
   tier1-ucx-122:
-    name: Tier 1 (UCX 1.22.0)
+    name: Tier 1 (UCX 1.22.0, bindgen + version guard)
     runs-on: ubuntu-24.04
+    env:
+      # Regenerate bindings with bindgen against the real 1.22.0 headers instead
+      # of compiling the committed src/bindings.rs, and run build.rs's UCX
+      # version guard (#132). Both are fatal under this flag: an unsupported
+      # version or a bindgen failure fails the build. Every cargo step below
+      # (clippy, test, example) builds and tests against the fresh bindings.
+      UCX_GENERATE_BINDINGS: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -159,6 +166,15 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
 
+      # Proves the bindgen path and the version guard ran in this job: build.rs
+      # prints both lines only after the guard passed and bindgen succeeded.
+      - name: bindgen + version guard (UCX 1.22 headers)
+        shell: bash -eo pipefail {0}
+        run: |
+          cargo build --locked 2>&1 | tee /tmp/bindgen_build.log
+          grep -F "UCX version 1.22 (/opt/ucx-1.22.0/include/ucp/api/ucp_version.h) is within supported range (1.19, 1.22)" /tmp/bindgen_build.log
+          grep -F "bindgen succeeded" /tmp/bindgen_build.log
+
       - name: clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
@@ -167,3 +183,22 @@ jobs:
 
       - name: example
         run: cargo run --locked --example version_and_context
+
+      # Negative test: headers that claim UCX 1.16 (below the 1.19 minimum)
+      # must fail the build in the guard, before bindgen runs. Last step on
+      # purpose: changing UCX_PREFIX reruns build.rs for the shared target dir.
+      - name: version guard rejects UCX 1.16 headers
+        # -e is safe here: a failing command in an `if` condition does not exit.
+        shell: bash -eo pipefail {0}
+        run: |
+          fake=/tmp/fake-ucx-1.16
+          mkdir -p "$fake/include/ucp/api" "$fake/lib"
+          printf '#define UCP_API_MAJOR    1\n#define UCP_API_MINOR    16\n' > "$fake/include/ucp/api/ucp_version.h"
+          if UCX_PREFIX="$fake" cargo check --locked > /tmp/guard.log 2>&1; then
+            cat /tmp/guard.log
+            echo "::error::build.rs accepted UCX 1.16 headers"
+            exit 1
+          fi
+          cat /tmp/guard.log
+          grep -F "UCX version 1.16" /tmp/guard.log
+          grep -F "but minimum supported is 1.19" /tmp/guard.log

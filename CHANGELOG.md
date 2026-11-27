@@ -43,6 +43,26 @@ Behaviors to know:
 
 ### Changes
 
+- **Build, CI (#132, #113):** `UCX_GENERATE_BINDINGS=1` is now strict, and CI's
+  Tier 1 job (UCX 1.22.0) builds, lints and tests with it.
+  - The UCX version guard never ran before. Its C probe could not compile: it
+    called `ucp_get_version()` with no arguments and used the result
+    (`unsigned version = ucp_get_version();`), but the function is
+    `void ucp_get_version(unsigned *, unsigned *, unsigned *)` (`too few
+    arguments`). It also decoded the value with `/ 10000`, which doesn't
+    match `UCP_VERSION`'s `<< 24 | << 16` layout, and never linked `libucp`.
+    So the guard always printed "skipping version validation". It now reads
+    `UCP_API_MAJOR`/`UCP_API_MINOR` from `ucp_version.h` (the headers bindgen
+    reads), so nothing is compiled or linked. It runs before bindgen and panics
+    outside 1.19–1.22.
+  - A bindgen failure now fails the build. Before, it fell back silently to
+    the committed `src/bindings.rs`, so a CI job with the flag set could not
+    catch broken bindgen output.
+  - `UCX_GENERATE_BINDINGS` is now a `rerun-if-env-changed` input. Toggling it
+    used to leave stale bindings in `OUT_DIR`.
+  - CI checks the guard both ways: Tier 1 greps the guard's "within supported
+    range" line for the 1.22 headers, and a final step expects a build against
+    headers claiming 1.16 to fail with "minimum supported is 1.19".
 - **Docs (#209):** crate-level "Owned-data model" section, `examples/owned_pipeline.rs`
   (many operation kinds, one shared progress loop, subset cancel, flush, close),
   refreshed `THREADING.md`, this migration section, the README example fixed
@@ -241,7 +261,7 @@ Behaviors to know:
   `.datatype()` for these operations. Added self-endpoint loopback tests for
   all 12 non-fetch AMO operations.
 
-- UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported and will cause build-time errors.
+- UCX version support: 1.19 through 1.22 (inclusive). Versions below 1.19 or above 1.22 are not supported. With `UCX_GENERATE_BINDINGS=1` they are a build-time error (since #132; before that the guard never actually ran).
 - **Breaking (#128, #112):** `Ep::tag_send` and `Worker::tag_recv` now return
   buffer-borrowing `tag::TagRequest<'w, 'a>` guards, following the
   `stream::StreamRequest` pattern.
