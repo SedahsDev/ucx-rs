@@ -85,7 +85,16 @@ type AmCallback = Box<dyn FnMut(&[u8], &[u8]) -> Result<(), Status> + Send + 'st
 /// The Rust state retained by [`Worker::am_register_handler`].
 pub struct AmHandler {
     inner: Mutex<AmCallback>,
+    /// Worker the handler is registered on, for rendezvous receives started
+    /// from the trampoline. Valid while the handler is: `Worker` retains every
+    /// `AmHandler` until after `ucp_worker_destroy`.
+    worker: ucp_worker_h,
 }
+
+// SAFETY: `worker` is only dereferenced by UCX, from the trampoline and the
+// rendezvous completion callback, which run in that worker's progress context.
+unsafe impl Send for AmHandler {}
+unsafe impl Sync for AmHandler {}
 
 impl std::fmt::Debug for AmHandler {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,33 +102,9 @@ impl std::fmt::Debug for AmHandler {
     }
 }
 
-unsafe extern "C" fn am_trampoline(
-    arg: *mut std::os::raw::c_void,
-    header: *const std::os::raw::c_void,
-    header_length: usize,
-    data: *mut std::os::raw::c_void,
-    length: usize,
-    _param: *const AmRecvParam,
-) -> Status {
-    // SAFETY: `arg` is an Arc<AmHandler> pointer installed by
-    // am_register_handler and retained by Worker until after UCX destroys the
-    // worker. UCX owns the callback buffers for this invocation; null pointers
-    // are permitted for zero-length messages.
-    let handler = unsafe { &*(arg as *const AmHandler) };
-    let header = if header.is_null() && header_length == 0 {
-        &[]
-    } else if header.is_null() {
-        return Status::INVALID_PARAM;
-    } else {
-        unsafe { std::slice::from_raw_parts(header as *const u8, header_length) }
-    };
-    let data = if data.is_null() && length == 0 {
-        &[]
-    } else if data.is_null() {
-        return Status::INVALID_PARAM;
-    } else {
-        unsafe { std::slice::from_raw_parts(data as *const u8, length) }
-    };
+/// Invoke the safe closure, containing panics. Returns the closure's status
+/// mapped to what UCX accepts (an error code, or `OK`).
+fn call_handler(handler: &AmHandler, header: &[u8], data: &[u8]) -> Status {
     let mut callback = match handler.inner.lock() {
         Ok(callback) => callback,
         // A panic poisons the mutex. Do not invoke a possibly inconsistent
@@ -137,6 +122,142 @@ unsafe extern "C" fn am_trampoline(
     }
 }
 
+/// A rendezvous receive started by the trampoline: owns the copied header and
+/// the payload buffer UCX writes into, until the receive completes.
+struct RndvRecv {
+    handler: Arc<AmHandler>,
+    header: Vec<u8>,
+    buffer: Vec<u8>,
+}
+
+/// Completion of a trampoline-started rendezvous receive (`cb.recv_am`).
+unsafe extern "C" fn am_rndv_done(
+    request: *mut std::os::raw::c_void,
+    status: ucs_status_t,
+    length: usize,
+    user_data: *mut std::os::raw::c_void,
+) {
+    // SAFETY: `user_data` is the `Box<RndvRecv>` leaked by `am_trampoline`
+    // for this request; UCX calls this exactly once.
+    let mut recv = unsafe { Box::from_raw(user_data as *mut RndvRecv) };
+    if status == ucs_status_t::UCS_OK {
+        recv.buffer.truncate(length);
+        // The sender already completed (ATS), so the status has nowhere to go.
+        let _ = call_handler(&recv.handler, &recv.header, &recv.buffer);
+    }
+    // SAFETY: `request` is the live handle UCX returned to the trampoline,
+    // which did not free it; it is complete now.
+    unsafe { ucp_request_free(request) };
+    drop(recv);
+}
+
+/// Start receiving a rendezvous message into an owned buffer. The closure runs
+/// when the payload has arrived (possibly before this returns).
+fn am_rndv_start(
+    handler: &AmHandler,
+    arg: *const AmHandler,
+    header: &[u8],
+    desc: *mut std::os::raw::c_void,
+    length: usize,
+) -> Status {
+    let mut buffer = Vec::new();
+    if buffer.try_reserve_exact(length).is_err() {
+        // recv_data not called: UCX drops the descriptor and completes the
+        // sender with this status.
+        return Status::NO_MEMORY;
+    }
+    buffer.resize(length, 0);
+    // SAFETY: `arg` is the `Arc<AmHandler>` pointer installed by
+    // `am_register_handler`; Worker holds a strong reference for its lifetime.
+    let handler_arc = unsafe {
+        Arc::increment_strong_count(arg);
+        Arc::from_raw(arg)
+    };
+    let recv = Box::into_raw(Box::new(RndvRecv {
+        handler: handler_arc,
+        header: header.to_vec(),
+        buffer,
+    }));
+    // SAFETY: zeroed POD; only the fields named in op_attr_mask are read.
+    let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
+    param.op_attr_mask = ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32
+        | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+    param.cb.recv_am = Some(am_rndv_done);
+    param.user_data = recv as *mut std::os::raw::c_void;
+    // SAFETY: `desc` is the rendezvous descriptor of this callback invocation;
+    // the buffer is heap storage owned by `recv` until completion. UCX takes
+    // ownership of `desc` whatever the outcome.
+    let ptr = unsafe {
+        let buffer = &mut (*recv).buffer;
+        ucp_am_recv_data_nbx(
+            handler.worker,
+            desc,
+            buffer.as_mut_ptr() as *mut std::os::raw::c_void,
+            length,
+            &param,
+        )
+    };
+    if ptr.is_null() {
+        // Completed in the call; the callback is not invoked.
+        // SAFETY: not handed to UCX as a pending request.
+        let recv = unsafe { Box::from_raw(recv) };
+        let _ = call_handler(&recv.handler, &recv.header, &recv.buffer);
+    } else if crate::request::status_ptr_is_err(ptr) {
+        // Never started: no callback. The data is lost; UCX owns `desc`.
+        // SAFETY: not handed to UCX as a pending request.
+        drop(unsafe { Box::from_raw(recv) });
+    }
+    // Pending: `am_rndv_done` frees `recv` and the request. If the worker is
+    // destroyed first and UCX never completes it, `recv` leaks (never freed
+    // while UCX may still write the buffer).
+    //
+    // recv_data was called: UCX now tracks the descriptor itself and ignores
+    // anything but OK here (ucp_am.c, RNDV RTS handling).
+    Status::OK
+}
+
+unsafe extern "C" fn am_trampoline(
+    arg: *mut std::os::raw::c_void,
+    header: *const std::os::raw::c_void,
+    header_length: usize,
+    data: *mut std::os::raw::c_void,
+    length: usize,
+    param: *const AmRecvParam,
+) -> Status {
+    // SAFETY: `arg` is an Arc<AmHandler> pointer installed by
+    // am_register_handler and retained by Worker until after UCX destroys the
+    // worker. UCX owns the callback buffers for this invocation; null pointers
+    // are permitted for zero-length messages.
+    let handler = unsafe { &*(arg as *const AmHandler) };
+    let header = if header.is_null() && header_length == 0 {
+        &[]
+    } else if header.is_null() {
+        return Status::INVALID_PARAM;
+    } else {
+        unsafe { std::slice::from_raw_parts(header as *const u8, header_length) }
+    };
+    // SAFETY: UCX passes a valid param pointer (or null) for this invocation.
+    let rndv = unsafe { param.as_ref() }
+        .map(|param| param.recv_attr().contains(AmRecvAttr::RNDV))
+        .unwrap_or(false);
+    if rndv {
+        // `data` is a rendezvous descriptor, not `length` bytes of payload
+        // (#214): fetch the payload with ucp_am_recv_data_nbx first.
+        if data.is_null() {
+            return Status::INVALID_PARAM;
+        }
+        return am_rndv_start(handler, arg as *const AmHandler, header, data, length);
+    }
+    let data = if data.is_null() && length == 0 {
+        &[]
+    } else if data.is_null() {
+        return Status::INVALID_PARAM;
+    } else {
+        unsafe { std::slice::from_raw_parts(data as *const u8, length) }
+    };
+    call_handler(handler, header, data)
+}
+
 impl Worker {
     /// Register a safe AM receive callback. Only one callback is retained by
     /// this wrapper for a worker; registering again replaces the Rust closure.
@@ -145,6 +266,15 @@ impl Worker {
     /// The closure returns `Ok(())` on success (reported to UCX as `UCS_OK`); an `Err(status)` is
     /// reported to UCX as that status if it is an error code, otherwise as `Status::INVALID_PARAM`;
     /// `UCS_INPROGRESS` is never returned to UCX.
+    ///
+    /// Rendezvous messages (large payloads, or `UCP_AM_SEND_FLAG_RNDV`) are
+    /// received into an owned buffer first; the closure then sees the payload
+    /// like any other message, from the progress call that completes the
+    /// receive (possibly a later one). For those, the closure's status cannot
+    /// reach the sender (it has already completed) and is ignored; if the
+    /// buffer cannot be allocated the sender completes with
+    /// `UCS_ERR_NO_MEMORY`. A rendezvous receive still pending when the worker
+    /// is destroyed leaks its buffer rather than freeing memory UCX may write.
     /// Use [`Self::am_unregister`] to remove the handler again.
     pub fn am_register_handler<F>(
         &mut self,
@@ -157,6 +287,7 @@ impl Worker {
     {
         let handler = Arc::new(AmHandler {
             inner: Mutex::new(Box::new(handler)),
+            worker: self.handle,
         });
         let params = HandlerParamsBuilder::new()
             .id(id)
@@ -393,12 +524,13 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     type AmRecvDataFn =
-        for<'w> fn(
+        for<'w> unsafe fn(
             &'w Worker,
             std::ptr::NonNull<std::ffi::c_void>,
             Vec<u8>,
             &RequestParam,
-        ) -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status>;
+        )
+            -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status>;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {
@@ -475,8 +607,8 @@ mod tests {
             })
             .unwrap();
         let len = 1024;
-        // EAGER: the safe trampoline cannot handle rendezvous descriptors (#214),
-        // so never let a low UCX_RNDV_THRESH turn this into an OOB read.
+        // EAGER keeps this test on the in-callback payload path; rendezvous is
+        // covered by `safe_handler_receives_rendezvous_payload`.
         let param = crate::RequestParamBuilder::new()
             .no_imm_cmpl()
             .flags(ucp_send_am_flags::UCP_AM_SEND_FLAG_EAGER as u32)
@@ -507,6 +639,120 @@ mod tests {
             worker.progress();
         }
         assert_eq!(received.load(Ordering::Acquire), len);
+    }
+
+    /// Safe-handler AM test fixture: self endpoint with `Flags::Am`.
+    fn am_self() -> (Context, Worker, crate::ep::Ep) {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Am)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .unwrap();
+        let packed = worker.pack_address().unwrap();
+        let address = RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        let endpoint = worker
+            .create_ep(EpParamsBuilder::new().address(&address).build())
+            .unwrap();
+        (context, worker, endpoint)
+    }
+
+    /// #214: a rendezvous message reaches the safe closure as its real
+    /// payload, not as descriptor memory read out of bounds.
+    #[test]
+    fn safe_handler_receives_rendezvous_payload() {
+        let (_context, mut worker, endpoint) = am_self();
+        let len = 4 << 20;
+        let payload: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let expected = payload.clone();
+        let received = Arc::new(Mutex::new(None::<(Vec<u8>, bool)>));
+        let seen = Arc::clone(&received);
+        worker
+            .am_register_handler(27, CbFlags::WholeMsg, move |header, data| {
+                let ok = header == b"rndv-hdr" && data == expected.as_slice();
+                *seen.lock().unwrap() = Some((header.to_vec(), ok));
+                Ok(())
+            })
+            .unwrap();
+        let param = crate::RequestParamBuilder::new()
+            .flags(ucp_send_am_flags::UCP_AM_SEND_FLAG_RNDV as u32)
+            .build();
+        let mut send = Some(
+            endpoint
+                .am_send(&worker, 27, b"rndv-hdr".to_vec(), payload, &param)
+                .unwrap(),
+        );
+        let mut sent = false;
+        for _ in 0..1_000_000 {
+            match send.take() {
+                Some(Completion::Immediate(_)) => sent = true,
+                Some(Completion::Pending(request)) => match request.try_complete() {
+                    Ok(result) => {
+                        if let Err(failed) = result {
+                            panic!("am_send: {failed}");
+                        }
+                        sent = true;
+                    }
+                    Err(still) => send = Some(Completion::Pending(still)),
+                },
+                None => {}
+            }
+            if sent && received.lock().unwrap().is_some() {
+                break;
+            }
+            worker.progress();
+        }
+        assert!(sent, "am_send did not complete");
+        let (header, ok) = received
+            .lock()
+            .unwrap()
+            .take()
+            .expect("handler not invoked");
+        assert_eq!(header, b"rndv-hdr");
+        assert!(ok, "rendezvous payload differs from what was sent");
+    }
+
+    /// A safe closure that panics on a rendezvous message is contained in the
+    /// completion callback (no unwind into UCX) and the sender still completes.
+    #[test]
+    fn safe_handler_rendezvous_panic_is_contained() {
+        let (_context, mut worker, endpoint) = am_self();
+        let calls = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&calls);
+        worker
+            .am_register_handler(28, CbFlags::WholeMsg, move |_header, _data| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                panic!("handler panic (expected by test)");
+            })
+            .unwrap();
+        let param = crate::RequestParamBuilder::new()
+            .flags(ucp_send_am_flags::UCP_AM_SEND_FLAG_RNDV as u32)
+            .build();
+        let mut send = Some(
+            endpoint
+                .am_send(&worker, 28, b"".as_slice(), vec![1u8; 1 << 20], &param)
+                .unwrap(),
+        );
+        let mut sent = false;
+        for _ in 0..1_000_000 {
+            match send.take() {
+                Some(Completion::Immediate(_)) => sent = true,
+                Some(Completion::Pending(request)) => match request.try_complete() {
+                    Ok(_) => sent = true,
+                    Err(still) => send = Some(Completion::Pending(still)),
+                },
+                None => {}
+            }
+            if sent && calls.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            worker.progress();
+        }
+        assert!(sent, "am_send did not complete");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     /// Descriptor + length recorded by `keep_rndv_desc` (test only).
@@ -584,13 +830,16 @@ mod tests {
         assert!(seen.rndv, "RNDV flag must make UCX hand over a descriptor");
         assert_eq!(seen.length, len);
         let desc = std::ptr::NonNull::new(seen.desc as *mut std::ffi::c_void).unwrap();
-        let recv = worker
-            .am_recv_data(
+        // SAFETY: `desc` is the RNDV descriptor kept by `keep_rndv_desc`
+        // (returned IN_PROGRESS) and is received exactly once.
+        let recv = unsafe {
+            worker.am_recv_data(
                 desc,
                 vec![0u8; len],
                 &crate::RequestParamBuilder::new().build(),
             )
-            .expect("am_recv_data");
+        }
+        .expect("am_recv_data");
         let mut received = None;
         let mut recv = Some(recv);
         for _ in 0..1_000_000 {

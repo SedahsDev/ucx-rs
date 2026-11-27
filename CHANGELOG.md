@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Fix (#214), safety:** the safe AM handler (`Worker::am_register_handler`)
+  treated rendezvous data descriptors as payload, an out-of-bounds read from
+  safe code. Rendezvous messages are now received into an owned buffer via
+  `ucp_am_recv_data_nbx`, and the closure gets the real payload (possibly from a
+  later `progress` call). For those messages the closure's status can't reach
+  the sender and is ignored. A failed buffer allocation completes the sender
+  with `UCS_ERR_NO_MEMORY`.
+- **Breaking, safety:** `Worker::am_recv_data` is now `unsafe`. It accepted any
+  `NonNull` pointer as a UCX descriptor from safe code.
 - **Breaking (#207, part of #211):** all 20 safe AMO entry points own their
   operand and reply storage (new module `rma::amo`).
   - Fetching AMOs (`amo_fadd*`, `amo_fxor*`, `amo_fswap*`, `amo_fcswap*`, 32/64)
