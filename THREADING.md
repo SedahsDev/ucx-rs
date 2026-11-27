@@ -86,7 +86,7 @@ The crate declares `unsafe impl Send + Sync` for exactly three types —
 `Context` (context.rs), `MtWorker` (worker.rs) and `AmHandler` (am.rs). The
 `unsafe impl OwnedBuf`/`OwnedBufMut` blocks in completion.rs are buffer
 ownership impls for concrete types (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`,
-`&'static [u8]`), not `Send` impls; their `Send` is derived structurally.
+`&'static [u8]`, `&'static [u8; N]`), not `Send` impls; their `Send` is derived structurally.
 Everything else is derived structurally:
 
 | Type | Derivation | Intended |
@@ -97,7 +97,8 @@ Everything else is derived structurally:
 | `Worker` | raw `ucp_worker_h` → `!Send !Sync` | stays `!Send !Sync` (v1) |
 | `Ep` | raw `ucp_ep_h` + `Arc<AtomicBool>` → `!Send !Sync` | stays `!Send !Sync` |
 | `Request` | `Option<NonNull<c_void>>` → `!Send !Sync` | stays `!Send !Sync` |
-| `OwningRequest<'w, D>`, `RecvRequest<'w, D, I>` | `&'w Worker` + owned `D` → `!Send !Sync` (asserted) | stays `!Send !Sync` |
+| `OwningRequest<'w, D>` | `&'w Worker` + owned `D` → `!Send !Sync` (asserted) | stays `!Send !Sync` |
+| `RecvRequest<'w, D, I>` | `&'w Worker` + owned `D` → `!Send !Sync` (not asserted yet) | stays `!Send !Sync` |
 | `FetchAmoRequest<'w, T>`, `AmoRequest<'w>` | `OwningRequest` over heap operand/reply slots → `!Send !Sync` (asserted) | stays `!Send !Sync` |
 | `RemoteKey<'ep>` | raw rkey + alive flag + `PhantomData<&'ep Ep>` → `!Send !Sync` | stays until audited |
 | `MemHandle` | raw memh + context handle → `!Send !Sync` | candidate `Send` after audit |

@@ -78,8 +78,8 @@
 //!   The status is usually `UCS_ERR_CANCELED` (data back in [`Failed`]), but
 //!   not guaranteed: an already-matched receive is untouched by cancel and
 //!   keeps its normal transfer outcome (a rendezvous transfer's status, not
-//!   necessarily success), and an offloaded cancel that loses the match race
-//!   completes successfully. Sends, RMA,
+//!   necessarily success), and an offloaded cancel that loses the race to a
+//!   software rendezvous completes with that rendezvous' status. Sends, RMA,
 //!   AMO, AM, stream and flush requests ignore cancel and complete normally
 //!   (see [`OwningRequest::cancel`]). To
 //!   abort an endpoint's operations, close it with [`ep::CloseMode::Force`].
