@@ -347,9 +347,15 @@ impl<'w, D> OwningRequest<'w, D> {
 
     /// Ask UCX to cancel this request. Never progresses or frees.
     ///
-    /// Cancellation is observed later through [`Self::try_complete`] after the
-    /// worker has been progressed. The request may still complete successfully
-    /// if it was already finishing. Calling this more than once is a no-op.
+    /// The outcome is observed through [`Self::try_complete`]: usually
+    /// `UCS_ERR_CANCELED`, or success if the request was already finishing.
+    /// Calling this more than once is a no-op.
+    ///
+    /// UCX (1.18–1.22) only acts on **tag receives**: a software tag receive
+    /// is completed inside `ucp_request_cancel` itself (no progress needed),
+    /// an offloaded one after progress. Sends, RMA, AM, stream, and flush
+    /// requests ignore the cancel and complete normally; to abort those, close
+    /// the endpoint with force. This is not a general abort.
     pub fn cancel(&mut self) {
         if self.canceled {
             return;
@@ -382,7 +388,10 @@ impl<'w, D> OwningRequest<'w, D> {
                 self.worker.progress();
             }
         }
-        // Timed out: UCX may still access the data. Never free either.
+        // Timed out: UCX may still access the data. Never free either. The
+        // request stays queued on the worker after this borrow ends; a later
+        // `ucp_worker_destroy` reclaims it. Leaking is the deliberate tradeoff
+        // (#203): a stuck request must never let its buffer be reused.
         std::mem::forget(request);
         if let Some(data) = self.data.take() {
             std::mem::forget(data);
@@ -404,8 +413,15 @@ impl<D> Drop for OwningRequest<'_, D> {
 /// # Safety
 ///
 /// `ptr` must be the return value of a `ucs_status_ptr_t` UCX API whose
-/// in-flight request (if any) accesses only memory owned by `data`, was posted
-/// on `worker`, and has not been freed.
+/// in-flight request (if any) was posted on `worker`, has not been freed, and
+/// accesses only memory owned by `data` **whose address is stable when `data`
+/// is moved** (heap storage as in [`OwnedBuf`]; never inline storage such as
+/// `[u8; N]` or a bare integer, which would move with the request and leave
+/// UCX with a dangling pointer).
+///
+/// `D` is deliberately not bounded by [`OwnedBuf`] so composite owners (a
+/// header + payload pair, an AMO operand/reply box) can be used; the
+/// stable-address rule above still applies to every pointer given to UCX.
 pub unsafe fn status_ptr_with_data<'w, D>(
     ptr: ucs_status_ptr_t,
     data: D,
@@ -574,19 +590,35 @@ mod tests {
         assert!(received == payload, "received bytes differ");
     }
 
+    /// Without external progress, a rendezvous transfer that progress would
+    /// complete stays pending across many `try_complete` polls: polling never
+    /// drives the worker. One progress loop then completes both sides.
     #[test]
     fn try_complete_does_not_progress() {
         let comms = setup_default();
-        let mut request = post_recv(&comms.worker, vec![0u8; 8], 0x30)
+        let len = 8 << 20;
+        let mut recv = post_recv(&comms.worker, vec![0u8; len], 0x30)
             .into_pending()
-            .expect("pending");
-        // An unmatched receive cannot complete without a sender.
-        for _ in 0..10 {
-            request = request.try_complete().expect_err("still pending");
+            .expect("pending recv");
+        let param = RequestParamBuilder::new().build();
+        let mut send = post_send(&comms.ep, &comms.worker, vec![3u8; len], 0x30, &param)
+            .unwrap()
+            .into_pending()
+            .expect("rendezvous send is pending after posting");
+        for _ in 0..1000 {
+            // `match`, not `expect_err`: a failure must not Debug-print 8 MiB.
+            send = match send.try_complete() {
+                Err(still) => still,
+                Ok(_) => panic!("send completed without progress"),
+            };
+            recv = match recv.try_complete() {
+                Err(still) => still,
+                Ok(_) => panic!("recv completed without progress"),
+            };
         }
-        request.cancel();
-        let failed = drive(&comms.worker, Completion::Pending(request)).expect_err("canceled");
-        assert!(failed.is_canceled(), "status {:?}", failed.status);
+        let sent = drive(&comms.worker, Completion::Pending(send)).expect("send");
+        let received = drive(&comms.worker, Completion::Pending(recv)).expect("recv");
+        assert_eq!((sent.len(), received[len - 1]), (len, 3));
     }
 
     #[test]
