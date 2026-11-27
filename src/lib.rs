@@ -76,8 +76,10 @@
 //!   receives honor it: a software tag receive completes inside the
 //!   `cancel()` call itself, and an offloaded one from a later progress call.
 //!   The status is usually `UCS_ERR_CANCELED` (data back in [`Failed`]), but
-//!   success if the receive was already matched or the offloaded cancel lost
-//!   the race — then the data comes back on the success side. Sends, RMA,
+//!   not guaranteed: an already-matched receive is untouched by cancel and
+//!   keeps its normal transfer outcome (a rendezvous transfer's status, not
+//!   necessarily success), and an offloaded cancel that loses the match race
+//!   completes successfully. Sends, RMA,
 //!   AMO, AM, stream and flush requests ignore cancel and complete normally
 //!   (see [`OwningRequest::cancel`]). To
 //!   abort an endpoint's operations, close it with [`ep::CloseMode::Force`].

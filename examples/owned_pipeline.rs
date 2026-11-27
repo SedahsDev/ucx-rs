@@ -15,9 +15,10 @@
 //! - There is no public single-request `wait`. Progress the worker and poll
 //!   everything you have in flight.
 //! - `cancel()` is honored only by tag receives. A software tag receive
-//!   completes (with `UCS_ERR_CANCELED`) inside the `cancel()` call, and an
-//!   offloaded one from a later progress call. Either way `try_complete` hands
-//!   the buffer back. Other operations ignore cancel.
+//!   completes inside the `cancel()` call (an offloaded one from a later
+//!   progress call). The status is usually `UCS_ERR_CANCELED` but not
+//!   guaranteed: an already-matched receive keeps its normal outcome. Either
+//!   way `try_complete` hands the buffer back. Other operations ignore cancel.
 //! - The rkey is dropped before the endpoint is closed (UCX destroy order).
 //! - Never progress the worker or drop a pending request inside a UCX
 //!   callback.

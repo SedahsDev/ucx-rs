@@ -83,9 +83,11 @@ safety must be decided per *type*, conservatively, at compile time.
 ## 3. Current inventory (verified on master @ 201351c)
 
 The crate declares `unsafe impl Send + Sync` for exactly three types —
-`Context` (context.rs), `MtWorker` (worker.rs) and `AmHandler` (am.rs) — plus
-`unsafe impl Send` for the `OwnedBuf`/`OwnedBufMut` blanket impls (heap
-buffers). Everything else is derived structurally:
+`Context` (context.rs), `MtWorker` (worker.rs) and `AmHandler` (am.rs). The
+`unsafe impl OwnedBuf`/`OwnedBufMut` blocks in completion.rs are buffer
+ownership impls for concrete types (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`,
+`&'static [u8]`), not `Send` impls; their `Send` is derived structurally.
+Everything else is derived structurally:
 
 | Type | Derivation | Intended |
 |------|-----------|----------|
@@ -101,11 +103,12 @@ buffers). Everything else is derived structurally:
 | `MemHandle` | raw memh + context handle → `!Send !Sync` | candidate `Send` after audit |
 | `MemHandleGuard<'a>` | `PhantomData<&'a mut [u8]>` → `!Send` | correct as-is |
 
-`src/threading_assert.rs` pins this table: `assert_impl_all!` /
+`src/threading_assert.rs` pins part of this table: `assert_impl_all!` /
 `assert_not_impl_any!` over Context, MtWorker and AmHandler (Send+Sync) and
 Worker, Ep, Request, RemoteKey, MemHandle, the owned requests and more
-(!Send/!Sync). A refactor that silently flips one breaks the build.
-Keep every row below consistent with that module.
+(!Send/!Sync). A refactor that silently flips one of those breaks the build.
+`Config`, `Params` and `RecvRequest` are not asserted yet — completing the
+matrix is roadmap item 1 below.
 
 ---
 
