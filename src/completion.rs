@@ -905,6 +905,11 @@ mod tests {
 
     #[test]
     fn immediate_send_returns_data() {
+        let tls = std::env::var("UCX_TLS").unwrap_or_default();
+        if tls.split(',').next() != Some("self") {
+            eprintln!("skipping: inline completion requires UCX_TLS=self");
+            return;
+        }
         let comms = setup_default();
         let param = RequestParamBuilder::new().force_imm_cmpl().build();
         let sent = post_send(&comms.ep, &comms.worker, vec![5u8; 16], 0x10, &param)

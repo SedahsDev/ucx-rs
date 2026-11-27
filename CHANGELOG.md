@@ -159,9 +159,10 @@ Behaviors to know:
     `MtWorker::cancel_request`, `MtWorker::flush` (post and drive the
     flush inside `MtWorker::with_worker` with `w.progress()`; see its docs, since
     calling `MtWorker::progress` there deadlocks), and `Ep::disconnect_nb` (deprecated UCX API; use
-    `close(_, CloseMode::Force)`). `Pending` remained for the `unsafe`
-    raw-pointer APIs until #210 removed them; now only `status_ptr_to_result`
-    returns it.
+    `close(_, CloseMode::Force)`). Only `status_ptr_to_result` returns `Pending`
+    directly. The deprecated raw wrappers (`put_nbx`, `get_nbx`, the atomic
+    helpers, `stream_send_nbx`, `stream_recv_nbx`) still return
+    `Result<Pending, Status>`.
   - Migration: `ep.close(&worker, 0)` becomes `ep.close(&worker,
     CloseMode::Flush)`, then drive the completion. `ep.flush(&p)` becomes
     `ep.flush(&worker, &p)`.
