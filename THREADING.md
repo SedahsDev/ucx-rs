@@ -16,8 +16,8 @@ HPC binding crates keep one shared vocabulary.
 | **Context** | UCX documents `ucp_context_h` as shareable across workers/threads → **`Send + Sync`** target. |
 | **Worker** | One owner, one progress loop. **`!Send + !Sync`** today. `ThreadMode::Multi` makes UCX *calls* concurrent-safe, not these Rust values transferable. |
 | **Ep** | Bound to its worker's thread. **`!Send + !Sync`**. Drop before worker (enforced by the `worker_alive` guard only as a last-resort net). |
-| **Request** | Tied to the worker that owns its completion. **`!Send + !Sync`**. Freeing a request handle is always safe (UCX RELEASED-flag defers cleanup); the *reply buffer* must outlive completion regardless. |
-| **MemHandle / RemoteKey / MemHandleGuard** | Registered-memory handles. `!Send + !Sync` until an audited story exists (they carry raw C handles plus borrowed-buffer `PhantomData`). |
+| **Request / OwningRequest** | Owned-data requests (`OwningRequest<'w, D>`, `RecvRequest`, `FetchAmoRequest`, `AmoRequest`) borrow their worker and own their data until completion. **`!Send + !Sync`** (asserted in `src/threading_assert.rs`): complete them on the thread that drives the worker. Freeing a raw request handle does not stop the operation (#68), which is why the data lives in the request. |
+| **MemHandle / RemoteKey / MemHandleGuard** | Registered-memory handles. `!Send + !Sync` until an audited story exists. `RemoteKey<'ep>` borrows the endpoint it was unpacked on (UCX destroys keys before endpoints, #223). |
 | **WorkerAddress / StreamData / MessageHandle** | Borrowed or UCX-owned data guards tied to worker/ep lifetime → **`!Send`** by construction (lifetimes). |
 | **Callbacks (AM handler, listener accept/conn)** | Run on the **progress context** — whichever thread calls `Worker::progress()` (or UCX-internal progress under MULTI). No blocking calls in-handler; hop off if needed. |
 | **Global FFI mutex** | Not provided. `ThreadMode::Serialized` puts the serialization duty on the application, exactly as UCX does. |
@@ -26,8 +26,10 @@ HPC binding crates keep one shared vocabulary.
 
 - `unsafe impl Send for Worker` without a per-object thread-mode check.
 - `PhantomData<*mut u8>` on a type advertised as transferable (the pmix-rs #60 bug class).
-- Holding the borrow of a fetch-AMO reply buffer across `into_inner()` while
-  the request is still in flight.
+- Calling `Worker::progress()`, or dropping a pending owned request (its
+  `Drop` progresses), from inside a UCX callback.
+- Reaching for a single-request wait: progress the worker once and poll every
+  request in flight (`examples/owned_pipeline.rs`).
 
 ---
 
@@ -78,11 +80,14 @@ safety must be decided per *type*, conservatively, at compile time.
 
 ---
 
-## 3. Current inventory (verified on master @ e63883f)
+## 3. Current inventory (verified on master @ 201351c)
 
-The crate currently declares **no** `unsafe impl Send/Sync` anywhere
-(`grep -rn 'unsafe impl' src --exclude bindings.rs` is empty). Auto-traits are
-therefore derived structurally:
+The crate declares `unsafe impl Send + Sync` for exactly three types —
+`Context` (context.rs), `MtWorker` (worker.rs) and `AmHandler` (am.rs). The
+`unsafe impl OwnedBuf`/`OwnedBufMut` blocks in completion.rs are buffer
+ownership impls for concrete types (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`,
+`&'static [u8]`, `&'static [u8; N]`), not `Send` impls; their `Send` is derived structurally.
+Everything else is derived structurally:
 
 | Type | Derivation | Intended |
 |------|-----------|----------|
@@ -92,13 +97,19 @@ therefore derived structurally:
 | `Worker` | raw `ucp_worker_h` → `!Send !Sync` | stays `!Send !Sync` (v1) |
 | `Ep` | raw `ucp_ep_h` + `Arc<AtomicBool>` → `!Send !Sync` | stays `!Send !Sync` |
 | `Request` | `Option<NonNull<c_void>>` → `!Send !Sync` | stays `!Send !Sync` |
-| `FetchAmoRequest<'w,'a,T>` | `&Worker` + `PhantomData<&mut T>` → `!Send` | stays `!Send` (reply buffer pinning) |
-| `RemoteKey` | raw rkey + alive flag → `!Send !Sync` | stays until audited |
+| `OwningRequest<'w, D>` | `&'w Worker` + owned `D` → `!Send !Sync` (asserted) | stays `!Send !Sync` |
+| `RecvRequest<'w, D, I>` | `&'w Worker` + owned `D` → `!Send !Sync` (not asserted yet) | stays `!Send !Sync` |
+| `FetchAmoRequest<'w, T>`, `AmoRequest<'w>` | `OwningRequest` over heap operand/reply slots → `!Send !Sync` (asserted) | stays `!Send !Sync` |
+| `RemoteKey<'ep>` | raw rkey + alive flag + `PhantomData<&'ep Ep>` → `!Send !Sync` | stays until audited |
 | `MemHandle` | raw memh + context handle → `!Send !Sync` | candidate `Send` after audit |
 | `MemHandleGuard<'a>` | `PhantomData<&'a mut [u8]>` → `!Send` | correct as-is |
 
-Nothing pins these decisions today: a refactor that adds/removes a field can
-silently flip any auto-trait. Closing that gap is the first issue below.
+`src/threading_assert.rs` pins part of this table: `assert_impl_all!` /
+`assert_not_impl_any!` over Context, MtWorker and AmHandler (Send+Sync) and
+Worker, Ep, Request, RemoteKey, MemHandle, the owned requests and more
+(!Send/!Sync). A refactor that silently flips one of those breaks the build.
+`Config`, `Params` and `RecvRequest` are not asserted yet — completing the
+matrix is roadmap item 1 below.
 
 ---
 
@@ -116,8 +127,9 @@ application thread or channel.
 | Create workers only with exclusive `&mut Context` access | `ucp_worker_create` performs an unprotected cache-on-first-worker read-modify-write of context state; use a single context owner or synchronize it (for example, `Arc<Mutex<Context>>`). |
 | Do not block inside an AM recv handler or listener accept callback | Callbacks run in the progress context; blocking stalls all completions on that worker. |
 | Hop heavy work off callbacks onto an application thread/channel | Same pattern as pmix-rs `threading::spawn_from_callback`. |
-| Keep fetch-AMO reply buffers borrowed until `check_finished() == Ok(true)` | UCX writes the result at completion time, independent of when the request handle was freed. |
-| Drop order: Eps → Requests → Listener → Worker → Context | `Ep::Drop`'s `worker_alive` guard is a diagnostic safety net, not a license to reorder. |
+| Never call `Worker::progress()` from a UCX callback, and never drop a pending owned request there | Callbacks already run inside progress; an owned request's `Drop` fail-safe progresses the worker. Move requests out (e.g. to a channel) and complete them in the main loop. |
+| Complete requests by progressing once and polling all of them (`try_complete`) | There is no public single-request wait; the shared loop is the only completion model. |
+| Drop order: Requests → RemoteKeys → Eps → Listener → Worker → Context | The compiler enforces two edges: requests before their worker (`OwningRequest<'w, _>` borrows `&Worker`) and keys before their endpoint (`RemoteKey<'ep>` borrows `&Ep`). It does **not** enforce requests before endpoints or endpoints before the worker (`Ep` has no lifetime; an in-flight put can outlive `drop(ep)`). For those, `Ep::Drop`'s `worker_alive` guard is a diagnostic safety net, not a license to reorder. |
 
 ---
 
@@ -135,7 +147,9 @@ application thread or channel.
    wrapper verifies UCX's granted thread mode at construction; it does not
    trust the requested mode. Endpoints created through it remain `!Send +
    !Sync` and must stay on the constructing thread or be serialized by the
-   caller. Fetch-AMO reply-buffer pinning remains incompatible with
-   cross-thread use; an owned-buffer variant is future work. Per-operation
+   caller. Owned-data requests borrow the `&Worker` lent by
+   `MtWorker::with_worker`, so post, progress (`w.progress()`, not
+   `MtWorker::progress`, which would deadlock) and complete them inside one
+   closure. Per-operation
    locking may negate MULTI's parallelism benefit; this is a measured-later
    caveat, not a benchmark claim.

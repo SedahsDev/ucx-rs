@@ -41,14 +41,32 @@ fn main() {
     let (maj, min, rel) = version::get_version();
     println!("UCX {}.{}.{} ({})", maj, min, rel, version::get_version_string());
 
-    let mut pb = ParamsBuilder::new();
-    pb.features(Flags::Tag | Flags::Rma);
-    let params = pb.build();
-    let config = Config::default();
+    let params = ParamsBuilder::new()
+        .features(Flags::Tag | Flags::Rma)
+        .mt_workers_shared(1)
+        .build();
+    let config = Config::read("", "").expect("ucp_config_read");
     let ctx = Context::new(&config, &params).expect("ucp_init");
-    let _ = ctx; // drop c
+    drop(ctx);
 }
 ```
+## Owned-data completion
+
+Non-blocking operations (RMA, tag, stream, AM, AMOs, flush, close) take
+ownership of their buffers and return `Completion::Immediate(data)` or
+`Completion::Pending(request)`. A pending request borrows the worker and hands
+the data back from `try_complete` once UCX is done, including after `cancel()`.
+There is no single-request `wait`. Progress the worker and poll everything in
+flight together:
+
+```sh
+UCX_TLS=self cargo run --example owned_pipeline
+```
+
+The rules (lifetimes, cancel, leak-on-timeout `Drop`, no progress from
+callbacks, flush scope) are in the crate docs, "Owned-data model". Every
+changed signature is listed under "Migration" in [`CHANGELOG.md`](./CHANGELOG.md).
+
 ## Notes
 
 - RMA needs a transport that supports it (`TLS=tcp` often has no RMA).
