@@ -105,6 +105,11 @@ impl MemHandle {
     /// Query attributes of this memory handle.
     pub fn query(&self) -> Result<MemAttr, Status> {
         let mut attr: ucp_mem_attr_t = unsafe { std::mem::zeroed() };
+        // UCX fills only the fields named in `field_mask`; with it zero,
+        // every attribute read back as 0.
+        attr.field_mask = ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_ADDRESS as u64
+            | ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_LENGTH as u64
+            | ucp_mem_attr_field::UCP_MEM_ATTR_FIELD_MEM_TYPE as u64;
         let result = status_to_result(unsafe { ucp_mem_query(self.handle, &mut attr) });
         match result {
             Ok(()) => Ok(MemAttr::from_ffi(attr)),
@@ -538,5 +543,28 @@ mod tests {
     fn map_slice_signature_keeps_guard_borrowed() {
         let _: for<'a> fn(&Context, &'a mut [u8], u64) -> Result<MemHandleGuard<'a>, Status> =
             MemHandle::map_slice;
+    }
+
+    /// `query` must request the fields it reports: with a zero `field_mask`
+    /// UCX fills nothing and every attribute reads back as zero.
+    #[test]
+    fn query_reports_mapped_region() {
+        use crate::context::{Config, Context, Flags, ParamsBuilder};
+        let context = Context::new(
+            &Config::read("", "").expect("config"),
+            &ParamsBuilder::new()
+                .features(Flags::Rma)
+                .mt_workers_shared(1)
+                .estimated_num_eps(1)
+                .build(),
+        )
+        .expect("context");
+        let mut buffer = vec![0u8; 4096];
+        let address = buffer.as_mut_ptr() as usize;
+        let guard = MemHandle::map_slice(&context, &mut buffer, 0).expect("map");
+        let attr = guard.mem_handle().query().expect("query");
+        assert_eq!(attr.address() as usize, address, "address");
+        assert!(attr.length() >= 4096, "length {}", attr.length());
+        assert_eq!(attr.mem_type(), crate::MemoryType::Host, "mem_type");
     }
 }
