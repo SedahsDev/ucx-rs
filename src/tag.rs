@@ -643,6 +643,117 @@ mod tests {
         assert_eq!(SEND_CB_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
+    /// #208 acceptance: N in-flight sends + an unmatched receive + a forced
+    /// close, all driven by ONE shared progress loop. Sends complete (OK or
+    /// an error such as CANCELED) and hand their buffers back, the canceled
+    /// receive returns its buffer, and the close completes.
+    #[test]
+    fn force_close_completes_outstanding_ops_in_one_progress_loop() {
+        let params = crate::context::ParamsBuilder::new()
+            .features(crate::context::Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context = crate::context::Context::new(
+            &crate::context::Config::read("", "").expect("config"),
+            &params,
+        )
+        .expect("context");
+        let worker = &context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("worker");
+        let packed = worker.pack_address().expect("address");
+        let remote = crate::worker::RemoteWorkerAddress::new(packed.to_vec());
+        drop(packed);
+        // CloseMode::Force requires peer error handling (ucp_ep.c checks it),
+        // which `self`/`shm` lack (UNREACHABLE); tcp and default TLS have it.
+        let ep = match worker.create_ep(
+            crate::ep::ParamsBuilder::new()
+                .address(&remote)
+                .err_mode(crate::ErrorHandlerMode::Peer)
+                .build(),
+        ) {
+            Ok(ep) => ep,
+            Err(status) if status == Status::UNREACHABLE => {
+                eprintln!("skipping: no transport with peer error handling ({status})");
+                return;
+            }
+            Err(status) => panic!("endpoint: {status}"),
+        };
+        let n = 4;
+        let len = 1 << 20; // rendezvous: waits for a receive that never comes
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut sends: Vec<_> = (0..n)
+            .map(|i| {
+                ep.tag_send(worker, vec![i as u8; len], 0x7000 + i as u64, &param)
+                    .expect("post send")
+                    .into_pending()
+                    .expect("NO_IMM_CMPL send is pending")
+            })
+            .collect();
+        let mut recv = Some(
+            worker
+                .tag_recv(vec![0u8; 64], 0x7FFF, u64::MAX, &param)
+                .expect("post recv")
+                .into_pending()
+                .expect("unmatched recv is pending"),
+        );
+        recv.as_mut().unwrap().cancel();
+        let mut close = match ep.close(worker, crate::ep::CloseMode::Force) {
+            Ok(Completion::Pending(request)) => Some(request),
+            Ok(Completion::Immediate(())) => None,
+            Err(error) => panic!("{error}"),
+        };
+        let (mut sent_back, mut recv_back, mut closed) = (0, false, close.is_none());
+        let mut statuses = Vec::new();
+        for _ in 0..1_000_000 {
+            if sends.is_empty() && recv.is_none() && closed {
+                break;
+            }
+            worker.progress();
+            let mut still = Vec::new();
+            for request in sends.drain(..) {
+                match request.try_complete() {
+                    Ok(result) => {
+                        let (status, buffer) = match result {
+                            Ok(buffer) => (Status::OK, buffer),
+                            Err(crate::Failed { status, data }) => (status, data),
+                        };
+                        assert!(
+                            status == Status::OK || status == Status::CANCELED,
+                            "send completed with {status}"
+                        );
+                        assert_eq!(buffer.len(), len);
+                        statuses.push(status);
+                        sent_back += 1;
+                    }
+                    Err(pending) => still.push(pending),
+                }
+            }
+            sends = still;
+            if let Some(request) = recv.take() {
+                match request.try_complete() {
+                    Ok(Err(failed)) => {
+                        assert_eq!(failed.status, Status::CANCELED);
+                        assert_eq!(failed.data.len(), 64);
+                        recv_back = true;
+                    }
+                    Ok(Ok(_)) => panic!("unmatched receive must not succeed"),
+                    Err(pending) => recv = Some(pending),
+                }
+            }
+            if let Some(request) = close.take() {
+                match request.try_complete() {
+                    Ok(_status) => closed = true,
+                    Err(pending) => close = Some(pending),
+                }
+            }
+        }
+        assert_eq!(sent_back, n, "every send handed its buffer back");
+        eprintln!("force-close send statuses: {statuses:?}");
+        assert!(recv_back, "canceled receive handed its buffer back");
+        assert!(closed, "forced close completed");
+    }
+
     #[test]
     fn msg_recv_error_returns_message_only_when_provably_unconsumed() {
         assert!(msg_recv_error_returns_message(true, Status::NO_RESOURCE));

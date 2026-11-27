@@ -4,28 +4,26 @@ use ucx_sys::am::CbFlags;
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::{Completion, Pending, RequestParamBuilder};
+use ucx_sys::{Completion, OwningRequest, RequestParamBuilder};
 
-fn wait_request<R, E: std::fmt::Debug>(
+/// Drive one owned completion with the shared progress loop.
+fn complete<D>(
     worker: &ucx_sys::worker::Worker,
-    pending: Pending<R>,
-    mut check_finished: impl FnMut(&mut R) -> Result<bool, E>,
-) {
-    let mut request = match pending {
-        Pending::Complete => return,
-        Pending::InProgress(request) => request,
+    completion: Completion<D, OwningRequest<'_, D>>,
+    what: &str,
+) -> D {
+    let mut request = match completion {
+        Completion::Immediate(data) => return data,
+        Completion::Pending(request) => request,
     };
-    const MAX_ROUNDS: usize = 1_000_000;
-    for _ in 0..MAX_ROUNDS {
-        match check_finished(&mut request) {
-            Ok(true) => return,
-            Ok(false) => {
-                worker.progress();
-            }
-            Err(status) => panic!("flush failed: {status:?}"),
+    for _ in 0..1_000_000 {
+        worker.progress();
+        match request.try_complete() {
+            Ok(result) => return result.unwrap_or_else(|failed| panic!("{what}: {failed}")),
+            Err(still) => request = still,
         }
     }
-    panic!("flush timed out");
+    panic!("{what} timed out");
 }
 
 fn main() {
@@ -62,23 +60,12 @@ fn main() {
     let operation = ep
         .am_send(&worker, 0, b"", b"", &request_param)
         .expect("active-message send");
-    let flush = ep.flush(&request_param).expect("start flush");
-    wait_request(&worker, flush, |request| request.check_finished());
     // The AM send owns its (empty) header and payload until it completes.
-    if let Completion::Pending(mut request) = operation {
-        let mut completed = false;
-        for _ in 0..1_000_000 {
-            match request.try_complete() {
-                Ok(result) => {
-                    let _ = result.expect("active-message send");
-                    completed = true;
-                    break;
-                }
-                Err(still) => request = still,
-            }
-            worker.progress();
-        }
-        assert!(completed, "active-message send timed out");
-    }
-    ep.close(&worker, 0).expect("close endpoint");
+    let _buffers = complete(&worker, operation, "active-message send");
+    let flush = ep.flush(&worker, &request_param).expect("start flush");
+    complete(&worker, flush, "endpoint flush");
+    let close = ep
+        .close(&worker, ucx_sys::ep::CloseMode::Flush)
+        .expect("close endpoint");
+    complete(&worker, close, "endpoint close");
 }

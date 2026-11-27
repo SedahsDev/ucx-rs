@@ -200,7 +200,7 @@ impl MtWorker {
     /// held for the whole call.
     ///
     /// `operation` must not re-enter this `MtWorker` (for example by calling
-    /// [`MtWorker::progress`] or [`MtWorker::wait_request`]): the internal mutex
+    /// [`MtWorker::progress`]): the internal mutex
     /// is not reentrant and the call will deadlock.
     pub fn with_worker<F, T>(&self, operation: F) -> T
     where
@@ -211,10 +211,6 @@ impl MtWorker {
 
     pub fn progress(&self) -> bool {
         self.lock().progress()
-    }
-
-    pub fn flush(&self, params: &RequestParam) -> Result<Pending, Status> {
-        self.lock().flush(params)
     }
 
     /// Apply worker-wide UCX ordering to operations issued before this call.
@@ -234,24 +230,6 @@ impl MtWorker {
     pub fn get_efd(&self) -> Result<i32, Status> {
         self.lock().get_efd()
     }
-    pub fn cancel_request(&self, request: &mut Request) {
-        self.lock().cancel_request(request)
-    }
-
-    pub fn wait_request(&self, request: &Request) -> Result<bool, Status> {
-        const MAX_ROUNDS: usize = 1_000_000;
-        for _ in 0..MAX_ROUNDS {
-            match request.check_finished() {
-                Ok(true) => return Ok(true),
-                Ok(false) => {
-                    self.progress();
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(false)
-    }
-
     pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
         self.lock().create_ep(ep_params)
     }
@@ -268,7 +246,10 @@ impl Drop for Worker {
         let params = RequestParamBuilder::new().build();
         // Drop is best-effort: never panic during drop glue, and do not wait
         // indefinitely for a UCX request which cannot make progress.
-        match self.flush(&params) {
+        // Raw flush: the public `flush` returns an owned request whose `Drop`
+        // would cancel first; here the flush must run to completion.
+        // SAFETY: the worker is still live (destroyed below).
+        match status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) }) {
             Ok(Pending::InProgress(request)) => {
                 const MAX_FLUSH_PROGRESS_ROUNDS: usize = 1_000_000;
                 for _ in 0..MAX_FLUSH_PROGRESS_ROUNDS {
@@ -358,51 +339,10 @@ impl Worker {
         });
     }
 
-    /// Block until `request` completes, progressing this worker.
-    ///
-    /// This method repeatedly calls [`Self::progress`], so the same
-    /// safe-but-contended/undefined-behavior distinction applies: it is safe
-    /// but contended under `ThreadMode::Multi` in an MT-enabled UCX build,
-    /// and undefined otherwise when another caller drives the worker. See
-    /// [`THREADING.md` section 2.1][threading]. Keep one progress owner per
-    /// worker; use [`Self::arm`] and [`Self::get_efd`] for wakeups.
-    /// Returns `Ok(false)` after a bounded spin; use the efd/arm/wait APIs for
-    /// a real blocking wait.
-    ///
-    /// ```no_run
-    /// # let worker: &ucx_sys::worker::Worker = todo!();
-    /// # let request: ucx_sys::Request = todo!();
-    /// let completed = worker.wait_request(&request).unwrap();
-    /// assert!(completed);
-    /// ```
-    ///
-    /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
-    pub fn wait_request(&self, request: &Request) -> Result<bool, Status> {
-        const MAX_ROUNDS: usize = 1_000_000;
-        for _ in 0..MAX_ROUNDS {
-            match request.check_finished() {
-                Ok(true) => return Ok(true),
-                Ok(false) => {
-                    self.progress();
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(false)
-    }
-
     pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
         let mut ep_params = ep_params;
         ep_params.handle.conn_request = ep_params.conn_request_ptr();
         Ep::new(ep_params, self)
-    }
-
-    /// Cancel a pending request on this worker.
-    ///
-    /// Prefer [`Request::cancel`] which also frees the request handle.
-    pub fn cancel_request(&self, request: &mut Request) {
-        // SAFETY: both handles are live UCX objects.
-        unsafe { ucp_request_cancel(self.handle, request.handle.as_ptr()) };
     }
 
     /// Flush outstanding operations on this worker.
@@ -415,8 +355,20 @@ impl Worker {
     /// [`Self::arm`] plus [`Self::get_efd`] to wake it from other threads.
     ///
     /// [threading]: https://github.com/SedahsDev/ucx-rs/blob/master/THREADING.md#21-progress-under-multi-is-a-spinlock-not-a-free-for-all
-    pub fn flush(&self, params: &RequestParam) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe { ucp_worker_flush_nbx(self.handle, &params.handle) })
+    ///
+    /// A deferred flush is an [`crate::OwningRequest`] driven by the shared
+    /// progress loop. `params` contributes flags, callback and user data;
+    /// request allocation is controlled here.
+    pub fn flush(&self, params: &RequestParam) -> Result<crate::ep::OpCompletion<'_>, Status> {
+        let raw = crate::completion::owned_op_param(params);
+        // SAFETY: live worker; the request carries no buffer.
+        unsafe {
+            crate::completion::status_ptr_with_data(
+                ucp_worker_flush_nbx(self.handle, &raw),
+                (),
+                self,
+            )
+        }
     }
 
     /// Receive the data described by an active-message callback descriptor

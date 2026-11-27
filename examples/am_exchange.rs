@@ -77,5 +77,8 @@ fn main() {
         .expect("AM send");
     let _buffers = wait(&worker, sent);
     assert_eq!(received, [b'Z']);
-    ep.close(&worker, 0).expect("close endpoint");
+    let close = ep
+        .close(&worker, ucx_sys::ep::CloseMode::Flush)
+        .expect("close endpoint");
+    wait(&worker, close);
 }

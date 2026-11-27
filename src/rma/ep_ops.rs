@@ -180,20 +180,27 @@ mod tests {
 
     /// Progress `worker` until `request` completes. Bounded, so a transport that
     /// cannot complete the operation fails the test instead of hanging it.
-    fn wait(worker: &Worker, request: Pending, what: &str) {
-        let Pending::InProgress(request) = request else {
+    /// Test-only driver for data-less completions (flush, close).
+    fn wait(worker: &Worker, completion: crate::ep::OpCompletion<'_>, what: &str) {
+        let Completion::Pending(mut request) = completion else {
             return;
         };
         for _ in 0..1_000_000 {
-            match request.check_finished() {
-                Ok(true) => return,
-                Ok(false) => {
-                    worker.progress();
-                }
-                Err(status) => panic!("{what} failed with {status} ({})", transport()),
+            worker.progress();
+            match request.try_complete() {
+                Ok(Ok(())) => return,
+                Ok(Err(failed)) => panic!("{what} failed with {} ({})", failed.status, transport()),
+                Err(still) => request = still,
             }
         }
         panic!("{what} did not complete ({})", transport());
+    }
+
+    fn close(worker: &Worker, ep: crate::ep::Ep) {
+        let completion = ep
+            .close(worker, crate::ep::CloseMode::Flush)
+            .unwrap_or_else(|error| panic!("{error} ({})", transport()));
+        wait(worker, completion, "endpoint close");
     }
 
     use crate::{Completion, OwningRequest};
@@ -275,7 +282,7 @@ mod tests {
         assert!(put.is_pending(), "NO_IMM_CMPL put must be deferred");
         assert_eq!(&*drive_owned(&worker, put, "put"), &payload[..]);
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
 
@@ -288,7 +295,7 @@ mod tests {
         drop(rkey);
         drop(memh);
         assert_eq!(target, payload);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// `FORCE_IMM_CMPL` must keep working: a small self put completes inline
@@ -309,13 +316,13 @@ mod tests {
             vec![0x42u8; 8]
         );
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         drop(rkey);
         drop(memh);
         assert_eq!(target, vec![0x42u8; 8]);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// The owned API forces contiguous bytes: a caller datatype of 2-byte
@@ -334,7 +341,7 @@ mod tests {
             .expect("post put");
         drive_owned(&worker, put, "put");
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         drop(rkey);
@@ -345,7 +352,7 @@ mod tests {
             &[0xEEu8; 8],
             "bytes past the buffer untouched"
         );
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     /// Dropping a pending owned get is safe: the fail-safe completes it before
@@ -367,7 +374,7 @@ mod tests {
         drop(get);
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     fn setup_amo_test() -> (Context, Worker, Ep) {
@@ -444,7 +451,7 @@ mod tests {
             assert!(completed, "{what} did not complete ({})", transport());
         }
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -453,7 +460,7 @@ mod tests {
 
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -643,7 +650,7 @@ mod tests {
             }
         };
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -653,7 +660,7 @@ mod tests {
 
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -728,13 +735,13 @@ mod tests {
         std::hint::black_box(&scribble);
         drop(completion); // Drop fail-safe completes it before freeing the slots
         let flush = ep
-            .flush(&RequestParamBuilder::new().build())
+            .flush(&worker, &RequestParamBuilder::new().build())
             .expect("flush");
         wait(&worker, flush, "endpoint flush");
         assert_eq!(unsafe { *(remote_addr as *const u64) }, 42);
         drop(rkey);
         drop(memh);
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 
     #[test]
@@ -826,7 +833,7 @@ mod tests {
         // guaranteed to be at the target, and visible to a later get, only after a
         // flush (see the ucp_put_nbx docs).
         let flush = ep
-            .flush(&param)
+            .flush(&worker, &param)
             .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
         wait(&worker, flush, "endpoint flush");
 
@@ -843,6 +850,6 @@ mod tests {
             "(RMA put target, RMA get result) ({})",
             transport()
         );
-        ep.close(&worker, 0).expect("close endpoint");
+        close(&worker, ep);
     }
 }

@@ -68,5 +68,12 @@ fn main() {
     });
     assert_eq!(&received, b"hello");
     assert_eq!((info.len(), info.sender_tag()), (5, 0x44));
-    ep.close(&worker, 0).expect("close endpoint");
+    let close = ep
+        .close(&worker, ucx_sys::ep::CloseMode::Flush)
+        .expect("close endpoint");
+    wait(&worker, close, |request| {
+        request
+            .try_complete()
+            .map(|result| result.expect("endpoint close"))
+    });
 }

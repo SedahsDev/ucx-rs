@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Breaking (#208, part of #211):** flush, close and modify are owned,
+  data-less operations returning `ep::OpCompletion<'w>` (= `Completion<(),
+  OwningRequest<'w, ()>>`), driven by the same shared progress loop as data
+  operations. There is no public single-request wait.
+  - `Ep::flush(&self, worker, params)`, `Ep::modify(&self, worker, params)`,
+    `Worker::flush(&self, params)`.
+  - `Ep::close(self, worker, CloseMode)` returns `Result<OpCompletion,
+    CloseError>`. The new `CloseMode { Flush, Force }` replaces raw `u32` flags.
+    `CloseError::ep` hands the endpoint back when it was not consumed (wrong
+    worker passed).
+  - `CloseMode::Force` completes the endpoint's outstanding operations with
+    `UCS_ERR_CANCELED`, which returns their buffers in `Failed`. It requires an
+    endpoint created with `ErrorHandlerMode::Peer`, which `self`/`shm` don't
+    support.
+  - `Ep` records its worker. Passing a different worker to
+    `flush`/`modify`/`close` fails with `UCS_ERR_INVALID_PARAM`.
+  - **Removed:** `Pending::wait`, `Worker::wait_request`,
+    `Worker::cancel_request`, `MtWorker::wait_request`,
+    `MtWorker::cancel_request`, `MtWorker::flush` (use
+    `MtWorker::with_worker`), and `Ep::disconnect_nb` (deprecated UCX API; use
+    `close(_, CloseMode::Force)`). `Pending` remains only for the `unsafe`
+    raw-pointer APIs.
+  - Migration: `ep.close(&worker, 0)` becomes `ep.close(&worker,
+    CloseMode::Flush)`, then drive the completion. `ep.flush(&p)` becomes
+    `ep.flush(&worker, &p)`.
 - **Fix (#219):** `MemHandle::query` sets `field_mask`; it previously returned
   zero address and length for every mapped region.
 - **Breaking (#207, part of #211):** all 20 safe AMO entry points own their

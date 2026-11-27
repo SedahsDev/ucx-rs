@@ -36,7 +36,9 @@ pub struct Request {
 pub enum Pending<T = Request> {
     /// Completed inline; input buffers may be reused immediately.
     Complete,
-    /// In flight; drive with worker.progress() and check_finished().
+    /// In flight; drive with worker.progress() and check_finished(). Only the
+    /// `unsafe` raw-pointer APIs return this; safe operations return
+    /// [`crate::Completion`].
     InProgress(T),
 }
 
@@ -54,31 +56,6 @@ impl<T> Pending<T> {
         match self {
             Pending::Complete => None,
             Pending::InProgress(req) => Some(req),
-        }
-    }
-}
-
-impl Pending {
-    /// Bounded progress loop that waits for completion.
-    ///
-    /// Calls `worker.progress()` up to 1_000_000 times or until the
-    /// request completes. On timeout, the request is leaked (not freed
-    /// while in flight). Returns `Ok(())` on success, `Err(status)` on
-    /// failure.
-    pub fn wait(self, worker: &crate::worker::Worker) -> Result<(), crate::Status> {
-        match self {
-            Pending::Complete => Ok(()),
-            Pending::InProgress(req) => {
-                for _ in 0..1_000_000 {
-                    if let Ok(true) = req.check_finished() {
-                        return Ok(());
-                    }
-                    worker.progress();
-                }
-                // Timeout: leak the request rather than freeing it in flight
-                std::mem::forget(req);
-                Err(crate::Status::from(ucs_status_t::UCS_ERR_TIMED_OUT))
-            }
         }
     }
 }
