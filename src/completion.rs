@@ -408,6 +408,35 @@ impl<D> Drop for OwningRequest<'_, D> {
     }
 }
 
+/// `ucp_op_attr_t` fields an ownership-transferring operation must control
+/// itself: a caller-supplied request allocation (`REQUEST`, which would make
+/// `ucp_request_free` wrong), a datatype that would make UCX read or write
+/// past the owned buffer (`DATATYPE`), pointers to memory the request does not
+/// own (`REPLY_BUFFER`, `RECV_INFO`, `MEMH`), and a memory type that may not
+/// match the owned buffer (`MEMORY_TYPE`; UCX detects it instead).
+const OWNED_OP_RESERVED_FIELDS: u32 = ucp_op_attr_t::UCP_OP_ATTR_FIELD_REQUEST as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_REPLY_BUFFER as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMORY_TYPE as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32
+    | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32;
+
+/// Copy `param` for an ownership-transferring operation over a contiguous
+/// byte buffer, dropping every field the owned data model must control (see
+/// [`OWNED_OP_RESERVED_FIELDS`]), then set the datatype explicitly to
+/// contiguous bytes so `count` is the byte length. (UCX 1.16 transfers zero
+/// bytes for a `NO_IMM_CMPL` put without an explicit datatype; openucx
+/// ba426c890.) Callback, user data, and flags (including `NO_IMM_CMPL` /
+/// `FORCE_IMM_CMPL`) are kept.
+pub(crate) fn owned_op_param(param: &crate::RequestParam) -> ucp_request_param_t {
+    let mut raw = param.handle;
+    raw.op_attr_mask &= !OWNED_OP_RESERVED_FIELDS;
+    raw.reply_buffer = std::ptr::null_mut();
+    raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+    raw.datatype = crate::dt::dt_make_contig(1);
+    raw
+}
+
 /// Classify a status pointer from an operation that is using `data`.
 ///
 /// # Safety
@@ -535,6 +564,33 @@ mod tests {
         assert!(format!("{failed}").starts_with("UCX request failed"));
         let result: Result<(), Failed<Opaque>> = Err(failed);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn owned_op_param_strips_reserved_fields_and_keeps_flags() {
+        let mut reply = 0u64;
+        let mut param = RequestParamBuilder::new()
+            .no_imm_cmpl()
+            .datatype(crate::dt::dt_make_contig(8))
+            .memory_type(crate::MemoryType::Cuda)
+            .reply_buffer(&mut reply as *mut u64 as *mut _)
+            .build();
+        param.handle.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_REQUEST as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_MEMH as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+        let raw = owned_op_param(&param);
+        let datatype = ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+        assert_eq!(raw.op_attr_mask & OWNED_OP_RESERVED_FIELDS, datatype);
+        assert_eq!(
+            raw.datatype,
+            crate::dt::dt_make_contig(1),
+            "contiguous bytes"
+        );
+        assert!(raw.reply_buffer.is_null());
+        let kept = ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+        assert_eq!(raw.op_attr_mask & kept, kept);
     }
 
     #[test]
