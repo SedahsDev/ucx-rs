@@ -6,16 +6,24 @@
 use ucx_sys::context::{Config, Context, Flags, ParamsBuilder};
 use ucx_sys::ep::ParamsBuilder as EpParamsBuilder;
 use ucx_sys::worker::ParamsBuilder as WorkerParamsBuilder;
-use ucx_sys::RequestParamBuilder;
+use ucx_sys::worker::Worker;
+use ucx_sys::{Completion, RequestParamBuilder};
 
-fn wait(worker: &ucx_sys::worker::Worker, mut request: ucx_sys::tag::TagRequest<'_, '_>) {
-    const MAX_ROUNDS: usize = 1_000_000;
-    for _ in 0..MAX_ROUNDS {
-        match request.check_finished().expect("tag request failed") {
-            true => return,
-            false => {
-                worker.progress();
-            }
+/// Drive one owned completion to its result with a shared progress loop.
+fn wait<D, R>(
+    worker: &Worker,
+    completion: Completion<D, R>,
+    mut poll: impl FnMut(R) -> Result<D, R>,
+) -> D {
+    let mut request = match completion {
+        Completion::Immediate(data) => return data,
+        Completion::Pending(request) => request,
+    };
+    for _ in 0..1_000_000 {
+        worker.progress();
+        match poll(request) {
+            Ok(data) => return data,
+            Err(still) => request = still,
         }
     }
     panic!("tag request timed out");
@@ -39,18 +47,26 @@ fn main() {
         .expect("endpoint");
     drop(address);
 
-    let mut received = [0u8; 5];
     let request_param = RequestParamBuilder::new().no_imm_cmpl().build();
+    // Both operations take ownership of their buffers and hand them back on
+    // completion; the buffers cannot be touched while UCX is using them.
     let receive = worker
-        .tag_recv(&worker, &mut received, 0x44, u64::MAX, &request_param)
+        .tag_recv(vec![0u8; 5], 0x44, u64::MAX, &request_param)
         .expect("post receive");
     let send = ep
-        .tag_send(&worker, b"hello", 0x44, &request_param)
+        .tag_send(&worker, b"hello".to_vec(), 0x44, &request_param)
         .expect("post send");
-    wait(&worker, receive);
-    if let Some(request) = send {
-        wait(&worker, request);
-    }
+    let (received, info) = wait(&worker, receive, |request| {
+        request
+            .try_complete()
+            .map(|result| result.expect("tag receive"))
+    });
+    let _sent = wait(&worker, send, |request| {
+        request
+            .try_complete()
+            .map(|result| result.expect("tag send"))
+    });
     assert_eq!(&received, b"hello");
+    assert_eq!((info.len(), info.sender_tag()), (5, 0x44));
     ep.close(&worker, 0).expect("close endpoint");
 }

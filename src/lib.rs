@@ -61,7 +61,8 @@ pub mod request;
 pub mod status;
 
 pub use completion::{
-    Completion, Failed, OwnedBuf, OwnedBufMut, OwningRequest, DROP_PROGRESS_BUDGET,
+    Completion, Failed, OwnedBuf, OwnedBufMut, OwningRequest, RecvInfo, RecvRequest,
+    StreamRecvRequest, TagRecvRequest, DROP_PROGRESS_BUDGET,
 };
 pub use request::*;
 pub use status::*;
