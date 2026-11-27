@@ -434,7 +434,32 @@ mod tests {
     fn rma_owned_put_force_imm_cmpl_completes_inline() {
         let mut target = vec![0u8; 8];
         let target_addr = target.as_mut_ptr() as u64;
-        let (_context, worker, ep, memh, packed) = rma_self_setup(&mut target);
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma)
+            .mt_workers_shared(1)
+            .estimated_num_eps(1)
+            .build();
+        let config = Config::read("", "").expect("config");
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status = unsafe {
+            crate::ffi::ucp_config_modify(config.handle, c"TLS".as_ptr(), c"self".as_ptr())
+        };
+        assert_eq!(status, crate::ffi::ucs_status_t::UCS_OK, "pin TLS=self");
+        let mut context = Context::new(&config, &params).expect("context");
+        drop(config);
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        drop(address);
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle())
+            .expect("pack rkey")
+            .to_vec();
         let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
         let param = RequestParamBuilder::new().force_imm_cmpl().build();
         let put = ep
