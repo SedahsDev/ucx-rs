@@ -6,7 +6,7 @@ Package name: **`ucx-sys`**. Repository directory: `ucx-rs`.
 
 ## Features
 
-- bindgen-generated FFI with offline `src/bindings.rs` fallback
+- committed `src/bindings.rs`, or bindgen against your UCX headers with `UCX_GENERATE_BINDINGS=1`
 - RAII wrappers: context, worker, endpoint, tag, RMA, AMO, active messages
 - Two-tier status helpers (`status_to_result`, `status_ptr_to_result`)
 - Builder patterns for params
@@ -27,7 +27,9 @@ See [`../BUILDING.md`](../BUILDING.md).
 
 ## UCX version support
 
-This crate requires UCX version 1.19 through 1.22 (inclusive). The build script enforces this range at compile time using `ucp_get_version()`.
+This crate requires UCX version 1.19 through 1.22 (inclusive).
+
+By default the build compiles the committed `src/bindings.rs` and does not read the UCX headers. Set `UCX_GENERATE_BINDINGS=1` to run bindgen against the headers it finds (`UCX_PREFIX`, ...). In that mode the build script first checks `UCP_API_MAJOR`/`UCP_API_MINOR` in `ucp_version.h` and **fails the build** if the headers are outside 1.19–1.22, or if bindgen fails. There is no fallback to the committed bindings. CI's Tier 1 job (UCX 1.22.0) builds and tests this way. At runtime UCX itself warns when the loaded library is older than the API the crate was built against.
 
 Note: The default UCX package available via `apt` on many distributions is often version 1.16, which is below the supported minimum. To use this crate, install UCX 1.19+ from source or a repository that provides newer versions.
 
