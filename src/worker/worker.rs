@@ -202,6 +202,29 @@ impl MtWorker {
     /// `operation` must not re-enter this `MtWorker` (for example by calling
     /// [`MtWorker::progress`]): the internal mutex
     /// is not reentrant and the call will deadlock.
+    ///
+    /// Owned completions borrow the `&Worker` passed in, so they cannot leave
+    /// the closure: post, progress (`w.progress()`) and `try_complete` inside
+    /// it. For example, a worker flush:
+    ///
+    /// ```no_run
+    /// # use ucx_sys::{worker::MtWorker, Completion, RequestParamBuilder};
+    /// # fn demo(mt: &MtWorker) -> Result<(), ucx_sys::Status> {
+    /// mt.with_worker(|w| {
+    ///     let flush = w.flush(&RequestParamBuilder::new().build())?;
+    ///     if let Completion::Pending(mut request) = flush {
+    ///         loop {
+    ///             w.progress(); // not mt.progress(): that would deadlock
+    ///             match request.try_complete() {
+    ///                 Ok(result) => return result.map_err(|failed| failed.status),
+    ///                 Err(still) => request = still,
+    ///             }
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// })
+    /// # }
+    /// ```
     pub fn with_worker<F, T>(&self, operation: F) -> T
     where
         F: FnOnce(&Worker) -> T,
@@ -358,7 +381,9 @@ impl Worker {
     ///
     /// A deferred flush is an [`crate::OwningRequest`] driven by the shared
     /// progress loop. `params` contributes flags, callback and user data;
-    /// request allocation is controlled here.
+    /// request allocation is controlled here. A flush that completes inline
+    /// returns `Immediate(())` without invoking the callback, and UCX does not
+    /// honor `NO_IMM_CMPL` for flushes.
     pub fn flush(&self, params: &RequestParam) -> Result<crate::ep::OpCompletion<'_>, Status> {
         let raw = crate::completion::owned_op_param(params);
         // SAFETY: live worker; the request carries no buffer.

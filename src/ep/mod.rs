@@ -42,9 +42,6 @@ use std::sync::Arc;
 pub struct Ep {
     pub(crate) handle: ucp_ep_h,
     pub(crate) worker_alive: Arc<AtomicBool>,
-    /// The worker this endpoint was created on. Completion-returning calls
-    /// check it so their requests are progressed on the right worker.
-    pub(crate) worker: ucp_worker_h,
 }
 
 /// How [`Ep::close`] tears down the endpoint (`UCP_EP_CLOSE_FLAG_FORCE`).
@@ -95,8 +92,12 @@ impl From<EpHandle> for ucp_ep_h {
 
 impl Ep {
     /// `INVALID_PARAM` unless `worker` is the worker this endpoint belongs to.
+    ///
+    /// Identity is the worker's `alive` Arc, not its raw handle: after a
+    /// worker is destroyed, a new one can reuse the `ucp_worker_h` address,
+    /// and a stale `Ep` must not pass for it.
     fn check_worker(&self, worker: &Worker) -> Result<(), Status> {
-        if worker.handle == self.worker {
+        if Arc::ptr_eq(&self.worker_alive, &worker.alive) {
             Ok(())
         } else {
             Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
@@ -124,7 +125,6 @@ impl Ep {
             Ok(()) => Ok(Ep {
                 handle: ep,
                 worker_alive: Arc::clone(&worker.alive),
-                worker: worker.handle,
             }),
             Err(ucs_status_t) => Err(ucs_status_t),
         }
@@ -145,7 +145,9 @@ impl Ep {
     /// A deferred flush is an [`crate::OwningRequest`]: drive it with the same
     /// shared `worker.progress()` + `try_complete` loop as data operations.
     /// `params` contributes flags, callback and user data; request allocation
-    /// is controlled here.
+    /// is controlled here. A flush that completes inline returns
+    /// `Immediate(())` without invoking the callback, and UCX does not honor
+    /// `NO_IMM_CMPL` for flushes.
     pub fn flush<'w>(
         &self,
         worker: &'w Worker,
@@ -178,6 +180,9 @@ impl Ep {
     /// in `ucp_compat.h`.
     ///
     /// `worker` must be the endpoint's worker (else `UCS_ERR_INVALID_PARAM`).
+    /// `ucp_ep_modify_nb` always completes inline, so this returns
+    /// `Immediate(())` or an error; the completion type matches the other
+    /// endpoint operations.
     pub fn modify<'w>(
         &self,
         worker: &'w Worker,
@@ -257,8 +262,13 @@ impl Ep {
     /// The close is a data-less owned operation: `Immediate(())` when UCX
     /// finished inline, otherwise an [`crate::OwningRequest`] driven by the
     /// same shared progress loop as everything else. `worker` must be the
-    /// endpoint's worker; on a mismatch the endpoint is handed back in
-    /// [`CloseError::ep`] with `UCS_ERR_INVALID_PARAM`.
+    /// endpoint's worker; on a mismatch, or when UCX refuses
+    /// [`CloseMode::Force`] (no peer error handling), the endpoint is handed
+    /// back in [`CloseError::ep`] with `UCS_ERR_INVALID_PARAM`. Other errors
+    /// mean UCX already consumed it. `CloseMode::Force` completes immediately
+    /// (UCX discards the lanes inline); `CloseMode::Flush` may be pending until
+    /// the endpoint's outstanding operations drain, which needs the same
+    /// progress loop that completes them.
     ///
     /// # Disconnect recipe
     ///
@@ -298,17 +308,30 @@ impl Ep {
         let mut param: ucp_request_param_t = unsafe { std::mem::zeroed() };
         param.op_attr_mask = ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
         param.flags = mode.flags();
-        // SAFETY: this.handle is owned by the endpoint; UCX takes ownership of
-        // it whatever the result. The request carries no buffer.
-        unsafe {
+        // SAFETY: this.handle is a live endpoint on `worker` (checked above).
+        // The request carries no buffer.
+        let result = unsafe {
             crate::completion::status_ptr_with_data(
                 ucp_ep_close_nbx(this.handle, &param),
                 (),
                 worker,
             )
+        };
+        match result {
+            Ok(completion) => Ok(completion),
+            // The one exit before UCX consumes the endpoint (ucp_ep.c: FORCE
+            // without peer error handling returns before marking it CLOSED):
+            // hand it back intact.
+            Err(status) if mode == CloseMode::Force && status == Status::INVALID_PARAM => {
+                Err(CloseError {
+                    status,
+                    ep: Some(std::mem::ManuallyDrop::into_inner(this)),
+                })
+            }
+            // Every other error happens after UCX marked the endpoint closed
+            // (flush or CM-disconnect failures): it is consumed.
+            Err(status) => Err(CloseError { status, ep: None }),
         }
-        // UCX consumed the endpoint even on error: nothing to hand back.
-        .map_err(|status| CloseError { status, ep: None })
     }
 }
 
@@ -317,7 +340,8 @@ impl Ep {
 pub struct CloseError {
     /// Why the close did not start.
     pub status: Status,
-    /// The endpoint, when it was not consumed (wrong worker passed). `None`
+    /// The endpoint, when it was not consumed: a wrong worker was passed, or
+    /// `CloseMode::Force` was refused for lack of peer error handling. `None`
     /// when UCX already consumed it.
     pub ep: Option<Ep>,
 }
@@ -344,7 +368,7 @@ impl Drop for Ep {
         let status = unsafe { ucp_ep_close_nbx(self.handle, &param) };
         match status_ptr_to_result(status) {
             Ok(_req) if !status.is_null() => {
-                eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, flags) first");
+                eprintln!("ucx-rs: endpoint close is still in progress during Drop; call Ep::close(&worker, CloseMode::Flush) first");
                 // Do not free a request whose close has not completed.
                 std::mem::forget(_req);
             }

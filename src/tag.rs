@@ -643,35 +643,129 @@ mod tests {
         assert_eq!(SEND_CB_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
-    /// #208 acceptance: N in-flight sends + an unmatched receive + a forced
-    /// close, all driven by ONE shared progress loop. Sends complete (OK or
-    /// an error such as CANCELED) and hand their buffers back, the canceled
-    /// receive returns its buffer, and the close completes.
-    #[test]
-    fn force_close_completes_outstanding_ops_in_one_progress_loop() {
+    /// Context + worker for the close tests (tag feature only), pinned to the
+    /// tcp transport: on `self`/`shm` a flush-close completes inline even with
+    /// sends in flight and peer error handling is unavailable, so neither the
+    /// deferred-close nor the forced-close path would be exercised.
+    fn close_fixture() -> (crate::context::Context, crate::worker::Worker) {
         let params = crate::context::ParamsBuilder::new()
             .features(crate::context::Flags::Tag)
             .mt_workers_shared(1)
             .build();
-        let mut context = crate::context::Context::new(
-            &crate::context::Config::read("", "").expect("config"),
-            &params,
-        )
-        .expect("context");
-        let worker = &context
+        let config = crate::context::Config::read("", "").expect("config");
+        // SAFETY: live config handle; NUL-terminated name and value.
+        let status = unsafe { ucp_config_modify(config.handle, c"TLS".as_ptr(), c"tcp".as_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK, "pin TLS=tcp");
+        let mut context = crate::context::Context::new(&config, &params).expect("context");
+        let worker = context
             .worker_create(&crate::worker::ParamsBuilder::new().build())
             .expect("worker");
+        (context, worker)
+    }
+
+    fn self_ep(
+        worker: &crate::worker::Worker,
+        mode: crate::ErrorHandlerMode,
+    ) -> Result<crate::ep::Ep, Status> {
         let packed = worker.pack_address().expect("address");
         let remote = crate::worker::RemoteWorkerAddress::new(packed.to_vec());
         drop(packed);
-        // CloseMode::Force requires peer error handling (ucp_ep.c checks it),
-        // which `self`/`shm` lack (UNREACHABLE); tcp and default TLS have it.
-        let ep = match worker.create_ep(
+        worker.create_ep(
             crate::ep::ParamsBuilder::new()
                 .address(&remote)
-                .err_mode(crate::ErrorHandlerMode::Peer)
+                .err_mode(mode)
                 .build(),
-        ) {
+        )
+    }
+
+    /// #208 acceptance: in-flight sends, their receives, and a *pending*
+    /// `close(Flush)` all complete through ONE shared progress loop. The close
+    /// cannot finish until the sends drain, and the sends need the receives
+    /// progressed, so a loop that only drove the close would never end.
+    #[test]
+    fn flush_close_and_ops_complete_in_one_progress_loop() {
+        let (_context, worker) = close_fixture();
+        let worker = &worker;
+        let ep = self_ep(worker, crate::ErrorHandlerMode::None).expect("endpoint");
+        let (n, len) = (4u64, 1 << 20); // rendezvous: needs the receiver
+        let param = RequestParamBuilder::new().no_imm_cmpl().build();
+        let mut sends: Vec<_> = (0..n)
+            .map(|i| {
+                ep.tag_send(worker, vec![i as u8; len], 0x7100 + i, &param)
+                    .expect("post send")
+                    .into_pending()
+                    .expect("NO_IMM_CMPL send is pending")
+            })
+            .collect();
+        let mut recvs: Vec<_> = (0..n)
+            .map(|i| {
+                worker
+                    .tag_recv(vec![0u8; len], 0x7100 + i, u64::MAX, &param)
+                    .expect("post recv")
+                    .into_pending()
+                    .expect("NO_IMM_CMPL recv is pending")
+            })
+            .collect();
+        let mut close = match ep.close(worker, crate::ep::CloseMode::Flush) {
+            Ok(Completion::Pending(request)) => Some(request),
+            Ok(Completion::Immediate(())) => panic!("close with pending sends must defer"),
+            Err(error) => panic!("{error}"),
+        };
+        let (mut sent, mut received, mut closed) = (0, 0, false);
+        for _ in 0..1_000_000 {
+            if sends.is_empty() && recvs.is_empty() && closed {
+                break;
+            }
+            worker.progress();
+            sends = sends
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(result) => {
+                        let buffer = result.unwrap_or_else(|failed| panic!("send: {failed}"));
+                        assert_eq!(buffer.len(), len);
+                        sent += 1;
+                        None
+                    }
+                    Err(pending) => Some(pending),
+                })
+                .collect();
+            recvs = recvs
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(result) => {
+                        let (buffer, info) =
+                            result.unwrap_or_else(|failed| panic!("recv: {failed}"));
+                        let i = (info.sender_tag() - 0x7100) as u8;
+                        assert!(buffer.iter().all(|&byte| byte == i), "payload");
+                        received += 1;
+                        None
+                    }
+                    Err(pending) => Some(pending),
+                })
+                .collect();
+            if let Some(request) = close.take() {
+                match request.try_complete() {
+                    Ok(result) => {
+                        result.unwrap_or_else(|failed| panic!("close: {failed}"));
+                        assert_eq!(sent, n, "close completed before the sends drained");
+                        closed = true;
+                    }
+                    Err(pending) => close = Some(pending),
+                }
+            }
+        }
+        assert_eq!((sent, received), (n, n));
+        assert!(closed, "close completed");
+    }
+
+    /// `close(Force)` cancels the endpoint's outstanding sends: each comes
+    /// back `CANCELED` with its buffer. Needs peer error handling (skips on
+    /// transports without it, e.g. `self`/`shm`).
+    #[test]
+    fn force_close_cancels_outstanding_sends() {
+        let (_context, worker) = close_fixture();
+        let worker = &worker;
+        let ep = match self_ep(worker, crate::ErrorHandlerMode::Peer) {
             Ok(ep) => ep,
             Err(status) if status == Status::UNREACHABLE => {
                 eprintln!("skipping: no transport with peer error handling ({status})");
@@ -679,79 +773,103 @@ mod tests {
             }
             Err(status) => panic!("endpoint: {status}"),
         };
-        let n = 4;
-        let len = 1 << 20; // rendezvous: waits for a receive that never comes
+        let (n, len) = (4u64, 1 << 20); // rendezvous: waits for a receive that never comes
         let param = RequestParamBuilder::new().no_imm_cmpl().build();
         let mut sends: Vec<_> = (0..n)
             .map(|i| {
-                ep.tag_send(worker, vec![i as u8; len], 0x7000 + i as u64, &param)
+                ep.tag_send(worker, vec![i as u8; len], 0x7000 + i, &param)
                     .expect("post send")
                     .into_pending()
                     .expect("NO_IMM_CMPL send is pending")
             })
             .collect();
-        let mut recv = Some(
-            worker
-                .tag_recv(vec![0u8; 64], 0x7FFF, u64::MAX, &param)
-                .expect("post recv")
-                .into_pending()
-                .expect("unmatched recv is pending"),
-        );
-        recv.as_mut().unwrap().cancel();
-        let mut close = match ep.close(worker, crate::ep::CloseMode::Force) {
-            Ok(Completion::Pending(request)) => Some(request),
-            Ok(Completion::Immediate(())) => None,
+        match ep.close(worker, crate::ep::CloseMode::Force) {
+            // UCX discards the lanes inline for a forced close.
+            Ok(Completion::Immediate(())) => {}
+            Ok(Completion::Pending(_)) => panic!("forced close unexpectedly deferred"),
             Err(error) => panic!("{error}"),
-        };
-        let (mut sent_back, mut recv_back, mut closed) = (0, false, close.is_none());
-        let mut statuses = Vec::new();
+        }
+        let mut canceled = 0;
         for _ in 0..1_000_000 {
-            if sends.is_empty() && recv.is_none() && closed {
+            if sends.is_empty() {
                 break;
             }
             worker.progress();
-            let mut still = Vec::new();
-            for request in sends.drain(..) {
-                match request.try_complete() {
-                    Ok(result) => {
-                        let (status, buffer) = match result {
-                            Ok(buffer) => (Status::OK, buffer),
-                            Err(crate::Failed { status, data }) => (status, data),
-                        };
-                        assert!(
-                            status == Status::OK || status == Status::CANCELED,
-                            "send completed with {status}"
-                        );
-                        assert_eq!(buffer.len(), len);
-                        statuses.push(status);
-                        sent_back += 1;
+            sends = sends
+                .into_iter()
+                .filter_map(|request| match request.try_complete() {
+                    Ok(Err(crate::Failed { status, data })) => {
+                        assert_eq!(status, Status::CANCELED);
+                        assert_eq!(data.len(), len, "buffer handed back");
+                        canceled += 1;
+                        None
                     }
-                    Err(pending) => still.push(pending),
-                }
-            }
-            sends = still;
-            if let Some(request) = recv.take() {
-                match request.try_complete() {
-                    Ok(Err(failed)) => {
-                        assert_eq!(failed.status, Status::CANCELED);
-                        assert_eq!(failed.data.len(), 64);
-                        recv_back = true;
-                    }
-                    Ok(Ok(_)) => panic!("unmatched receive must not succeed"),
-                    Err(pending) => recv = Some(pending),
-                }
-            }
-            if let Some(request) = close.take() {
-                match request.try_complete() {
-                    Ok(_status) => closed = true,
-                    Err(pending) => close = Some(pending),
-                }
-            }
+                    Ok(Ok(_)) => panic!("send without a receiver must not succeed"),
+                    Err(pending) => Some(pending),
+                })
+                .collect();
         }
-        assert_eq!(sent_back, n, "every send handed its buffer back");
-        eprintln!("force-close send statuses: {statuses:?}");
-        assert!(recv_back, "canceled receive handed its buffer back");
-        assert!(closed, "forced close completed");
+        assert_eq!(canceled, n, "every send canceled by close(Force)");
+    }
+
+    /// UCX refuses `close(Force)` on an endpoint without peer error handling
+    /// before consuming it: the endpoint comes back intact and closes
+    /// normally afterwards. Runs on every transport.
+    #[test]
+    fn force_close_without_peer_returns_endpoint() {
+        let (_context, worker) = close_fixture();
+        let ep = self_ep(&worker, crate::ErrorHandlerMode::None).expect("endpoint");
+        let error = match ep.close(&worker, crate::ep::CloseMode::Force) {
+            Err(error) => error,
+            Ok(_) => panic!("UCX must refuse Force without peer error handling"),
+        };
+        assert_eq!(error.status, Status::INVALID_PARAM);
+        let ep = error.ep.expect("endpoint handed back, not leaked");
+        let close = ep
+            .close(&worker, crate::ep::CloseMode::Flush)
+            .expect("graceful close");
+        match close {
+            Completion::Immediate(()) => {}
+            Completion::Pending(mut request) => {
+                let mut done = false;
+                for _ in 0..1_000_000 {
+                    worker.progress();
+                    match request.try_complete() {
+                        Ok(result) => {
+                            result.unwrap_or_else(|failed| panic!("close: {failed}"));
+                            done = true;
+                            break;
+                        }
+                        Err(still) => request = still,
+                    }
+                }
+                assert!(done, "close did not complete");
+            }
+        };
+    }
+
+    /// An endpoint whose worker was destroyed must not accept a new worker
+    /// that happens to reuse the old `ucp_worker_h` address.
+    #[test]
+    fn endpoint_rejects_worker_created_after_its_own_died() {
+        let (mut context, worker) = close_fixture();
+        let old_handle = worker.handle;
+        let ep = self_ep(&worker, crate::ErrorHandlerMode::None).expect("endpoint");
+        drop(worker);
+        let fresh = context
+            .worker_create(&crate::worker::ParamsBuilder::new().build())
+            .expect("fresh worker");
+        eprintln!("handle reused: {}", fresh.handle == old_handle);
+        assert!(matches!(
+            ep.flush(&fresh, &RequestParamBuilder::new().build()),
+            Err(status) if status == Status::INVALID_PARAM
+        ));
+        let error = match ep.close(&fresh, crate::ep::CloseMode::Flush) {
+            Err(error) => error,
+            Ok(_) => panic!("close on a different worker must fail"),
+        };
+        assert!(error.ep.is_some(), "endpoint handed back");
+        // Dropping it skips UCX: its worker is dead.
     }
 
     #[test]
