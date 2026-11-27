@@ -11,6 +11,8 @@
   with `UCS_ERR_NO_MEMORY`.
 - **Breaking, safety:** `Worker::am_recv_data` is now `unsafe`. It accepted any
   `NonNull` pointer as a UCX descriptor from safe code.
+- **Fix (#219):** `MemHandle::query` sets `field_mask`; it previously returned
+  zero address and length for every mapped region.
 - **Breaking (#207, part of #211):** all 20 safe AMO entry points own their
   operand and reply storage (new module `rma::amo`).
   - Fetching AMOs (`amo_fadd*`, `amo_fxor*`, `amo_fswap*`, `amo_fcswap*`, 32/64)

@@ -447,6 +447,10 @@ impl Worker {
     /// `UCS_INPROGRESS` (or this is called from inside it), and the descriptor
     /// must not have been passed to this method or to `ucp_am_data_release`
     /// already. UCX dereferences it as its internal descriptor.
+    ///
+    /// For a rendezvous descriptor, `buffer.len()` must be at least the
+    /// `length` the AM callback reported (UCX asserts it covers the message),
+    /// or zero to drop the payload.
     pub unsafe fn am_recv_data<D: crate::OwnedBufMut>(
         &self,
         data_desc: NonNull<std::ffi::c_void>,

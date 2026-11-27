@@ -91,8 +91,9 @@ pub struct AmHandler {
     worker: ucp_worker_h,
 }
 
-// SAFETY: `worker` is only dereferenced by UCX, from the trampoline and the
-// rendezvous completion callback, which run in that worker's progress context.
+// SAFETY: `worker` is only passed to UCX (`ucp_am_recv_data_nbx` in
+// `am_rndv_start`, called from the trampoline in that worker's progress
+// context); Rust never dereferences it.
 unsafe impl Send for AmHandler {}
 unsafe impl Sync for AmHandler {}
 
@@ -203,7 +204,11 @@ fn am_rndv_start(
         let recv = unsafe { Box::from_raw(recv) };
         let _ = call_handler(&recv.handler, &recv.header, &recv.buffer);
     } else if crate::request::status_ptr_is_err(ptr) {
-        // Never started: no callback. The data is lost; UCX owns `desc`.
+        // Failed to post: no callback, and the data is lost. UCX has already
+        // marked the descriptor RECV_STARTED (ucp_am.c), so it keeps it and
+        // sends no ATS: the sender may hang and the descriptor leaks. That is
+        // a UCX limitation; no callback status avoids it (an error return
+        // trips UCX's assert), so OK is still the right return below.
         // SAFETY: not handed to UCX as a pending request.
         drop(unsafe { Box::from_raw(recv) });
     }
@@ -211,8 +216,8 @@ fn am_rndv_start(
     // destroyed first and UCX never completes it, `recv` leaks (never freed
     // while UCX may still write the buffer).
     //
-    // recv_data was called: UCX now tracks the descriptor itself and ignores
-    // anything but OK here (ucp_am.c, RNDV RTS handling).
+    // recv_data was called: UCX owns the descriptor and expects OK here
+    // (ucp_am.c, RNDV RTS handling); do not return an error status.
     Status::OK
 }
 
@@ -275,6 +280,9 @@ impl Worker {
     /// buffer cannot be allocated the sender completes with
     /// `UCS_ERR_NO_MEMORY`. A rendezvous receive still pending when the worker
     /// is destroyed leaks its buffer rather than freeing memory UCX may write.
+    /// If a rendezvous receive completes with an error, the closure is not
+    /// called for that message (there is no way to report it through the safe
+    /// signature), so a receiver waiting for it will not see it.
     /// Use [`Self::am_unregister`] to remove the handler again.
     pub fn am_register_handler<F>(
         &mut self,
