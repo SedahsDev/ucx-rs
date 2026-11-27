@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Breaking (#207, part of #211):** all 20 safe AMO entry points own their
+  operand and reply storage (new module `rma::amo`).
+  - Fetching AMOs (`amo_fadd*`, `amo_fxor*`, `amo_fswap*`, `amo_fcswap*`, 32/64)
+    no longer take `reply: &mut T`; they return
+    `Completion<T, FetchAmoRequest<'w, T>>` with the old remote value
+    (`FetchAmoCompletion<'w, T>`).
+  - Non-fetching AMOs (`amo_add*`, `amo_xor*`, `amo_and*`, `amo_or*`,
+    `amo_swap*`, `amo_cswap*`) take `&worker` as a new first argument and
+    return `Completion<(), AmoRequest<'w>>` (`AmoCompletion<'w>`).
+  - The old `FetchAmoRequest<'w, 'a, T>` borrowing guard and the
+    callback-based `with_amo_reply` helper are removed.
+  - **Fix:** every AMO passed UCX a pointer to its by-value operand on the
+    callee's stack. UCX reads the operand until completion (`ucp_atomic_op_nbx`:
+    "The user should not modify any part of the buffer ... until the operation
+    completes"), so a deferred AMO read a dead stack slot. Operand and reply now
+    live in one heap allocation owned by the request.
+  - Fetch-CSWAP semantics from #196 are unchanged (swap value in the reply
+    buffer on input, old value on output). Tests added for `amo_fcswap32/64`.
+
 - **Breaking (#206, part of #211):** `Ep::am_send(&worker, id, header, data,
   &params)` takes ownership of the header and payload (`OwnedBuf`) and returns
   `Completion<(H, P), OwningRequest<'w, (H, P)>>`; `AmRequest` is removed.
