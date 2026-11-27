@@ -43,6 +43,11 @@ Behaviors to know:
 
 ### Changes
 
+- **CI (#131, #113):** the RMA smoke-test job now builds UCX 1.20.0 from the
+  release tarball (sha256-pinned) and caches `/opt/ucx-1.20.0` with
+  `actions/cache`, instead of installing Ubuntu 24.04's `libucx-dev` (1.16.0,
+  below the supported 1.19 minimum). A step checks `ucx_info -v` reports 1.20.0
+  before the test runs. Every CI job that runs tests now uses UCX 1.20 or 1.22.
 - **Build, CI (#132, #113):** `UCX_GENERATE_BINDINGS=1` is now strict, and CI's
   Tier 1 job (UCX 1.22.0) builds, lints and tests with it.
   - The UCX version guard never ran before. Its C probe could not compile: it

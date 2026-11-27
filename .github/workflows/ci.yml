@@ -80,18 +80,67 @@ jobs:
         run: cargo check --locked --all-targets
 
   rma_smoke:
-    name: RMA smoke test (self TLS)
+    name: RMA smoke test (UCX 1.20.0, self TLS)
     runs-on: ubuntu-24.04
+    env:
+      # Inside the supported range (build.rs: 1.19 through 1.22). Ubuntu 24.04's
+      # apt libucx-dev is 1.16.0, below it (#113, #131). Not named UCX_*: UCX
+      # warns about every unrecognized UCX_* variable in the environment.
+      SMOKE_UCX_VER: 1.20.0
+      SMOKE_UCX_SHA256: 7c8a6093cada179aa1d851b83625e3b25ed5658966e309de5118c27a038c7ef9
+      # Bump when the configure flags below change, so a stale build is not restored.
+      SMOKE_UCX_BUILD_REV: 2
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install UCX
+      # The cache step restores into /opt as the runner user, so the prefix must
+      # exist and be owned by it first.
+      - name: Prepare the UCX prefix
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libucx-dev
+          sudo mkdir -p "/opt/ucx-$SMOKE_UCX_VER"
+          sudo chown "$(id -u):$(id -g)" "/opt/ucx-$SMOKE_UCX_VER"
+
+      - name: Cache UCX ${{ env.SMOKE_UCX_VER }}
+        id: ucx-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/ucx-${{ env.SMOKE_UCX_VER }}
+          key: ucx-${{ runner.os }}-${{ runner.arch }}-${{ env.SMOKE_UCX_VER }}-${{ env.SMOKE_UCX_SHA256 }}-rev${{ env.SMOKE_UCX_BUILD_REV }}
+
+      # Every optional external library UCX would otherwise auto-detect is
+      # disabled, so the cached install depends on nothing beyond libc and a
+      # cache miss on a different runner image builds the same thing. The smoke
+      # test only needs `self`.
+      - name: Build UCX ${{ env.SMOKE_UCX_VER }} from source (cache miss)
+        if: steps.ucx-cache.outputs.cache-hit != 'true'
+        shell: bash -eo pipefail {0}
+        run: |
+          cd /tmp
+          wget -q "https://github.com/openucx/ucx/releases/download/v${SMOKE_UCX_VER}/ucx-${SMOKE_UCX_VER}.tar.gz"
+          echo "${SMOKE_UCX_SHA256}  ucx-${SMOKE_UCX_VER}.tar.gz" | sha256sum -c -
+          tar -xzf "ucx-${SMOKE_UCX_VER}.tar.gz"
+          cd "ucx-${SMOKE_UCX_VER}"
+          ./configure --prefix="/opt/ucx-${SMOKE_UCX_VER}" --without-java --without-go \
+            --without-cuda --without-rocm --without-verbs --without-rdmacm \
+            --without-knem --without-xpmem --without-fuse3 --without-bfd \
+            --without-ze --without-gdrcopy --without-efa --disable-doxygen-doc
+          make -j"$(nproc)"
+          make install
+
+      - name: Set UCX_PREFIX to ${{ env.SMOKE_UCX_VER }}
+        run: echo "UCX_PREFIX=/opt/ucx-$SMOKE_UCX_VER" >> "$GITHUB_ENV"
+
+      # Fail fast if the restored or built install is not the expected version.
+      # build.rs adds an rpath to $UCX_PREFIX/lib, so the test binaries load this
+      # install, not a system libucx.
+      - name: Check the UCX version
+        shell: bash -eo pipefail {0}
+        run: |
+          "$UCX_PREFIX/bin/ucx_info" -v | tee /tmp/ucx_info.txt
+          grep -q "Library version: ${SMOKE_UCX_VER}" /tmp/ucx_info.txt
 
       - name: Build the RMA test
         run: cargo test --locked --lib --no-run
