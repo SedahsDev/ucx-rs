@@ -66,16 +66,19 @@ fn main() {
     wait_request(&worker, flush, |request| request.check_finished());
     // The AM send owns its (empty) header and payload until it completes.
     if let Completion::Pending(mut request) = operation {
-        loop {
+        let mut completed = false;
+        for _ in 0..1_000_000 {
             match request.try_complete() {
                 Ok(result) => {
                     let _ = result.expect("active-message send");
+                    completed = true;
                     break;
                 }
                 Err(still) => request = still,
             }
             worker.progress();
         }
+        assert!(completed, "active-message send timed out");
     }
     ep.close(&worker, 0).expect("close endpoint");
 }

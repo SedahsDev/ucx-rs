@@ -424,16 +424,23 @@ impl Worker {
     /// UCX takes ownership of `data_desc` after this call, including when the
     /// operation fails. The filled buffer comes back from
     /// [`crate::Completion::Immediate`] or [`crate::OwningRequest::try_complete`].
-    /// `params` is handled as in [`Ep::am_send`]: flags, callback, and user
-    /// data apply; datatype, reply buffer, receive info, memory handle, memory
-    /// type, and request allocation are controlled here.
+    /// `params` contributes flags only: a callback or user data is ignored
+    /// (the receive member of UCX's callback union has a different signature
+    /// than `RequestParamBuilder::send_callback`), and datatype, reply buffer,
+    /// receive info, memory handle, memory type, and request allocation are
+    /// controlled here. The received length is not reported; use the `length`
+    /// passed to the AM callback, and size `buffer` to it (a zero-length
+    /// buffer on a rendezvous descriptor makes UCX drop the payload).
+    ///
+    /// Do not drop a pending completion inside the AM callback: its `Drop`
+    /// fail-safe progresses the worker.
     pub fn am_recv_data<D: crate::OwnedBufMut>(
         &self,
         data_desc: NonNull<std::ffi::c_void>,
         mut buffer: D,
         params: &RequestParam,
     ) -> Result<crate::Completion<D, crate::OwningRequest<'_, D>>, Status> {
-        let raw = crate::completion::owned_op_param(params);
+        let raw = crate::completion::owned_recv_param(params);
         // SAFETY: the request (if any) writes only into `buffer`'s stable
         // storage, which the returned value owns until UCX is done.
         unsafe {

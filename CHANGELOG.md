@@ -12,6 +12,9 @@
     request, so safe code could free the buffer while UCX wrote into it.
   - `OwnedBuf` is now also implemented for `&'static [u8]` and
     `&'static [u8; N]` (read-only, never moved or freed).
+  - `am_recv_data` takes flags only from `params` (callback/user data are
+    ignored for the same union-signature reason as tag/stream receives) and
+    does not report the received length; use the AM callback's `length`.
   - Known issue: the safe AM handler mishandles rendezvous messages (#214).
 
 - **Breaking (#205, part of #211):** tag and stream operations take ownership
