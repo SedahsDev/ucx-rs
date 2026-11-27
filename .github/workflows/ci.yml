@@ -109,6 +109,14 @@ jobs:
           cargo test --locked --lib rma::ep_ops::tests::rma_self_put_get_round_trip -- --exact --test-threads=1 --nocapture 2>&1 | tee /tmp/rma_smoke.out
           grep -q "test result: ok. 1 passed" /tmp/rma_smoke.out
 
+      # #209: the owned-data model end to end (many op kinds, one shared
+      # progress loop, subset cancel, flush, close) on the self transport.
+      - name: Run the owned_pipeline example with UCX_TLS=self
+        env:
+          UCX_TLS: self
+          RUST_BACKTRACE: 1
+        run: cargo run --locked --example owned_pipeline
+
       - name: Show the UCX log
         if: always()
         run: tail -n 80 /tmp/ucx_rma_smoke.log || echo "no UCX log written"

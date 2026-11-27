@@ -388,7 +388,8 @@ impl<'w, D> OwningRequest<'w, D> {
     /// Ask UCX to cancel this request. Never progresses or frees.
     ///
     /// The outcome is observed through [`Self::try_complete`]: usually
-    /// `UCS_ERR_CANCELED`, or success if the request was already finishing.
+    /// `UCS_ERR_CANCELED`, or the request's normal outcome if cancel did not
+    /// apply to it (an already-matched receive keeps its transfer result).
     /// Calling this more than once is a no-op.
     ///
     /// UCX (1.18–1.22) only acts on **tag receives**: a software tag receive
