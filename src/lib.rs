@@ -26,10 +26,75 @@
 //! `ThreadMode::Single`, it is undefined behavior. See `THREADING.md` §2.1.
 //! Use `Worker::arm()` and `Worker::get_efd()` to wake the owning loop instead
 //! of polling concurrently from multiple threads.
-//! Operations and their borrowed buffers must also remain valid until UCX says
-//! they have completed. Always drop/close endpoints before their `Worker`.
+//! Operations own their buffers until UCX has completed them (see the next
+//! section). Always drop/close endpoints before their `Worker`.
 //! `Ep::Drop` checks the runtime `worker_alive` guard and skips a late cleanup as
 //! a safety net; that guard is not a license to violate the required drop order.
+//!
+//! # Owned-data model
+//!
+//! Non-blocking operations take **ownership** of their data and return a
+//! [`Completion`]: `Immediate(data)` when UCX finished inside the call, or
+//! `Pending(request)`, an [`OwningRequest`] (or a typed wrapper such as
+//! [`TagRecvRequest`] or [`rma::FetchAmoRequest`]) that holds the data until
+//! the operation has really finished. Flush, close and modify are the
+//! data-less case ([`ep::OpCompletion`]). This replaces the old borrowing
+//! wrappers (#112): a borrowed buffer could be dropped while UCX was still
+//! using it, and freeing an in-flight request does not stop the operation
+//! (#68).
+//!
+//! The rules:
+//!
+//! * **Request lifetime ⊆ worker lifetime.** Requests borrow the worker
+//!   (`&'w Worker`), so a request can't outlive it. Likewise
+//!   [`rma::RemoteKey`] must be dropped before the endpoint it was unpacked on
+//!   (UCX's destroy order).
+//! * **Progress many requests together.** There is no public single-request
+//!   `wait`. Call `worker.progress()`, then `try_complete` every request in
+//!   flight, and keep the ones that hand themselves back. UCX already
+//!   serializes `ucp_worker_progress` internally. See
+//!   `examples/owned_pipeline.rs`:
+//!
+//!   ```ignore
+//!   while !pending.is_empty() {
+//!       worker.progress();
+//!       let mut still = Vec::with_capacity(pending.len());
+//!       for request in pending.drain(..) {
+//!           match request.try_complete() {
+//!               Ok(result) => handle(result), // data back, or Failed { status, data }
+//!               Err(request) => still.push(request),
+//!           }
+//!       }
+//!       pending = still;
+//!   }
+//!   ```
+//! * **Never progress the worker, and never drop a pending request, inside a
+//!   UCX callback** (AM handlers, send/receive callbacks, listener callbacks).
+//!   A request's `Drop` progresses the worker.
+//! * **`cancel()` only marks.** The request completes later, from a progress
+//!   call, and `try_complete` returns its data in [`Failed`] (status
+//!   `UCS_ERR_CANCELED`). In UCX 1.18–1.22 only tag receives honor cancel; to
+//!   abort an endpoint's operations, close it with
+//!   [`ep::CloseMode::Force`]. Force requires an endpoint created with
+//!   [`ErrorHandlerMode::Peer`], which `self`/`shm` don't support.
+//! * **`Drop` is a bounded fail-safe, not a wait.** Dropping a pending request
+//!   cancels it and progresses the worker up to [`DROP_PROGRESS_BUDGET`]
+//!   times. If it still hasn't completed, the request **and its data are
+//!   leaked** rather than freed while UCX may touch them. Destroying the
+//!   worker afterwards can then trip UCX's own assertions (for example the
+//!   registration-cache `refcount == 0` check, SIGABRT). Drain your requests
+//!   instead of relying on `Drop`.
+//! * **Stable addresses only.** Buffers implement [`OwnedBuf`] /
+//!   [`OwnedBufMut`]: heap storage (`Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`)
+//!   or `'static` data, whose address doesn't change when the request moves.
+//! * **Flush scope.** A flush ([`ep::Ep::flush`], [`worker::Worker::flush`])
+//!   covers RMA and AMO operations at both ends. It does not wait for an
+//!   unmatched rendezvous tag send, which is only a request-to-send until a
+//!   receiver matches it.
+//!
+//! Requests are `!Send` and `!Sync`: complete them on the thread that drives
+//! the worker. With [`worker::MtWorker`], post, progress and complete inside
+//! one `with_worker` closure (see its docs).
 //!
 
 #![allow(unused_imports)]

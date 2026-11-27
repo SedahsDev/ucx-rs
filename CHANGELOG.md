@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Migration: owned-data completion (#211)
+
+Every non-blocking operation now takes ownership of its data and returns
+`Completion<D, R>`. That's `Immediate(data)`, or `Pending(request)`, where the
+request owns the data until UCX completes it. Drive all your requests with one
+shared loop: `worker.progress()`, then `try_complete` each request in flight.
+See the crate docs ("Owned-data model") and `examples/owned_pipeline.rs`. This
+replaces the borrowing guards from #112, whose buffers could be freed while UCX
+was still using them. Freeing an in-flight request does not stop the operation
+(#68).
+
+| Before | After |
+|---|---|
+| `Ep::rma_put(&[u8], ..)` / `rma_get(&mut [u8], ..)` → `RmaRequest` | `rma_put(&worker, D: OwnedBuf, ..)` / `rma_get(&worker, D: OwnedBufMut, ..)` → `Completion<D, OwningRequest<'w, D>>` (#204) |
+| `Ep::tag_send(&[u8], ..)`, `Worker::tag_recv(&mut [u8], ..)` → `TagRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
+| `Ep::stream_send` / `stream_recv` → `StreamRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, usize), StreamRecvRequest>` (#205) |
+| `Ep::am_send(&[u8], &[u8], ..)` → `AmRequest` | `am_send(&worker, id, H, P, ..)` → `Completion<(H, P), OwningRequest>` (#206) |
+| `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → owned completion (#206, #214) |
+| fetch AMOs with a borrowed reply (`FetchAmoRequest<'w, 'a, T>`) | `amo_f*` → `FetchAmoCompletion<'w, T>`, which returns the old value; no-fetch AMOs → `AmoCompletion<'w>` (#207) |
+| `Ep::flush(&params)`, `Worker::flush(&params)` → `Pending` | `Ep::flush(&worker, &params)`, `Worker::flush(&params)` → `ep::OpCompletion<'w>` (#208) |
+| `Ep::close(&worker, flags: u32)` → `Pending` | `Ep::close(&worker, CloseMode::{Flush, Force})` → `Result<OpCompletion, CloseError>` (#208) |
+| `Ep::modify(&params)` | `Ep::modify(&worker, &params)` → `OpCompletion` (#208) |
+| `Pending::wait`, `Worker::wait_request`, `Worker::cancel_request`, `MtWorker::{wait_request, cancel_request, flush}`, guard `free()` methods | **removed**. Drive the shared loop instead. `OwningRequest::cancel` marks a request canceled. With `MtWorker`, complete requests inside `with_worker` using `w.progress()` (#208) |
+| `Ep::disconnect_nb` | **removed**. Use `close(&worker, CloseMode::Force)` (#208) |
+| `RemoteKey` | `RemoteKey<'ep>` borrows its endpoint. Drop the key before closing the endpoint (#223) |
+| `Pending` | kept only for the `unsafe` raw-pointer APIs (`rma_put_ptr`, `tag_send_ptr`, ...) |
+
+Behaviors to know:
+- **`cancel()` only marks.** The request completes later, from progress, with `UCS_ERR_CANCELED`, and gives its data back in `Failed`. UCX 1.18–1.22 honors cancel only for tag receives. Use `CloseMode::Force` to abort an endpoint's operations.
+- **`CloseMode::Force` needs `ErrorHandlerMode::Peer`.** `self`/`shm` can't provide it (`UCS_ERR_UNREACHABLE`). Without Peer, UCX refuses Force and the endpoint comes back in `CloseError::ep`.
+- **`Drop` of a pending request** cancels it and progresses up to `DROP_PROGRESS_BUDGET` times, then **leaks** the request and its data. Destroying the worker after such a leak can hit UCX's own assertions (SIGABRT). Drain requests instead of dropping them.
+- **Never progress the worker, or drop a pending request, from a UCX callback.**
+- **Flush covers RMA and AMO**, not unmatched rendezvous tag sends.
+- **Buffers must have stable addresses** (`OwnedBuf`: `Vec<u8>`, `Box<[u8]>`, `Box<[u8; N]>`, `'static` data).
+
+### Changes
+
+- **Docs (#209):** crate-level "Owned-data model" section, `examples/owned_pipeline.rs`
+  (many operation kinds, one shared progress loop, subset cancel, flush, close),
+  refreshed `THREADING.md`, this migration section, the README example fixed
+  (`Config::default()` does not exist), and a broken intra-doc link fixed.
 - **Breaking (#208, part of #211):** flush, close and modify are owned,
   data-less operations returning `ep::OpCompletion<'w>` (= `Completion<(),
   OwningRequest<'w, ()>>`), driven by the same shared progress loop as data

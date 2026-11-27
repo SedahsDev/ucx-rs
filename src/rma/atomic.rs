@@ -182,7 +182,7 @@ pub unsafe fn ep_rkey_unpack(
 ///
 /// **IMPORTANT:** The underlying UCX C function `ucp_rkey_ptr` does not validate
 /// null rkey handles — it will segfault instead of returning an error. Always
-/// use [`RemoteKey::remote_ptr`] for safe access.
+/// use [`RemoteKey::rkey_ptr`] for safe access.
 pub unsafe fn rkey_ptr(rkey: &RemoteKey, raddr: u64) -> Result<*mut std::os::raw::c_void, Status> {
     if rkey.handle.is_null() {
         return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
