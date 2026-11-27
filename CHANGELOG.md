@@ -53,7 +53,10 @@ Behaviors to know:
     "UCP API version is incompatible" warning, which is correct now. No UCX
     item was added or removed. The only other difference is glibc's
     `_IO_FILE`, which is now opaque, as `build.rs` already asks of bindgen
-    (its `_flags2` bitfield accessors are gone).
+    (its `_flags2` bitfield accessors are gone). `build.rs` now passes the
+    crate's `rust-version` to bindgen (`.rust_target(..)`). bindgen 0.72
+    otherwise targets the newest stable and writes `unsafe extern "C"`
+    blocks, which the MSRV (1.78) rejects.
   - `completion::tests::immediate_send_returns_data` runs everywhere again.
     #232 skipped it unless the environment's `UCX_TLS` started with `self`,
     so it no longer ran in CI. It now pins `UCX_TLS=self,cuda_copy` through

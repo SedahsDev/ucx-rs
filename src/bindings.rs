@@ -480,10 +480,10 @@ pub enum ucs_memory_type {
     UCS_MEMORY_TYPE_LAST = 9,
 }
 pub use self::ucs_memory_type as ucs_memory_type_t;
-unsafe extern "C" {
+extern "C" {
     pub static mut ucs_memory_type_names: [*const ::std::os::raw::c_char; 0usize];
 }
-unsafe extern "C" {
+extern "C" {
     pub static mut ucs_memory_type_descs: [*const ::std::os::raw::c_char; 0usize];
 }
 #[repr(i8)]
@@ -525,7 +525,7 @@ pub enum ucs_status_t {
     UCS_ERR_LAST = -100,
 }
 pub type ucs_status_ptr_t = *mut ::std::os::raw::c_void;
-unsafe extern "C" {
+extern "C" {
     pub fn ucs_status_string(status: ucs_status_t) -> *const ::std::os::raw::c_char;
 }
 #[repr(C)]
@@ -698,7 +698,7 @@ const _: () = {
     ["Offset of field: fd_set::__fds_bits"][::std::mem::offset_of!(fd_set, __fds_bits) - 0usize];
 };
 pub type fd_mask = __fd_mask;
-unsafe extern "C" {
+extern "C" {
     pub fn select(
         __nfds: ::std::os::raw::c_int,
         __readfds: *mut fd_set,
@@ -707,7 +707,7 @@ unsafe extern "C" {
         __timeout: *mut timeval,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn pselect(
         __nfds: ::std::os::raw::c_int,
         __readfds: *mut fd_set,
@@ -1196,7 +1196,7 @@ const _: () = {
     ["Offset of field: cmsghdr::__cmsg_data"]
         [::std::mem::offset_of!(cmsghdr, __cmsg_data) - 16usize];
 };
-unsafe extern "C" {
+extern "C" {
     pub fn __cmsg_nxthdr(__mhdr: *mut msghdr, __cmsg: *mut cmsghdr) -> *mut cmsghdr;
 }
 pub const SCM_RIGHTS: _bindgen_ty_2 = _bindgen_ty_2::SCM_RIGHTS;
@@ -1299,14 +1299,14 @@ pub enum _bindgen_ty_3 {
     SHUT_WR = 1,
     SHUT_RDWR = 2,
 }
-unsafe extern "C" {
+extern "C" {
     pub fn socket(
         __domain: ::std::os::raw::c_int,
         __type: ::std::os::raw::c_int,
         __protocol: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn socketpair(
         __domain: ::std::os::raw::c_int,
         __type: ::std::os::raw::c_int,
@@ -1314,35 +1314,35 @@ unsafe extern "C" {
         __fds: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn bind(
         __fd: ::std::os::raw::c_int,
         __addr: *const sockaddr,
         __len: socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getsockname(
         __fd: ::std::os::raw::c_int,
         __addr: *mut sockaddr,
         __len: *mut socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn connect(
         __fd: ::std::os::raw::c_int,
         __addr: *const sockaddr,
         __len: socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getpeername(
         __fd: ::std::os::raw::c_int,
         __addr: *mut sockaddr,
         __len: *mut socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn send(
         __fd: ::std::os::raw::c_int,
         __buf: *const ::std::os::raw::c_void,
@@ -1350,7 +1350,7 @@ unsafe extern "C" {
         __flags: ::std::os::raw::c_int,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn recv(
         __fd: ::std::os::raw::c_int,
         __buf: *mut ::std::os::raw::c_void,
@@ -1358,7 +1358,7 @@ unsafe extern "C" {
         __flags: ::std::os::raw::c_int,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn sendto(
         __fd: ::std::os::raw::c_int,
         __buf: *const ::std::os::raw::c_void,
@@ -1368,7 +1368,7 @@ unsafe extern "C" {
         __addr_len: socklen_t,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn recvfrom(
         __fd: ::std::os::raw::c_int,
         __buf: *mut ::std::os::raw::c_void,
@@ -1378,21 +1378,21 @@ unsafe extern "C" {
         __addr_len: *mut socklen_t,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn sendmsg(
         __fd: ::std::os::raw::c_int,
         __message: *const msghdr,
         __flags: ::std::os::raw::c_int,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn recvmsg(
         __fd: ::std::os::raw::c_int,
         __message: *mut msghdr,
         __flags: ::std::os::raw::c_int,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getsockopt(
         __fd: ::std::os::raw::c_int,
         __level: ::std::os::raw::c_int,
@@ -1401,7 +1401,7 @@ unsafe extern "C" {
         __optlen: *mut socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn setsockopt(
         __fd: ::std::os::raw::c_int,
         __level: ::std::os::raw::c_int,
@@ -1410,27 +1410,27 @@ unsafe extern "C" {
         __optlen: socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn listen(__fd: ::std::os::raw::c_int, __n: ::std::os::raw::c_int)
-    -> ::std::os::raw::c_int;
+        -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn accept(
         __fd: ::std::os::raw::c_int,
         __addr: *mut sockaddr,
         __addr_len: *mut socklen_t,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn shutdown(
         __fd: ::std::os::raw::c_int,
         __how: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn sockatmark(__fd: ::std::os::raw::c_int) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn isfdtype(
         __fd: ::std::os::raw::c_int,
         __fdtype: ::std::os::raw::c_int,
@@ -1467,7 +1467,7 @@ pub enum ucs_async_mode_t {
     UCS_ASYNC_MODE_POLL = 3,
     UCS_ASYNC_MODE_LAST = 4,
 }
-unsafe extern "C" {
+extern "C" {
     pub static mut ucs_async_mode_names: [*const ::std::os::raw::c_char; 0usize];
 }
 #[repr(u32)]
@@ -1932,27 +1932,27 @@ const _: () = {
         [::std::mem::offset_of!(ucp_listener_accept_handler, arg) - 8usize];
 };
 pub type ucp_listener_accept_handler_t = ucp_listener_accept_handler;
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_request_is_completed(request: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_request_release(request: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_ep_destroy(ep: ucp_ep_h);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_disconnect_nb(ep: ucp_ep_h) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_request_test(
         request: *mut ::std::os::raw::c_void,
         info: *mut ucp_tag_recv_info_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_rkey_pack(
         context: ucp_context_h,
@@ -1961,18 +1961,18 @@ unsafe extern "C" {
         size_p: *mut usize,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_rkey_buffer_release(rkey_buffer: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_flush(ep: ucp_ep_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_flush(worker: ucp_worker_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_put(
         ep: ucp_ep_h,
@@ -1982,7 +1982,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_get(
         ep: ucp_ep_h,
@@ -1992,7 +1992,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_add32(
         ep: ucp_ep_h,
@@ -2001,7 +2001,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_add64(
         ep: ucp_ep_h,
@@ -2010,7 +2010,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_fadd32(
         ep: ucp_ep_h,
@@ -2020,7 +2020,7 @@ unsafe extern "C" {
         result: *mut u32,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_fadd64(
         ep: ucp_ep_h,
@@ -2030,7 +2030,7 @@ unsafe extern "C" {
         result: *mut u64,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_swap32(
         ep: ucp_ep_h,
@@ -2040,7 +2040,7 @@ unsafe extern "C" {
         result: *mut u32,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_swap64(
         ep: ucp_ep_h,
@@ -2050,7 +2050,7 @@ unsafe extern "C" {
         result: *mut u64,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_cswap32(
         ep: ucp_ep_h,
@@ -2061,7 +2061,7 @@ unsafe extern "C" {
         result: *mut u32,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_cswap64(
         ep: ucp_ep_h,
@@ -2072,11 +2072,11 @@ unsafe extern "C" {
         result: *mut u64,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_modify_nb(ep: ucp_ep_h, params: *const ucp_ep_params_t) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_get_address(
         worker: ucp_worker_h,
@@ -2084,11 +2084,11 @@ unsafe extern "C" {
         address_length_p: *mut usize,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_close_nb(ep: ucp_ep_h, mode: ::std::os::raw::c_uint) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_flush_nb(
         ep: ucp_ep_h,
@@ -2096,7 +2096,7 @@ unsafe extern "C" {
         cb: ucp_send_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_set_am_handler(
         worker: ucp_worker_h,
@@ -2106,7 +2106,7 @@ unsafe extern "C" {
         flags: u32,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_am_send_nb(
         ep: ucp_ep_h,
@@ -2118,7 +2118,7 @@ unsafe extern "C" {
         flags: ::std::os::raw::c_uint,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_send_nb(
         ep: ucp_ep_h,
@@ -2129,7 +2129,7 @@ unsafe extern "C" {
         flags: ::std::os::raw::c_uint,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_recv_nb(
         ep: ucp_ep_h,
@@ -2141,7 +2141,7 @@ unsafe extern "C" {
         flags: ::std::os::raw::c_uint,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_send_nb(
         ep: ucp_ep_h,
@@ -2152,7 +2152,7 @@ unsafe extern "C" {
         cb: ucp_send_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_send_nbr(
         ep: ucp_ep_h,
@@ -2163,7 +2163,7 @@ unsafe extern "C" {
         req: *mut ::std::os::raw::c_void,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_send_sync_nb(
         ep: ucp_ep_h,
@@ -2174,7 +2174,7 @@ unsafe extern "C" {
         cb: ucp_send_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_recv_nb(
         worker: ucp_worker_h,
@@ -2186,7 +2186,7 @@ unsafe extern "C" {
         cb: ucp_tag_recv_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_recv_nbr(
         worker: ucp_worker_h,
@@ -2198,7 +2198,7 @@ unsafe extern "C" {
         req: *mut ::std::os::raw::c_void,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_msg_recv_nb(
         worker: ucp_worker_h,
@@ -2209,7 +2209,7 @@ unsafe extern "C" {
         cb: ucp_tag_recv_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_put_nbi(
         ep: ucp_ep_h,
@@ -2219,7 +2219,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_put_nb(
         ep: ucp_ep_h,
@@ -2230,7 +2230,7 @@ unsafe extern "C" {
         cb: ucp_send_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_get_nbi(
         ep: ucp_ep_h,
@@ -2240,7 +2240,7 @@ unsafe extern "C" {
         rkey: ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_get_nb(
         ep: ucp_ep_h,
@@ -2260,7 +2260,7 @@ pub enum ucp_atomic_post_op_t {
     UCP_ATOMIC_POST_OP_XOR = 3,
     UCP_ATOMIC_POST_OP_LAST = 4,
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_post(
         ep: ucp_ep_h,
@@ -2282,7 +2282,7 @@ pub enum ucp_atomic_fetch_op_t {
     UCP_ATOMIC_FETCH_OP_FXOR = 5,
     UCP_ATOMIC_FETCH_OP_LAST = 6,
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_fetch_nb(
         ep: ucp_ep_h,
@@ -2295,7 +2295,7 @@ unsafe extern "C" {
         cb: ucp_send_callback_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_flush_nb(
         worker: ucp_worker_h,
@@ -2317,7 +2317,7 @@ pub enum ucs_thread_mode_t {
     UCS_THREAD_MODE_MULTI = 2,
     UCS_THREAD_MODE_LAST = 3,
 }
-unsafe extern "C" {
+extern "C" {
     pub static mut ucs_thread_mode_names: [*const ::std::os::raw::c_char; 0usize];
 }
 pub type ucs_cpu_mask_t = ::std::os::raw::c_ulong;
@@ -2474,25 +2474,25 @@ const _: () = {
 pub type cookie_io_functions_t = _IO_cookie_io_functions_t;
 pub type va_list = __gnuc_va_list;
 pub type fpos_t = __fpos_t;
-unsafe extern "C" {
+extern "C" {
     pub static mut stdin: *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub static mut stdout: *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub static mut stderr: *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn remove(__filename: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn rename(
         __old: *const ::std::os::raw::c_char,
         __new: *const ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn renameat(
         __oldfd: ::std::os::raw::c_int,
         __old: *const ::std::os::raw::c_char,
@@ -2500,71 +2500,71 @@ unsafe extern "C" {
         __new: *const ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fclose(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn tmpfile() -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn tmpnam(arg1: *mut ::std::os::raw::c_char) -> *mut ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn tmpnam_r(__s: *mut ::std::os::raw::c_char) -> *mut ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn tempnam(
         __dir: *const ::std::os::raw::c_char,
         __pfx: *const ::std::os::raw::c_char,
     ) -> *mut ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fflush(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fflush_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fopen(
         __filename: *const ::std::os::raw::c_char,
         __modes: *const ::std::os::raw::c_char,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn freopen(
         __filename: *const ::std::os::raw::c_char,
         __modes: *const ::std::os::raw::c_char,
         __stream: *mut FILE,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fdopen(__fd: ::std::os::raw::c_int, __modes: *const ::std::os::raw::c_char)
-    -> *mut FILE;
+        -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fopencookie(
         __magic_cookie: *mut ::std::os::raw::c_void,
         __modes: *const ::std::os::raw::c_char,
         __io_funcs: cookie_io_functions_t,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fmemopen(
         __s: *mut ::std::os::raw::c_void,
         __len: usize,
         __modes: *const ::std::os::raw::c_char,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn open_memstream(
         __bufloc: *mut *mut ::std::os::raw::c_char,
         __sizeloc: *mut usize,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn setbuf(__stream: *mut FILE, __buf: *mut ::std::os::raw::c_char);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn setvbuf(
         __stream: *mut FILE,
         __buf: *mut ::std::os::raw::c_char,
@@ -2572,50 +2572,50 @@ unsafe extern "C" {
         __n: usize,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn setbuffer(__stream: *mut FILE, __buf: *mut ::std::os::raw::c_char, __size: usize);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn setlinebuf(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fprintf(
         __stream: *mut FILE,
         __format: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn printf(__format: *const ::std::os::raw::c_char, ...) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn sprintf(
         __s: *mut ::std::os::raw::c_char,
         __format: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vfprintf(
         __s: *mut FILE,
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vprintf(
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vsprintf(
         __s: *mut ::std::os::raw::c_char,
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn snprintf(
         __s: *mut ::std::os::raw::c_char,
         __maxlen: ::std::os::raw::c_ulong,
@@ -2623,7 +2623,7 @@ unsafe extern "C" {
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vsnprintf(
         __s: *mut ::std::os::raw::c_char,
         __maxlen: ::std::os::raw::c_ulong,
@@ -2631,52 +2631,52 @@ unsafe extern "C" {
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vasprintf(
         __ptr: *mut *mut ::std::os::raw::c_char,
         __f: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn __asprintf(
         __ptr: *mut *mut ::std::os::raw::c_char,
         __fmt: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn asprintf(
         __ptr: *mut *mut ::std::os::raw::c_char,
         __fmt: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vdprintf(
         __fd: ::std::os::raw::c_int,
         __fmt: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn dprintf(
         __fd: ::std::os::raw::c_int,
         __fmt: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fscanf(
         __stream: *mut FILE,
         __format: *const ::std::os::raw::c_char,
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn scanf(__format: *const ::std::os::raw::c_char, ...) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn sscanf(
         __s: *const ::std::os::raw::c_char,
         __format: *const ::std::os::raw::c_char,
@@ -2689,7 +2689,7 @@ pub type _Float32 = f32;
 pub type _Float64 = f64;
 pub type _Float32x = f64;
 pub type _Float64x = u128;
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_fscanf"]
     pub fn fscanf1(
         __stream: *mut FILE,
@@ -2697,11 +2697,11 @@ unsafe extern "C" {
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_scanf"]
     pub fn scanf1(__format: *const ::std::os::raw::c_char, ...) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_sscanf"]
     pub fn sscanf1(
         __s: *const ::std::os::raw::c_char,
@@ -2709,27 +2709,27 @@ unsafe extern "C" {
         ...
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vfscanf(
         __s: *mut FILE,
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vscanf(
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn vsscanf(
         __s: *const ::std::os::raw::c_char,
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_vfscanf"]
     pub fn vfscanf1(
         __s: *mut FILE,
@@ -2737,14 +2737,14 @@ unsafe extern "C" {
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_vscanf"]
     pub fn vscanf1(
         __format: *const ::std::os::raw::c_char,
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     #[link_name = "\u{1}__isoc99_vsscanf"]
     pub fn vsscanf1(
         __s: *const ::std::os::raw::c_char,
@@ -2752,57 +2752,57 @@ unsafe extern "C" {
         __arg: *mut __va_list_tag,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fgetc(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getc(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getchar() -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getc_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getchar_unlocked() -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fgetc_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fputc(__c: ::std::os::raw::c_int, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn putc(__c: ::std::os::raw::c_int, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn putchar(__c: ::std::os::raw::c_int) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fputc_unlocked(__c: ::std::os::raw::c_int, __stream: *mut FILE)
-    -> ::std::os::raw::c_int;
+        -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn putc_unlocked(__c: ::std::os::raw::c_int, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn putchar_unlocked(__c: ::std::os::raw::c_int) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getw(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn putw(__w: ::std::os::raw::c_int, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fgets(
         __s: *mut ::std::os::raw::c_char,
         __n: ::std::os::raw::c_int,
         __stream: *mut FILE,
     ) -> *mut ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn __getdelim(
         __lineptr: *mut *mut ::std::os::raw::c_char,
         __n: *mut usize,
@@ -2810,7 +2810,7 @@ unsafe extern "C" {
         __stream: *mut FILE,
     ) -> __ssize_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getdelim(
         __lineptr: *mut *mut ::std::os::raw::c_char,
         __n: *mut usize,
@@ -2818,23 +2818,23 @@ unsafe extern "C" {
         __stream: *mut FILE,
     ) -> __ssize_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn getline(
         __lineptr: *mut *mut ::std::os::raw::c_char,
         __n: *mut usize,
         __stream: *mut FILE,
     ) -> __ssize_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fputs(__s: *const ::std::os::raw::c_char, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn puts(__s: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ungetc(__c: ::std::os::raw::c_int, __stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fread(
         __ptr: *mut ::std::os::raw::c_void,
         __size: ::std::os::raw::c_ulong,
@@ -2842,7 +2842,7 @@ unsafe extern "C" {
         __stream: *mut FILE,
     ) -> ::std::os::raw::c_ulong;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fwrite(
         __ptr: *const ::std::os::raw::c_void,
         __size: ::std::os::raw::c_ulong,
@@ -2850,7 +2850,7 @@ unsafe extern "C" {
         __s: *mut FILE,
     ) -> ::std::os::raw::c_ulong;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fread_unlocked(
         __ptr: *mut ::std::os::raw::c_void,
         __size: usize,
@@ -2858,7 +2858,7 @@ unsafe extern "C" {
         __stream: *mut FILE,
     ) -> usize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fwrite_unlocked(
         __ptr: *const ::std::os::raw::c_void,
         __size: usize,
@@ -2866,87 +2866,87 @@ unsafe extern "C" {
         __stream: *mut FILE,
     ) -> usize;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fseek(
         __stream: *mut FILE,
         __off: ::std::os::raw::c_long,
         __whence: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ftell(__stream: *mut FILE) -> ::std::os::raw::c_long;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn rewind(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fseeko(
         __stream: *mut FILE,
         __off: __off_t,
         __whence: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ftello(__stream: *mut FILE) -> __off_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fgetpos(__stream: *mut FILE, __pos: *mut fpos_t) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fsetpos(__stream: *mut FILE, __pos: *const fpos_t) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn clearerr(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn feof(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ferror(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn clearerr_unlocked(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn feof_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ferror_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn perror(__s: *const ::std::os::raw::c_char);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fileno(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn fileno_unlocked(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn pclose(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn popen(
         __command: *const ::std::os::raw::c_char,
         __modes: *const ::std::os::raw::c_char,
     ) -> *mut FILE;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ctermid(__s: *mut ::std::os::raw::c_char) -> *mut ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn flockfile(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ftrylockfile(__stream: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn funlockfile(__stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn __uflow(arg1: *mut FILE) -> ::std::os::raw::c_int;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn __overflow(arg1: *mut FILE, arg2: ::std::os::raw::c_int) -> ::std::os::raw::c_int;
 }
 #[repr(u32)]
@@ -3800,11 +3800,11 @@ const _: () = {
     ["Offset of field: ucp_am_recv_param::reply_ep"]
         [::std::mem::offset_of!(ucp_am_recv_param, reply_ep) - 8usize];
 };
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_lib_query(attr: *mut ucp_lib_attr_t) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_config_read(
         env_prefix: *const ::std::os::raw::c_char,
@@ -3812,10 +3812,10 @@ unsafe extern "C" {
         config_p: *mut *mut ucp_config_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_config_release(config: *mut ucp_config_t);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_config_modify(
         config: *mut ucp_config_t,
@@ -3823,7 +3823,7 @@ unsafe extern "C" {
         value: *const ::std::os::raw::c_char,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_config_print(
         config: *const ucp_config_t,
         stream: *mut FILE,
@@ -3831,17 +3831,17 @@ unsafe extern "C" {
         print_flags: ucs_config_print_flags_t,
     );
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_get_version(
         major_version: *mut ::std::os::raw::c_uint,
         minor_version: *mut ::std::os::raw::c_uint,
         release_number: *mut ::std::os::raw::c_uint,
     );
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_get_version_string() -> *const ::std::os::raw::c_char;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_init_version(
         api_major_version: ::std::os::raw::c_uint,
@@ -3851,17 +3851,17 @@ unsafe extern "C" {
         context_p: *mut ucp_context_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_cleanup(context_p: ucp_context_h);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_context_query(
         context_p: ucp_context_h,
         attr: *mut ucp_context_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_rkey_compare(
         worker: ucp_worker_h,
@@ -3871,10 +3871,10 @@ unsafe extern "C" {
         result: *mut ::std::os::raw::c_int,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_context_print_info(context: ucp_context_h, stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_create(
         context: ucp_context_h,
@@ -3882,30 +3882,30 @@ unsafe extern "C" {
         worker_p: *mut ucp_worker_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_worker_destroy(worker: ucp_worker_h);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_query(worker: ucp_worker_h, attr: *mut ucp_worker_attr_t) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_worker_print_info(worker: ucp_worker_h, stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_worker_release_address(worker: ucp_worker_h, address: *mut ucp_address_t);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_address_query(
         address: *mut ucp_address_t,
         attr: *mut ucp_worker_address_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_worker_progress(worker: ucp_worker_h) -> ::std::os::raw::c_uint;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_stream_worker_poll(
         worker: ucp_worker_h,
         poll_eps: *mut ucp_stream_poll_ep_t,
@@ -3913,27 +3913,27 @@ unsafe extern "C" {
         flags: ::std::os::raw::c_uint,
     ) -> isize;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_get_efd(worker: ucp_worker_h, fd: *mut ::std::os::raw::c_int)
-    -> ucs_status_t;
+        -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_wait(worker: ucp_worker_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_worker_wait_mem(worker: ucp_worker_h, address: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_arm(worker: ucp_worker_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_signal(worker: ucp_worker_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_listener_create(
         worker: ucp_worker_h,
@@ -3941,31 +3941,31 @@ unsafe extern "C" {
         listener_p: *mut ucp_listener_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_listener_destroy(listener: ucp_listener_h);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_listener_query(
         listener: ucp_listener_h,
         attr: *mut ucp_listener_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_conn_request_query(
         conn_request: ucp_conn_request_h,
         attr: *mut ucp_conn_request_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_request_query(
         request: *mut ::std::os::raw::c_void,
         attr: *mut ucp_request_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_create(
         worker: ucp_worker_h,
@@ -3973,25 +3973,25 @@ unsafe extern "C" {
         ep_p: *mut ucp_ep_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_close_nbx(ep: ucp_ep_h, param: *const ucp_request_param_t) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_listener_reject(
         listener: ucp_listener_h,
         conn_request: ucp_conn_request_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_ep_print_info(ep: ucp_ep_h, stream: *mut FILE);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_flush_nbx(ep: ucp_ep_h, param: *const ucp_request_param_t) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_evaluate_perf(
         ep: ucp_ep_h,
@@ -3999,7 +3999,7 @@ unsafe extern "C" {
         attr: *mut ucp_ep_evaluate_perf_attr_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_mem_map(
         context: ucp_context_h,
@@ -4007,15 +4007,15 @@ unsafe extern "C" {
         memh_p: *mut ucp_mem_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_mem_unmap(context: ucp_context_h, memh: ucp_mem_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_mem_query(memh: ucp_mem_h, attr: *mut ucp_mem_attr_t) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_mem_print_info(
         mem_spec: *const ::std::os::raw::c_char,
         context: ucp_context_h,
@@ -4052,7 +4052,7 @@ const _: () = {
         [::std::mem::offset_of!(ucp_mem_advise_params, advice) - 24usize];
 };
 pub type ucp_mem_advise_params_t = ucp_mem_advise_params;
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_mem_advise(
         context: ucp_context_h,
@@ -4086,7 +4086,7 @@ const _: () = {
         [::std::mem::offset_of!(ucp_memh_pack_params, flags) - 8usize];
 };
 pub type ucp_memh_pack_params_t = ucp_memh_pack_params;
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_memh_pack(
         memh: ucp_mem_h,
@@ -4110,13 +4110,13 @@ const _: () = {
         [::std::mem::offset_of!(ucp_memh_buffer_release_params, field_mask) - 0usize];
 };
 pub type ucp_memh_buffer_release_params_t = ucp_memh_buffer_release_params;
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_memh_buffer_release(
         buffer: *mut ::std::os::raw::c_void,
         params: *const ucp_memh_buffer_release_params_t,
     );
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_rkey_unpack(
         ep: ucp_ep_h,
@@ -4124,7 +4124,7 @@ unsafe extern "C" {
         rkey_p: *mut ucp_rkey_h,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_rkey_ptr(
         rkey: ucp_rkey_h,
@@ -4132,17 +4132,17 @@ unsafe extern "C" {
         addr_p: *mut *mut ::std::os::raw::c_void,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_rkey_destroy(rkey: ucp_rkey_h);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_set_am_recv_handler(
         worker: ucp_worker_h,
         param: *const ucp_am_handler_param_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_am_send_nbx(
         ep: ucp_ep_h,
@@ -4154,7 +4154,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_am_recv_data_nbx(
         worker: ucp_worker_h,
@@ -4164,10 +4164,10 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_am_data_release(worker: ucp_worker_h, data: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_send_nbx(
         ep: ucp_ep_h,
@@ -4176,7 +4176,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_send_nbx(
         ep: ucp_ep_h,
@@ -4186,7 +4186,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_send_sync_nbx(
         ep: ucp_ep_h,
@@ -4196,7 +4196,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_recv_nbx(
         ep: ucp_ep_h,
@@ -4206,11 +4206,11 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_recv_data_nb(ep: ucp_ep_h, length: *mut usize) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_recv_nbx(
         worker: ucp_worker_h,
@@ -4221,7 +4221,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_tag_probe_nb(
         worker: ucp_worker_h,
         tag: ucp_tag_t,
@@ -4230,7 +4230,7 @@ unsafe extern "C" {
         info: *mut ucp_tag_recv_info_t,
     ) -> ucp_tag_message_h;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_msg_recv_nbx(
         worker: ucp_worker_h,
@@ -4240,7 +4240,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_put_nbx(
         ep: ucp_ep_h,
@@ -4251,7 +4251,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_get_nbx(
         ep: ucp_ep_h,
@@ -4262,7 +4262,7 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_atomic_op_nbx(
         ep: ucp_ep_h,
@@ -4274,37 +4274,37 @@ unsafe extern "C" {
         param: *const ucp_request_param_t,
     ) -> ucs_status_ptr_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_request_check_status(request: *mut ::std::os::raw::c_void) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_tag_recv_request_test(
         request: *mut ::std::os::raw::c_void,
         info: *mut ucp_tag_recv_info_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_stream_recv_request_test(
         request: *mut ::std::os::raw::c_void,
         length_p: *mut usize,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_request_cancel(worker: ucp_worker_h, request: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_stream_data_release(ep: ucp_ep_h, data: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_request_free(request: *mut ::std::os::raw::c_void);
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_request_alloc(worker: ucp_worker_h) -> *mut ::std::os::raw::c_void;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_dt_create_generic(
         ops: *const ucp_generic_dt_ops_t,
@@ -4312,18 +4312,18 @@ unsafe extern "C" {
         datatype_p: *mut ucp_datatype_t,
     ) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     pub fn ucp_dt_destroy(datatype: ucp_datatype_t);
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_dt_query(datatype: ucp_datatype_t, attr: *mut ucp_datatype_attr_t) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_fence(worker: ucp_worker_h) -> ucs_status_t;
 }
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_worker_flush_nbx(
         worker: ucp_worker_h,
@@ -4366,7 +4366,7 @@ const _: () = {
         [::std::mem::offset_of!(ucp_ep_attr, user_data) - 320usize];
 };
 pub type ucp_ep_attr_t = ucp_ep_attr;
-unsafe extern "C" {
+extern "C" {
     #[must_use]
     pub fn ucp_ep_query(ep: ucp_ep_h, attr: *mut ucp_ep_attr_t) -> ucs_status_t;
 }
