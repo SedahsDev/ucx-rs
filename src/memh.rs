@@ -134,7 +134,8 @@ impl MemHandle {
     /// for an operation on `worker` over `len` bytes at `ptr` of type
     /// `memory_type`: same context as the worker, the whole range inside the
     /// mapped region, and the same memory type unless `memory_type` is
-    /// `Unknown`. `UCS_ERR_INVALID_PARAM` otherwise.
+    /// `Unknown`. `UCS_ERR_INVALID_PARAM` otherwise, or the status of a
+    /// failing `ucp_mem_query`.
     ///
     /// UCX itself checks the range only in builds with parameter checking, and
     /// a handle from another context would index the wrong memory domains.
@@ -1054,6 +1055,25 @@ mod transfer_tests {
         drop(rkey);
     }
 
+    /// `AllocatedBuf` with host memory runs everywhere (the CUDA variant needs
+    /// a GPU): UCX-allocated memory is filled by a receive and read back out
+    /// by a send, eager and rendezvous, through the same owned calls.
+    #[test]
+    fn allocated_host_buffer_tag_round_trip() {
+        let comms = setup_default();
+        for len in [64usize, 4 << 20] {
+            let allocated =
+                AllocatedBuf::new(&comms.context, len, MemoryType::Host).expect("allocate host");
+            assert_eq!(OwnedBuf::memory_type(&allocated), MemoryType::Host);
+            assert!(OwnedBuf::memh(&allocated).is_some());
+            let expected = pattern(len, 0x3c);
+            let (_, allocated, info) = tag_round_trip(&comms, expected.clone(), allocated, 0x2104);
+            assert_eq!(info.len(), len);
+            let (_, host, _) = tag_round_trip(&comms, allocated, vec![0u8; len], 0x2105);
+            assert_bytes(&host, &expected, "host AllocatedBuf round trip");
+        }
+    }
+
     /// A buffer whose memory handle is not usable for it: a handle of another
     /// buffer, or a memory type that disagrees with the handle.
     struct Mismatched<'a> {
@@ -1175,6 +1195,15 @@ mod transfer_tests {
             bytes: vec![0u8; 8],
             memh: holder.mem_handle(),
             memory_type: MemoryType::Cuda,
+        };
+        let result = comms.ep.am_send(&comms.worker, 7, header, b"", &param);
+        assert_eq!(result.err(), Some(Status::INVALID_PARAM));
+        // `Unknown` (the trait default) is rejected too: UCX never detects the
+        // header's type, so it could be device memory.
+        let header = Mismatched {
+            bytes: vec![0u8; 8],
+            memh: holder.mem_handle(),
+            memory_type: MemoryType::Unknown,
         };
         let result = comms.ep.am_send(&comms.worker, 7, header, b"", &param);
         assert_eq!(result.err(), Some(Status::INVALID_PARAM));

@@ -376,7 +376,13 @@ impl Ep {
     /// must be the worker this endpoint was created on. `params` contributes
     /// flags (including `UCP_AM_SEND_FLAG_*`), callback, and user data; the
     /// datatype (contiguous bytes), reply buffer, receive info, memory handle,
-    /// memory type, and request allocation fields are controlled here.
+    /// memory type, and request allocation fields are controlled here: the
+    /// payload's memory type and handle come from `data`.
+    ///
+    /// The header must report [`MemoryType::Host`] (all the built-in
+    /// `OwnedBuf` impls do): UCX copies it with a host `memcpy` and never
+    /// detects its type. Any other memory type, including the trait default
+    /// `Unknown`, fails with `UCS_ERR_INVALID_PARAM` before posting.
     #[inline]
     #[allow(clippy::type_complexity)]
     pub fn am_send<'w, H: OwnedBuf, P: OwnedBuf>(
@@ -391,9 +397,11 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "am_send: the passed worker is not the endpoint's worker"
         );
-        // UCX copies the header with a host memcpy, so it must be host
-        // memory; the payload's memory type and handle go to UCX.
-        if !matches!(header.memory_type(), MemoryType::Host | MemoryType::Unknown) {
+        // UCX packs the header as host memory (`ucp_am_pack_user_header`,
+        // a plain memcpy) and never detects its type, so only a header that
+        // reports `Host` is accepted: `Unknown` could be device memory. The
+        // payload's memory type and handle go to UCX.
+        if header.memory_type() != MemoryType::Host {
             return Err(Status::INVALID_PARAM);
         }
         let raw = owned_data_param(params, &data, worker)?;
@@ -505,6 +513,26 @@ pub struct HandlerParams {
     pub(crate) handle: ucp_am_handler_param_t,
 }
 
+/// Error from [`Worker::am_recv_data`].
+#[derive(Debug)]
+pub struct AmRecvDataError {
+    /// UCX status, or `UCS_ERR_INVALID_PARAM` for a buffer rejected before
+    /// posting.
+    pub status: Status,
+    /// The descriptor, only when it was never passed to UCX (the buffer was
+    /// rejected before posting). The caller still owns it and must receive or
+    /// release it. `None` when UCX took it.
+    pub data_desc: Option<std::ptr::NonNull<std::ffi::c_void>>,
+}
+
+impl std::fmt::Display for AmRecvDataError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "am_recv_data failed: {}", self.status)
+    }
+}
+
+impl std::error::Error for AmRecvDataError {}
+
 /// Receive active message data.
 ///
 /// # Safety
@@ -537,14 +565,15 @@ mod tests {
     use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress};
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    type AmRecvDataFn =
-        for<'w> unsafe fn(
-            &'w Worker,
-            std::ptr::NonNull<std::ffi::c_void>,
-            Vec<u8>,
-            &RequestParam,
-        )
-            -> Result<Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>, Status>;
+    type AmRecvDataFn = for<'w> unsafe fn(
+        &'w Worker,
+        std::ptr::NonNull<std::ffi::c_void>,
+        Vec<u8>,
+        &RequestParam,
+    ) -> Result<
+        Completion<Vec<u8>, OwningRequest<'w, Vec<u8>>>,
+        AmRecvDataError,
+    >;
 
     #[test]
     fn test_worker_am_receive_api_signatures() {
@@ -844,6 +873,25 @@ mod tests {
         assert!(seen.rndv, "RNDV flag must make UCX hand over a descriptor");
         assert_eq!(seen.length, len);
         let desc = std::ptr::NonNull::new(seen.desc as *mut std::ffi::c_void).unwrap();
+        // #210: a buffer whose memory handle belongs to another context is
+        // rejected before UCX sees the descriptor, which comes back unchanged.
+        let foreign_context =
+            Context::new(&Config::read("", "").unwrap(), &context_params).unwrap();
+        let foreign = crate::memh::RegisteredBuf::new(&foreign_context, vec![0u8; len])
+            .expect("register on the other context");
+        // SAFETY: as below; the rejected call never passes `desc` to UCX.
+        let rejected = unsafe {
+            worker.am_recv_data(desc, foreign, &crate::RequestParamBuilder::new().build())
+        };
+        let desc = match rejected {
+            Ok(_) => panic!("a foreign-context memory handle must be rejected"),
+            Err(error) => {
+                assert_eq!(error.status, Status::INVALID_PARAM);
+                error.data_desc.expect("descriptor handed back")
+            }
+        };
+        assert_eq!(desc.as_ptr() as usize, seen.desc, "same descriptor");
+        drop(foreign_context);
         // SAFETY: `desc` is the RNDV descriptor kept by `keep_rndv_desc`
         // (returned IN_PROGRESS) and is received exactly once.
         let recv = unsafe {

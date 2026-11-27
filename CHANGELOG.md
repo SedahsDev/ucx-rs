@@ -23,7 +23,7 @@ because `unsafe` matters there).
 | `Ep::tag_send(&[u8], ..)` / `Worker::tag_recv(&mut [u8], ..)` → `TagRequest`; `Ep::tag_send_sync(&[u8], ..)` → bare `Pending` | owned `D` → `Completion<D, OwningRequest>` (both sends) / `Completion<(D, TagInfo), TagRecvRequest>`; `tag_msg_recv` consumes the `MessageHandle` and returns `TagMsgRecvError` (#205) |
 | `Ep::stream_send` / `stream_recv` → `StreamRequest` | owned `D` → `Completion<D, OwningRequest>` / `Completion<(D, usize), StreamRecvRequest>` (#205) |
 | `Ep::am_send(&[u8], &[u8], ..)` → `AmRequest` | `am_send(&worker, id, H, P, ..)` → `Completion<(H, P), OwningRequest>` (#206) |
-| `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → `Result<Completion<D, OwningRequest<'_, D>>, Status>` (#206, #214) |
+| `Worker::am_recv_data(desc, &mut [u8], ..)` | `unsafe fn am_recv_data(desc, D: OwnedBufMut, ..)` → `Result<Completion<D, OwningRequest<'_, D>>, am::AmRecvDataError>` (#206, #214; error type #210) |
 | fetch AMOs with a borrowed reply (`FetchAmoRequest<'w, 'a, T>`) | `amo_f*` → `FetchAmoCompletion<'w, T>`, which returns the old value; no-fetch AMOs → `AmoCompletion<'w>` (#207) |
 | `Ep::flush(&params)`, `Worker::flush(&params)` → `Pending` | `Ep::flush(&worker, &params)`, `Worker::flush(&params)` → `ep::OpCompletion<'w>` (#208) |
 | `Ep::close(&worker, flags: u32)` → `Pending` | `Ep::close(&worker, CloseMode::{Flush, Force})` → `Result<OpCompletion, CloseError>` (#208) |
@@ -73,14 +73,23 @@ Behaviors to know:
     `AllocatedBuf::new(&context, len, MemoryType::Cuda)`. It fails with
     `UCS_ERR_UNSUPPORTED` if UCX allocates a different memory type. CUDA needs a
     current CUDA context on the calling thread, as in any CUDA program.
-  - `am_send` rejects a header whose memory type isn't host or unknown, since UCX
-    copies the header with a host `memcpy`. The payload carries its own type
-    and handle.
+  - `am_send` accepts only a header that reports `MemoryType::Host`: UCX packs
+    the header with a host `memcpy` and never detects its type, so even the
+    trait default `Unknown` is rejected (`UCS_ERR_INVALID_PARAM`). All the
+    built-in impls report `Host`. The payload carries its own type and handle.
+  - **Breaking:** `Worker::am_recv_data` returns `am::AmRecvDataError`
+    (`status`, `data_desc`) instead of `Status`. When the buffer is rejected
+    before posting, UCX never sees the descriptor, so it comes back in
+    `data_desc` for a retry or a release. The release matters: for a
+    rendezvous descriptor it is what completes the sender. Once posted, UCX
+    owns the descriptor as before (`data_desc: None`). `tag_msg_recv` likewise
+    hands the probed message back on that rejection.
   - **Removed** `Ep::tag_send_ptr`, `Worker::tag_recv_ptr`, `Ep::rma_put_ptr`
     and `Ep::rma_get_ptr` (see the migration table). A buffer type that owns
     the memory is the escape hatch now. Unlike a raw pointer, it also makes
     the `OwningRequest` drop fail-safe's leak-on-timeout sound for device memory.
-  - Tests: registered host buffers (tag eager + rendezvous, RMA put/get,
+  - Tests: host `AllocatedBuf` (tag eager + rendezvous, runs everywhere),
+    registered host buffers (tag eager + rendezvous, RMA put/get,
     `owned_data_param` field checks, rejection of a foreign-context,
     non-covering or wrong-type handle) and an `#[ignore]`d CUDA test (tag
     host→device→host and RMA device→host / host→device, with UCX-allocated
@@ -125,8 +134,9 @@ Behaviors to know:
     `MtWorker::cancel_request`, `MtWorker::flush` (post and drive the
     flush inside `MtWorker::with_worker` with `w.progress()`; see its docs, since
     calling `MtWorker::progress` there deadlocks), and `Ep::disconnect_nb` (deprecated UCX API; use
-    `close(_, CloseMode::Force)`). `Pending` remains only for the `unsafe`
-    raw-pointer APIs.
+    `close(_, CloseMode::Force)`). `Pending` remained for the `unsafe`
+    raw-pointer APIs until #210 removed them; now only `status_ptr_to_result`
+    returns it.
   - Migration: `ep.close(&worker, 0)` becomes `ep.close(&worker,
     CloseMode::Flush)`, then drive the completion. `ep.flush(&p)` becomes
     `ep.flush(&worker, &p)`.

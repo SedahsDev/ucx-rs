@@ -298,8 +298,10 @@ fn msg_recv_error_returns_message(forced: bool, status: Status) -> bool {
 pub struct TagMsgRecvError {
     /// UCX status.
     pub status: Status,
-    /// The probed message, only when UCX provably did not consume it
-    /// (`NO_RESOURCE` under `FORCE_IMM_CMPL`); `None` otherwise.
+    /// The probed message, only when UCX provably did not consume it:
+    /// `NO_RESOURCE` under `FORCE_IMM_CMPL`, or a buffer rejected before
+    /// posting (`INVALID_PARAM` from the memory handle check). `None`
+    /// otherwise.
     pub message: Option<MessageHandle>,
 }
 
