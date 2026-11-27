@@ -903,14 +903,16 @@ mod tests {
         assert!(!OwnedBuf::is_empty(&array));
     }
 
+    /// A small `FORCE_IMM_CMPL` send completes inline on `self`. Pinned to
+    /// `self,cuda_copy` instead of reading `UCX_TLS`, so it always runs (#231):
+    /// only `self` completes inline, while `cuda_copy` loads the CUDA memory
+    /// domain wherever UCX has one. That fills UCX's memtype cache, and then
+    /// the short path needs the `Host` memory type the owned send passes
+    /// (#210). Without CUDA support UCX warns that `cuda_copy` is not
+    /// available and ignores it.
     #[test]
     fn immediate_send_returns_data() {
-        let tls = std::env::var("UCX_TLS").unwrap_or_default();
-        if tls.split(',').next() != Some("self") {
-            eprintln!("skipping: inline completion requires UCX_TLS=self");
-            return;
-        }
-        let comms = setup_default();
+        let comms = crate::tests::setup_with_tls(c"self,cuda_copy");
         let param = RequestParamBuilder::new().force_imm_cmpl().build();
         let sent = post_send(&comms.ep, &comms.worker, vec![5u8; 16], 0x10, &param)
             .expect("small eager send completes inline on self");

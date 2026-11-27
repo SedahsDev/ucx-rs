@@ -50,6 +50,13 @@ jobs:
       - name: test
         run: cargo test --locked -- --test-threads=1
 
+      # Broken intra-doc links (e.g. to a private or non-root item) only show
+      # up in rustdoc (#231).
+      - name: doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked
+
       - name: example
         run: cargo run --locked --example version_and_context
 
@@ -89,7 +96,7 @@ jobs:
       SMOKE_UCX_VER: 1.20.0
       SMOKE_UCX_SHA256: 7c8a6093cada179aa1d851b83625e3b25ed5658966e309de5118c27a038c7ef9
       # Bump when the configure flags below change, so a stale build is not restored.
-      SMOKE_UCX_BUILD_REV: 2
+      SMOKE_UCX_BUILD_REV: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -126,7 +133,8 @@ jobs:
           ./configure --prefix="/opt/ucx-${SMOKE_UCX_VER}" --without-java --without-go \
             --without-cuda --without-rocm --without-verbs --without-rdmacm \
             --without-knem --without-xpmem --without-fuse3 --without-bfd \
-            --without-ze --without-gdrcopy --without-efa --disable-doxygen-doc
+            --without-ze --without-gdrcopy --without-efa --without-mad \
+            --without-ugni --disable-doxygen-doc
           make -j"$(nproc)"
           make install
 
