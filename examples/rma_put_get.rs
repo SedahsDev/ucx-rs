@@ -78,6 +78,10 @@ fn main() {
         .expect("RMA get");
     let result = complete(&worker, get);
     assert_eq!(&result, b"hello");
+    // UCX: destroy the rkey (after its operations are flushed: the put was
+    // flushed above and the get has completed) before closing the endpoint.
+    // `RemoteKey` borrows `ep`, so closing first does not compile.
+    drop(rkey);
     let close = ep
         .close(&worker, ucx_sys::ep::CloseMode::Flush)
         .expect("close endpoint");

@@ -161,14 +161,15 @@ pub unsafe fn atomic_fetch_nbx(
 ///
 /// # Safety
 /// Caller must ensure `rkey_buffer` is valid and `ep` is a valid endpoint handle.
-pub unsafe fn ep_rkey_unpack(
-    ep: &Ep,
+pub unsafe fn ep_rkey_unpack<'ep>(
+    ep: &'ep Ep,
     rkey_buffer: *const std::os::raw::c_void,
-) -> Result<RemoteKey, Status> {
+) -> Result<RemoteKey<'ep>, Status> {
     let mut rkey: ucp_rkey_h = std::ptr::null_mut();
     status_to_result(ucp_ep_rkey_unpack(ep.handle, rkey_buffer, &mut rkey)).map(|()| RemoteKey {
         handle: rkey,
         worker_alive: Arc::clone(&ep.worker_alive),
+        _ep: std::marker::PhantomData,
     })
 }
 
@@ -195,7 +196,10 @@ pub unsafe fn rkey_ptr(rkey: &RemoteKey, raddr: u64) -> Result<*mut std::os::raw
 /// Destroy a remote key.
 ///
 /// # Safety
-/// Caller must ensure `rkey` is a valid, non-duplicate remote key handle.
+/// Caller must ensure `rkey` is a valid, non-duplicate remote key handle whose
+/// worker is still alive, and must then `std::mem::forget` the `RemoteKey`:
+/// its `Drop` would destroy the same handle again (double free). Prefer
+/// dropping the `RemoteKey`.
 pub unsafe fn rkey_destroy(rkey: &RemoteKey) {
     ucp_rkey_destroy(rkey.handle);
 }
@@ -633,8 +637,15 @@ mod tests {
 
     #[test]
     fn remote_key_compare_api_signature() {
-        let _: for<'a> fn(&'a RemoteKey, &'a RemoteKey, &'a Worker) -> Result<bool, Status> =
-            RemoteKey::compare;
+        #[allow(clippy::extra_unused_lifetimes)]
+        fn pin<'e>() {
+            let _: for<'a> fn(
+                &'a RemoteKey<'e>,
+                &'a RemoteKey<'_>,
+                &'a Worker,
+            ) -> Result<bool, Status> = RemoteKey::<'e>::compare;
+        }
+        pin();
     }
 
     #[test]
@@ -643,10 +654,12 @@ mod tests {
         let first = RemoteKey {
             handle: std::ptr::null_mut(),
             worker_alive: Arc::clone(&alive),
+            _ep: std::marker::PhantomData,
         };
         let second = RemoteKey {
             handle: std::ptr::null_mut(),
             worker_alive: Arc::clone(&alive),
+            _ep: std::marker::PhantomData,
         };
         let worker = Worker {
             am_handlers: Vec::new(),
@@ -708,6 +721,7 @@ mod tests {
         let rkey = RemoteKey {
             handle: std::ptr::null_mut(),
             worker_alive: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            _ep: std::marker::PhantomData,
         };
         let result = unsafe { rkey_ptr(&rkey, 0) };
         assert_eq!(
@@ -720,7 +734,11 @@ mod tests {
     /// Structural test: the safe `RemoteKey::rkey_ptr` keeps its signature.
     #[test]
     fn test_rkey_ptr_signature() {
-        let _: for<'a> fn(&'a mut RemoteKey, u64, usize) -> Result<&'a mut [u8], Status> =
-            RemoteKey::rkey_ptr;
+        #[allow(clippy::extra_unused_lifetimes)]
+        fn pin<'e>() {
+            let _: for<'a> fn(&'a mut RemoteKey<'e>, u64, usize) -> Result<&'a mut [u8], Status> =
+                RemoteKey::<'e>::rkey_ptr;
+        }
+        pin();
     }
 }
