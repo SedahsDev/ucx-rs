@@ -1,4 +1,4 @@
-use crate::completion::{owned_op_param, sealed, status_ptr_with_data, RecvInfo};
+use crate::completion::{owned_op_param, owned_recv_param, sealed, status_ptr_with_data, RecvInfo};
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::request::Pending;
@@ -107,6 +107,7 @@ impl Ep {
     }
 }
 
+#[derive(Debug)]
 pub struct MessageHandle {
     pub(crate) handle: ucp_tag_message_h,
     pub(crate) info: TagInfo,
@@ -181,7 +182,9 @@ impl Worker {
     /// canceled ([`TagRecvRequest::cancel`], which hands the buffer back as
     /// [`crate::Failed`] with `UCS_ERR_CANCELED`).
     ///
-    /// `param` is handled as in [`Ep::tag_send`].
+    /// `param` contributes flags only (e.g. `NO_IMM_CMPL`); a callback or user
+    /// data set on it is ignored, because the receive member of UCX's callback
+    /// union has a different signature than `RequestParamBuilder::send_callback`.
     pub fn tag_recv<D: OwnedBufMut>(
         &self,
         mut data: D,
@@ -190,7 +193,7 @@ impl Worker {
         param: &RequestParam,
     ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, Status> {
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::zeroed();
-        let mut raw = owned_op_param(param);
+        let mut raw = owned_recv_param(param);
         // UCX fills `info` only if the receive completes inside this call.
         raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32;
         raw.recv_info.tag_info = info.as_mut_ptr();
@@ -264,7 +267,14 @@ impl Worker {
     ///
     /// Consumes the handle: UCX allows each probed message to be received
     /// once. Completes with the filled buffer and the message's [`TagInfo`].
-    /// `param` is handled as in [`Ep::tag_send`].
+    /// `param` is handled as in [`Worker::tag_recv`] (flags only).
+    ///
+    /// If UCX could not start the receive (for example `UCS_ERR_NO_MEMORY`,
+    /// or `UCS_ERR_NO_RESOURCE` with `FORCE_IMM_CMPL` on a rendezvous
+    /// message), the error hands the message back so it can be received
+    /// again; dropping it instead would orphan the payload until the worker is
+    /// destroyed. `UCS_ERR_MESSAGE_TRUNCATED` is final: UCX has already
+    /// released the message, so it is not returned.
     ///
     /// # Panics
     ///
@@ -274,14 +284,14 @@ impl Worker {
         mut data: D,
         message: MessageHandle,
         param: &RequestParam,
-    ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, Status> {
+    ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, TagMsgRecvError> {
         if !message.removed {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
         let info = message.info;
-        let raw = owned_op_param(param);
+        let raw = owned_recv_param(param);
         // SAFETY: as in `tag_recv`; `message` is a removed, not yet received
-        // message handle and is consumed here.
+        // message handle.
         let completion = unsafe {
             let ptr = ucp_tag_msg_recv_nbx(
                 self.handle,
@@ -290,14 +300,45 @@ impl Worker {
                 message.handle,
                 &raw,
             );
-            status_ptr_with_data(ptr, data, self)?
+            status_ptr_with_data(ptr, data, self)
         };
-        Ok(match completion {
-            Completion::Immediate(data) => Completion::Immediate((data, info)),
-            Completion::Pending(request) => Completion::Pending(TagRecvRequest::new(request)),
-        })
+        match completion {
+            // The immediate arm reports the probe-time info; the pending arm
+            // re-reads it from the request. They agree on UCS_OK, but keep the
+            // pending path reading the request (it is authoritative).
+            Ok(Completion::Immediate(data)) => Ok(Completion::Immediate((data, info))),
+            Ok(Completion::Pending(request)) => {
+                Ok(Completion::Pending(TagRecvRequest::new(request)))
+            }
+            Err(status) if status == Status::MESSAGE_TRUNCATED => Err(TagMsgRecvError {
+                status,
+                message: None,
+            }),
+            Err(status) => Err(TagMsgRecvError {
+                status,
+                message: Some(message),
+            }),
+        }
     }
 }
+
+/// Error from [`Worker::tag_msg_recv`].
+#[derive(Debug)]
+pub struct TagMsgRecvError {
+    /// UCX status.
+    pub status: Status,
+    /// The probed message, if UCX did not consume it (the receive never
+    /// started). `None` when UCX already released it (message truncated).
+    pub message: Option<MessageHandle>,
+}
+
+impl std::fmt::Display for TagMsgRecvError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "tag_msg_recv failed: {}", self.status)
+    }
+}
+
+impl std::error::Error for TagMsgRecvError {}
 
 fn map_tag_recv_test_status(
     status: ucs_status_t,
@@ -558,7 +599,80 @@ mod tests {
         ));
     }
 
-    /// Exercises the low-level `Request::tag_recv_test` on a real request.
+    static SEND_CB_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    unsafe extern "C" fn counting_send_cb(
+        _request: *mut std::os::raw::c_void,
+        _status: Status,
+        _user_data: *mut std::os::raw::c_void,
+    ) {
+        SEND_CB_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A send-typed callback on a receive param must not reach UCX: the
+    /// receive member of the callback union has a different signature.
+    #[test]
+    fn tag_recv_ignores_send_callback() {
+        let comms = setup_default();
+        let recv_param = RequestParamBuilder::new()
+            .no_imm_cmpl()
+            .send_callback(Some(counting_send_cb))
+            .build();
+        let recv = comms
+            .worker
+            .tag_recv(vec![0u8; 8 << 20], 0x5151, u64::MAX, &recv_param)
+            .expect("recv");
+        let send_param = RequestParamBuilder::new().build();
+        let send = comms
+            .ep
+            .tag_send(&comms.worker, vec![9u8; 8 << 20], 0x5151, &send_param)
+            .expect("send");
+        let (received, info) = drive(&comms.worker, recv, recv_done);
+        drive(&comms.worker, send, send_done);
+        assert_eq!((info.len(), received[0]), (8 << 20, 9));
+        assert_eq!(SEND_CB_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A receive UCX could not start hands the probed message back.
+    #[test]
+    fn tag_msg_recv_not_started_returns_message() {
+        let comms = setup_default();
+        let len = 8 << 20; // rendezvous: cannot complete inside the call
+        let send = comms
+            .ep
+            .tag_send(
+                &comms.worker,
+                vec![6u8; len],
+                0x6161,
+                &RequestParamBuilder::new().build(),
+            )
+            .expect("send");
+        let mut msg = comms.worker.tag_probe(0x6161, u64::MAX, true);
+        for _ in 0..100_000 {
+            if msg.is_some() {
+                break;
+            }
+            comms.worker.progress();
+            msg = comms.worker.tag_probe(0x6161, u64::MAX, true);
+        }
+        let forced = RequestParamBuilder::new().force_imm_cmpl().build();
+        let err = comms
+            .worker
+            .tag_msg_recv(vec![0u8; len], msg.expect("probed"), &forced)
+            .expect_err("rendezvous cannot complete immediately");
+        assert_eq!(err.status, Status::NO_RESOURCE);
+        let message = err.message.expect("not started: message handed back");
+        let recv = comms
+            .worker
+            .tag_msg_recv(vec![0u8; len], message, &RequestParamBuilder::new().build())
+            .expect("retry");
+        let (received, info) = drive(&comms.worker, recv, recv_done);
+        drive(&comms.worker, send, send_done);
+        assert_eq!((info.len(), received[len - 1]), (len, 6));
+    }
+
+    /// Real request round trip; `TagInfo` comes from `ucp_tag_recv_request_test`
+    /// via `TagRecvRequest::try_complete` (the `RecvInfo` impl).
     #[test]
     fn tag_recv_test_real_completed_request() {
         let comms = setup_default();

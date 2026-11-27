@@ -26,6 +26,14 @@
     datatype/reply/recv-info/memh/memory-type/request fields are now
     controlled by the call.
   - `TagInfo` now derives `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`.
+  - Receive ops (`tag_recv`, `tag_msg_recv`, `stream_recv`) take **flags only**
+    from `RequestParam`; a callback or user data is ignored. **Fix:** a
+    `send_callback` was forwarded into UCX's callback union and invoked as a
+    receive callback with a different signature (undefined behavior).
+  - `tag_msg_recv` returns `TagMsgRecvError { status, message }`: when UCX did
+    not start the receive, the probed `MessageHandle` is handed back for a retry
+    instead of orphaning the payload (`None` on `MESSAGE_TRUNCATED`, where UCX
+    already released it). `MessageHandle` now derives `Debug`.
 
 - **Breaking (#204, part of #211):** `Ep::rma_put` / `Ep::rma_get` take
   ownership of the buffer and return

@@ -5,7 +5,7 @@
 
 use crate::ep::{Ep, EpHandle};
 
-use crate::completion::{owned_op_param, status_ptr_with_data, RecvInfo};
+use crate::completion::{owned_op_param, owned_recv_param, status_ptr_with_data, RecvInfo};
 use crate::ffi::*;
 use crate::status_ptr_is_err;
 use crate::status_ptr_to_result;
@@ -156,7 +156,7 @@ impl RecvInfo for usize {
         // SAFETY: `request` is a live, completed stream receive request (the
         // caller reads the length before freeing it).
         let status = unsafe { ucp_stream_recv_request_test(request.as_ptr(), &mut length) };
-        debug_assert_eq!(status, ucs_status_t::UCS_OK, "completed stream receive");
+        assert_eq!(status, ucs_status_t::UCS_OK, "completed stream receive");
         length
     }
 }
@@ -216,8 +216,8 @@ impl Ep {
     /// Completes with the buffer and the number of bytes received, either
     /// immediately or through [`StreamRecvRequest::try_complete`]. Without
     /// `UCP_STREAM_RECV_FLAG_WAITALL` in `param` flags, UCX may complete with
-    /// fewer bytes than `buffer.len()`. `param` is handled as in
-    /// [`Ep::stream_send`].
+    /// fewer bytes than `buffer.len()`. `param` contributes flags only; a
+    /// callback or user data set on it is ignored (see [`Worker::tag_recv`]).
     ///
     /// A pending receive cannot outlive its worker:
     ///
@@ -239,7 +239,7 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "stream_recv: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_op_param(param);
+        let raw = owned_recv_param(param);
         let mut length: usize = 0;
         // SAFETY: the request (if any) writes only into `buffer`'s stable
         // storage, which the returned value owns until UCX is done; `length`

@@ -460,6 +460,24 @@ pub(crate) fn owned_op_param(param: &crate::RequestParam) -> ucp_request_param_t
     raw
 }
 
+/// [`owned_op_param`] for **receive** operations: additionally drops the
+/// caller callback and user data.
+///
+/// `RequestParamBuilder::send_callback` stores a send-completion callback in
+/// the `cb` union, but UCX invokes the receive members of that union with a
+/// different signature (`ucp_tag_recv_nbx_callback_t`,
+/// `ucp_stream_recv_nbx_callback_t`, `ucp_am_recv_data_nbx_callback_t`), so
+/// forwarding it would call a function through the wrong type. Receive
+/// completion is observed through the owning request instead.
+pub(crate) fn owned_recv_param(param: &crate::RequestParam) -> ucp_request_param_t {
+    let mut raw = owned_op_param(param);
+    raw.op_attr_mask &= !(ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32
+        | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32);
+    raw.cb.send = None;
+    raw.user_data = std::ptr::null_mut();
+    raw
+}
+
 /// Classify a status pointer from an operation that is using `data`.
 ///
 /// # Safety
@@ -692,6 +710,12 @@ mod tests {
         let kept = ucp_op_attr_t::UCP_OP_ATTR_FLAG_NO_IMM_CMPL as u32
             | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
         assert_eq!(raw.op_attr_mask & kept, kept);
+        // Receive ops additionally drop callback and user data.
+        let raw_recv = owned_recv_param(&param);
+        let cb = ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_USER_DATA as u32;
+        assert_eq!(raw_recv.op_attr_mask & cb, 0);
+        assert!(raw_recv.user_data.is_null());
     }
 
     #[test]
