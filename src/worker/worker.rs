@@ -127,8 +127,9 @@ mod tests {
 ///
 /// Endpoints returned by [`MtWorker::create_ep`] remain `!Send` and `!Sync`.
 /// Keep them on the constructing thread, or serialize their use yourself.
-/// Fetch-AMO operations whose reply buffer is borrowed are not cross-thread
-/// compatible; an owned-buffer API is future work. Per-operation locking may
+/// Owned-data requests (`OwningRequest`, `FetchAmoRequest`, ...) borrow a
+/// plain `&Worker`, so they are created and completed inside
+/// [`MtWorker::with_worker`] on one thread. Per-operation locking may
 /// also negate the parallelism benefit of `ThreadMode::Multi` and should
 /// be measured before relying on it for performance.
 pub struct MtWorker {
@@ -194,8 +195,8 @@ impl MtWorker {
     /// serialization lock.
     ///
     /// This is the escape hatch for entry points that take a `&Worker` directly,
-    /// such as the fetch-AMO family (`Ep::amo_fadd32` and friends) whose
-    /// borrowed reply buffer has no owned-buffer equivalent yet. The lock is
+    /// such as the owned-data operations (`Ep::rma_put`, `Ep::amo_fadd32`, and
+    /// friends), whose requests borrow the worker. The lock is
     /// held for the whole call.
     ///
     /// `operation` must not re-enter this `MtWorker` (for example by calling

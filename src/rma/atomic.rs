@@ -9,7 +9,7 @@ use crate::RequestParam;
 use crate::Status;
 use std::sync::Arc;
 
-use super::{FetchAmoRequest, RemoteKey};
+use super::RemoteKey;
 
 /// Rust-native atomic operation selector.
 /// Mirrors the C `ucp_atomic_op_t` discriminants so it maps 1:1 to the FFI enum.
@@ -204,7 +204,7 @@ pub unsafe fn rkey_destroy(rkey: &RemoteKey) {
 // Typed convenience wrappers for atomic operations (GUPS-style)
 // ---------------------------------------------------------------------------
 
-#[deprecated = "Use Ep safe AMO methods instead (e.g., amo_fadd64 with reply_buffer on RequestParam)"]
+#[deprecated = "Use Ep safe AMO methods instead (e.g., Ep::amo_fadd32, which returns the old value)"]
 #[allow(deprecated)]
 /// Atomic fetch-and-add 32-bit.
 ///
@@ -665,73 +665,39 @@ mod tests {
 
     #[test]
     #[allow(clippy::type_complexity)]
-    fn fetch_amo_signatures_require_reply_output() {
-        let _: for<'w, 'a> fn(
+    fn fetch_amo_signatures_return_owned_value() {
+        type F64 = for<'w> fn(
             &Ep,
             &'w Worker,
             u64,
             u64,
             &RemoteKey,
-            &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fadd64;
-        let _: for<'w, 'a> fn(
-            &Ep,
-            &'w Worker,
-            u64,
-            u64,
-            &RemoteKey,
-            &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fxor64;
-        let _: for<'w, 'a> fn(
-            &Ep,
-            &'w Worker,
-            u64,
-            u64,
-            &RemoteKey,
-            &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fswap64;
-        let _: for<'w, 'a> fn(
-            &Ep,
-            &'w Worker,
-            u64,
-            u64,
-            u64,
-            &RemoteKey,
-            &'a mut u64,
-        ) -> Result<FetchAmoRequest<'w, 'a, u64>, Status> = Ep::amo_fcswap64;
-        let _: for<'w, 'a> fn(
+        ) -> Result<super::super::FetchAmoCompletion<'w, u64>, Status>;
+        type F32 = for<'w> fn(
             &Ep,
             &'w Worker,
             u32,
             u64,
             &RemoteKey,
-            &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fadd32;
-        let _: for<'w, 'a> fn(
+        ) -> Result<super::super::FetchAmoCompletion<'w, u32>, Status>;
+        let _: [F64; 3] = [Ep::amo_fadd64, Ep::amo_fxor64, Ep::amo_fswap64];
+        let _: [F32; 3] = [Ep::amo_fadd32, Ep::amo_fxor32, Ep::amo_fswap32];
+        let _: for<'w> fn(
             &Ep,
             &'w Worker,
-            u32,
+            u64,
+            u64,
             u64,
             &RemoteKey,
-            &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fxor32;
-        let _: for<'w, 'a> fn(
-            &Ep,
-            &'w Worker,
-            u32,
-            u64,
-            &RemoteKey,
-            &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fswap32;
-        let _: for<'w, 'a> fn(
+        ) -> Result<super::super::FetchAmoCompletion<'w, u64>, Status> = Ep::amo_fcswap64;
+        let _: for<'w> fn(
             &Ep,
             &'w Worker,
             u32,
             u32,
             u64,
             &RemoteKey,
-            &'a mut u32,
-        ) -> Result<FetchAmoRequest<'w, 'a, u32>, Status> = Ep::amo_fcswap32;
+        ) -> Result<super::super::FetchAmoCompletion<'w, u32>, Status> = Ep::amo_fcswap32;
     }
 
     /// `rkey_ptr` rejects a null rkey handle with `UCS_ERR_INVALID_PARAM` before

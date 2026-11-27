@@ -17,7 +17,8 @@ mod asserts {
 
     // Borrowed completion/data guards must remain on their owning context.
     assert_not_impl_any!(crate::OwningRequest<'static, Vec<u8>>: Send, Sync);
-    assert_not_impl_any!(crate::rma::FetchAmoRequest<'static, 'static, u64>: Send, Sync);
+    assert_not_impl_any!(crate::rma::FetchAmoRequest<'static, u64>: Send, Sync);
+    assert_not_impl_any!(crate::rma::AmoRequest<'static>: Send, Sync);
     assert_not_impl_any!(crate::stream::StreamData<'static>: Send, Sync);
     assert_not_impl_any!(crate::memh::MemHandleGuard<'static>: Send, Sync);
     assert_not_impl_any!(crate::worker::WorkerAddress<'static>: Send, Sync);
