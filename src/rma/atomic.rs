@@ -204,7 +204,7 @@ pub unsafe fn rkey_destroy(rkey: &RemoteKey) {
 // Typed convenience wrappers for atomic operations (GUPS-style)
 // ---------------------------------------------------------------------------
 
-#[deprecated = "Use Ep safe AMO methods instead (e.g., amo_fadd64 with reply_buffer on RequestParam)"]
+#[deprecated = "Use Ep safe AMO methods instead (e.g., Ep::amo_fadd32, which returns the old value)"]
 #[allow(deprecated)]
 /// Atomic fetch-and-add 32-bit.
 ///

@@ -239,7 +239,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_add64<'w>(
         &self,
         worker: &'w Worker,
@@ -264,7 +267,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_xor64<'w>(
         &self,
         worker: &'w Worker,
@@ -289,7 +295,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_swap64<'w>(
         &self,
         worker: &'w Worker,
@@ -314,7 +323,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_and64<'w>(
         &self,
         worker: &'w Worker,
@@ -339,7 +351,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_or64<'w>(
         &self,
         worker: &'w Worker,
@@ -471,7 +486,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_add32<'w>(
         &self,
         worker: &'w Worker,
@@ -496,7 +514,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_xor32<'w>(
         &self,
         worker: &'w Worker,
@@ -521,7 +542,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_swap32<'w>(
         &self,
         worker: &'w Worker,
@@ -546,7 +570,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_and32<'w>(
         &self,
         worker: &'w Worker,
@@ -571,7 +598,10 @@ impl Ep {
     /// The operand is owned by the returned request until UCX completes the
     /// operation. `param` contributes flags, callback, and user data; the
     /// datatype, reply buffer, receive info, memory handle, memory type, and
-    /// request allocation fields are controlled here.
+    /// request allocation fields are controlled here. Without `NO_IMM_CMPL`,
+    /// UCX may report local completion (`Immediate(())`) while the update is
+    /// still in flight and then never run the callback; flush the endpoint
+    /// before relying on remote visibility.
     pub fn amo_or32<'w>(
         &self,
         worker: &'w Worker,

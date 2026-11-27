@@ -428,17 +428,20 @@ mod tests {
         let completion = post(&ep, &worker, remote_addr, &rkey, &param)
             .unwrap_or_else(|status| panic!("post {what}: {status} ({})", transport()));
         if let Completion::Pending(mut request) = completion {
-            loop {
+            let mut completed = false;
+            for _ in 0..1_000_000 {
                 worker.progress();
                 match request.try_complete() {
                     Ok(result) => {
                         result
                             .unwrap_or_else(|status| panic!("{what}: {status} ({})", transport()));
+                        completed = true;
                         break;
                     }
                     Err(still) => request = still,
                 }
             }
+            assert!(completed, "{what} did not complete ({})", transport());
         }
         let flush = ep
             .flush(&param)
@@ -622,16 +625,22 @@ mod tests {
             .unwrap_or_else(|status| panic!("post {what}: {status} ({})", transport()));
         let old = match completion {
             Completion::Immediate(old) => old,
-            Completion::Pending(mut request) => loop {
-                worker.progress();
-                match request.try_complete() {
-                    Ok(result) => {
-                        break result
-                            .unwrap_or_else(|status| panic!("{what}: {status} ({})", transport()))
+            Completion::Pending(mut request) => {
+                let mut old = None;
+                for _ in 0..1_000_000 {
+                    worker.progress();
+                    match request.try_complete() {
+                        Ok(result) => {
+                            old = Some(result.unwrap_or_else(|status| {
+                                panic!("{what}: {status} ({})", transport())
+                            }));
+                            break;
+                        }
+                        Err(still) => request = still,
                     }
-                    Err(still) => request = still,
                 }
-            },
+                old.unwrap_or_else(|| panic!("{what} did not complete ({})", transport()))
+            }
         };
         let flush = ep
             .flush(&param)
@@ -679,9 +688,12 @@ mod tests {
         );
     }
 
-    /// The operand lives in the request, not on the caller's stack: a deferred
-    /// AMO (`NO_IMM_CMPL`) still applies the operand after the posting frame
-    /// is gone, and dropping the request completes it before freeing the slots.
+    /// Smoke test for the deferred path: a `NO_IMM_CMPL` AMO posted from a
+    /// helper frame is still pending after that frame returns, and dropping it
+    /// completes it (fail-safe) before the slots are freed. This does not, by
+    /// itself, prove the operand is heap-owned: on `UCX_TLS=self` UCX may pack
+    /// the operand inside the call. The heap ownership is structural
+    /// (`rma::amo::post_amo`).
     #[test]
     fn amo_deferred_operand_outlives_posting_frame() {
         if std::env::var("UCX_TLS").as_deref() != Ok("self") {
