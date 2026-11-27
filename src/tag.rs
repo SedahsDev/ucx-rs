@@ -269,12 +269,15 @@ impl Worker {
     /// once. Completes with the filled buffer and the message's [`TagInfo`].
     /// `param` is handled as in [`Worker::tag_recv`] (flags only).
     ///
-    /// If UCX could not start the receive (for example `UCS_ERR_NO_MEMORY`,
-    /// or `UCS_ERR_NO_RESOURCE` with `FORCE_IMM_CMPL` on a rendezvous
-    /// message), the error hands the message back so it can be received
-    /// again; dropping it instead would orphan the payload until the worker is
-    /// destroyed. `UCS_ERR_MESSAGE_TRUNCATED` is final: UCX has already
-    /// released the message, so it is not returned.
+    /// The error hands the message back **only** when UCX provably did not
+    /// consume it: `UCS_ERR_NO_RESOURCE` with `FORCE_IMM_CMPL` (UCX checks the
+    /// flag before matching a non-eager-only message, `tag_recv.c`). Every
+    /// other error may come after UCX released the descriptor (rendezvous
+    /// `CANCELED`/`NO_MEMORY`, eager `MESSAGE_TRUNCATED`), so the message is
+    /// not returned: a retry would be a use-after-free. In the rare pre-match
+    /// failures (`NO_MEMORY` request allocation, a worker without the tag
+    /// feature) the payload then stays with the worker until it is destroyed,
+    /// which is a leak, not unsoundness.
     ///
     /// # Panics
     ///
@@ -290,6 +293,7 @@ impl Worker {
         }
         let info = message.info;
         let raw = owned_recv_param(param);
+        let forced = raw.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32 != 0;
         // SAFETY: as in `tag_recv`; `message` is a removed, not yet received
         // message handle.
         let completion = unsafe {
@@ -310,16 +314,22 @@ impl Worker {
             Ok(Completion::Pending(request)) => {
                 Ok(Completion::Pending(TagRecvRequest::new(request)))
             }
-            Err(status) if status == Status::MESSAGE_TRUNCATED => Err(TagMsgRecvError {
-                status,
-                message: None,
-            }),
-            Err(status) => Err(TagMsgRecvError {
+            Err(status) if msg_recv_error_returns_message(forced, status) => Err(TagMsgRecvError {
                 status,
                 message: Some(message),
             }),
+            Err(status) => Err(TagMsgRecvError {
+                status,
+                message: None,
+            }),
         }
     }
+}
+
+/// Whether a `tag_msg_recv` posting error proves UCX did not consume the
+/// probed descriptor (see [`Worker::tag_msg_recv`]).
+fn msg_recv_error_returns_message(forced: bool, status: Status) -> bool {
+    forced && status == Status::NO_RESOURCE
 }
 
 /// Error from [`Worker::tag_msg_recv`].
@@ -327,8 +337,8 @@ impl Worker {
 pub struct TagMsgRecvError {
     /// UCX status.
     pub status: Status,
-    /// The probed message, if UCX did not consume it (the receive never
-    /// started). `None` when UCX already released it (message truncated).
+    /// The probed message, only when UCX provably did not consume it
+    /// (`NO_RESOURCE` under `FORCE_IMM_CMPL`); `None` otherwise.
     pub message: Option<MessageHandle>,
 }
 
@@ -631,6 +641,22 @@ mod tests {
         drive(&comms.worker, send, send_done);
         assert_eq!((info.len(), received[0]), (8 << 20, 9));
         assert_eq!(SEND_CB_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn msg_recv_error_returns_message_only_when_provably_unconsumed() {
+        assert!(msg_recv_error_returns_message(true, Status::NO_RESOURCE));
+        for status in [
+            Status::CANCELED,
+            Status::NO_MEMORY,
+            Status::MESSAGE_TRUNCATED,
+            Status::INVALID_PARAM,
+            Status::IO_ERROR,
+        ] {
+            assert!(!msg_recv_error_returns_message(true, status), "{status}");
+            assert!(!msg_recv_error_returns_message(false, status), "{status}");
+        }
+        assert!(!msg_recv_error_returns_message(false, Status::NO_RESOURCE));
     }
 
     /// A receive UCX could not start hands the probed message back.

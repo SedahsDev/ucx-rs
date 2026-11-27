@@ -30,10 +30,11 @@
     from `RequestParam`; a callback or user data is ignored. **Fix:** a
     `send_callback` was forwarded into UCX's callback union and invoked as a
     receive callback with a different signature (undefined behavior).
-  - `tag_msg_recv` returns `TagMsgRecvError { status, message }`: when UCX did
-    not start the receive, the probed `MessageHandle` is handed back for a retry
-    instead of orphaning the payload (`None` on `MESSAGE_TRUNCATED`, where UCX
-    already released it). `MessageHandle` now derives `Debug`.
+  - `tag_msg_recv` returns `TagMsgRecvError { status, message }`. The probed
+    `MessageHandle` is handed back only when UCX provably did not consume it
+    (`NO_RESOURCE` under `FORCE_IMM_CMPL`), so it can be retried; on every other
+    error it may already be released, and it is not returned. `MessageHandle`
+    now derives `Debug`.
 
 - **Breaking (#204, part of #211):** `Ep::rma_put` / `Ep::rma_get` take
   ownership of the buffer and return
