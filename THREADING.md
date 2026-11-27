@@ -80,7 +80,7 @@ safety must be decided per *type*, conservatively, at compile time.
 
 ---
 
-## 3. Current inventory (verified on master @ 596033e)
+## 3. Current inventory (verified on master @ 201351c)
 
 The crate currently declares **no** `unsafe impl Send/Sync` anywhere
 (`grep -rn 'unsafe impl' src --exclude bindings.rs` is empty). Auto-traits are
