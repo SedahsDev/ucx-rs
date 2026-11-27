@@ -1,4 +1,6 @@
-use crate::completion::{owned_op_param, owned_recv_param, sealed, status_ptr_with_data, RecvInfo};
+use crate::completion::{
+    owned_data_param, owned_recv_data_param, sealed, status_ptr_with_data, RecvInfo,
+};
 use crate::ep::Ep;
 use crate::ffi::*;
 use crate::request::Pending;
@@ -21,7 +23,9 @@ impl Ep {
     ///
     /// `param` contributes flags, callback, and user data. The datatype
     /// (always contiguous bytes), reply buffer, receive info, memory handle,
-    /// memory type, and request allocation fields are controlled here.
+    /// memory type, and request allocation fields are controlled here; the
+    /// memory type and handle come from `data` ([`OwnedBuf::memory_type`],
+    /// [`OwnedBuf::memh`]), which may be device memory.
     ///
     /// The buffer is moved in, so it cannot be touched while UCX reads it
     /// (the use-after-free from #112 is a compile error):
@@ -46,7 +50,7 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "tag_send: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_op_param(param);
+        let raw = owned_data_param(param, &data, worker)?;
         // SAFETY: the request (if any) reads only `data`'s stable storage
         // (`OwnedBuf`), which the returned value owns until UCX is done.
         unsafe {
@@ -70,40 +74,12 @@ impl Ep {
             std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
             "tag_send_sync: the passed worker is not the endpoint's worker"
         );
-        let raw = owned_op_param(param);
+        let raw = owned_data_param(param, &data, worker)?;
         // SAFETY: as in `tag_send`.
         unsafe {
             let ptr = ucp_tag_send_sync_nbx(self.handle, data.as_ptr() as _, data.len(), tag, &raw);
             status_ptr_with_data(ptr, data, worker)
         }
-    }
-
-    /// Send `len` bytes from an arbitrary address, including device (GPU) memory.
-    ///
-    /// The slice-based [`Ep::tag_send`] cannot express accelerator buffers: a device pointer
-    /// must never be turned into a host `&[u8]`, because the host cannot dereference it. This
-    /// variant takes the address and length separately so UCX can pick a CUDA-aware transport
-    /// (`cuda_copy`, `cuda_ipc`, `gdr_copy`). Pair it with
-    /// `RequestParamBuilder::memory_type(MemoryType::Cuda)` so UCX does not probe the buffer.
-    ///
-    /// # Safety
-    ///
-    /// - `ptr` must be valid for reads of `len` bytes and readable by UCX for the whole
-    ///   operation. For device memory it must be a device allocation on the current device,
-    ///   or managed memory.
-    /// - The memory must stay alive and unpublished (no host reallocation, no `free`) until the
-    ///   returned request completes; with a blocking wait that means until the wait returns.
-    /// - `len` must not exceed the underlying allocation.
-    pub unsafe fn tag_send_ptr(
-        &self,
-        ptr: *const u8,
-        len: usize,
-        tag: u64,
-        param: &RequestParam,
-    ) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_tag_send_nbx(self.handle, ptr as _, len, tag, &param.handle)
-        })
     }
 }
 
@@ -193,7 +169,7 @@ impl Worker {
         param: &RequestParam,
     ) -> Result<Completion<(D, TagInfo), TagRecvRequest<'_, D>>, Status> {
         let mut info = std::mem::MaybeUninit::<ucp_tag_recv_info_t>::zeroed();
-        let mut raw = owned_recv_param(param);
+        let mut raw = owned_recv_data_param(param, &data, self)?;
         // UCX fills `info` only if the receive completes inside this call.
         raw.op_attr_mask |= ucp_op_attr_t::UCP_OP_ATTR_FIELD_RECV_INFO as u32;
         raw.recv_info.tag_info = info.as_mut_ptr();
@@ -217,31 +193,6 @@ impl Worker {
                 Completion::Immediate((data, TagInfo::from_ffi(unsafe { info.assume_init() })))
             }
             Completion::Pending(request) => Completion::Pending(TagRecvRequest::new(request)),
-        })
-    }
-
-    /// Receive into an arbitrary address, including device (GPU) memory.
-    ///
-    /// Counterpart of [`Ep::tag_send_ptr`]. Note the asymmetry in UCX itself: tag *send* is an
-    /// endpoint operation while tag *receive* is a worker operation, so the two pointer variants
-    /// live on different types.
-    ///
-    /// # Safety
-    ///
-    /// - `ptr` must be valid for writes of `len` bytes and writable by UCX for the whole
-    ///   operation (device allocation on the current device, or managed memory).
-    /// - The memory must stay alive and unpublished until the returned request completes.
-    /// - `len` must not exceed the underlying allocation.
-    pub unsafe fn tag_recv_ptr(
-        &self,
-        ptr: *mut u8,
-        len: usize,
-        tag: u64,
-        mask: u64,
-        param: &RequestParam,
-    ) -> Result<Pending, Status> {
-        status_ptr_to_result(unsafe {
-            ucp_tag_recv_nbx(self.handle, ptr as _, len, tag, mask, &param.handle)
         })
     }
 
@@ -292,7 +243,17 @@ impl Worker {
             panic!("Tried to call tag_msg_recv() on a MessageHandle that didn't remove the entry!");
         }
         let info = message.info;
-        let raw = owned_recv_param(param);
+        // A rejected buffer (memory handle check) fails before UCX sees the
+        // message, so the message is handed back for a retry.
+        let raw = match owned_recv_data_param(param, &data, self) {
+            Ok(raw) => raw,
+            Err(status) => {
+                return Err(TagMsgRecvError {
+                    status,
+                    message: Some(message),
+                })
+            }
+        };
         let forced = raw.op_attr_mask & ucp_op_attr_t::UCP_OP_ATTR_FLAG_FORCE_IMM_CMPL as u32 != 0;
         // SAFETY: as in `tag_recv`; `message` is a removed, not yet received
         // message handle.
@@ -337,8 +298,10 @@ fn msg_recv_error_returns_message(forced: bool, status: Status) -> bool {
 pub struct TagMsgRecvError {
     /// UCX status.
     pub status: Status,
-    /// The probed message, only when UCX provably did not consume it
-    /// (`NO_RESOURCE` under `FORCE_IMM_CMPL`); `None` otherwise.
+    /// The probed message, only when UCX provably did not consume it:
+    /// `NO_RESOURCE` under `FORCE_IMM_CMPL`, or a buffer rejected before
+    /// posting (`INVALID_PARAM` from the memory handle check). `None`
+    /// otherwise.
     pub message: Option<MessageHandle>,
 }
 

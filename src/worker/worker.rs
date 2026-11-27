@@ -55,6 +55,9 @@ impl Drop for ProgressGuard<'_> {
 #[derive(Debug)]
 pub struct Worker {
     pub(crate) handle: ucp_worker_h,
+    /// The context this worker was created on. Lets operations check that a
+    /// buffer's memory handle belongs to the same context (#210).
+    pub(crate) context: ucp_context_h,
     pub(crate) alive: Arc<AtomicBool>,
     pub(crate) am_handlers: Vec<std::sync::Arc<crate::am::AmHandler>>,
     #[cfg(debug_assertions)]
@@ -305,6 +308,7 @@ impl Worker {
         match result {
             Ok(()) => Ok(Worker {
                 handle: worker,
+                context: context.handle,
                 alive: Arc::new(AtomicBool::new(true)),
                 am_handlers: Vec::new(),
                 #[cfg(debug_assertions)]
@@ -399,8 +403,17 @@ impl Worker {
     /// Receive the data described by an active-message callback descriptor
     /// into `buffer`, taking ownership of it.
     ///
-    /// UCX takes ownership of `data_desc` after this call, including when the
-    /// operation fails. The filled buffer comes back from
+    /// UCX takes ownership of `data_desc` once the receive is posted,
+    /// including when the operation then fails (`AmRecvDataError::data_desc`
+    /// is `None`). The one exception is a `buffer` rejected **before** posting
+    /// (its memory handle fails the check in [`crate::OwnedBuf::memh`]): UCX
+    /// never saw the descriptor, so the error hands it back in
+    /// `AmRecvDataError::data_desc` and the caller still owns it. Retry with
+    /// another buffer, or release it: [`Worker::am_data_release`] outside the
+    /// AM callback, or return anything but `UCS_INPROGRESS` from the callback
+    /// if this is called inside it, so UCX releases it (for a rendezvous
+    /// descriptor the release is what completes the sender). The filled
+    /// buffer comes back from
     /// [`crate::Completion::Immediate`] or [`crate::OwningRequest::try_complete`].
     /// `params` contributes flags only: a callback or user data is ignored
     /// (the receive member of UCX's callback union has a different signature
@@ -433,8 +446,16 @@ impl Worker {
         data_desc: NonNull<std::ffi::c_void>,
         mut buffer: D,
         params: &RequestParam,
-    ) -> Result<crate::Completion<D, crate::OwningRequest<'_, D>>, Status> {
-        let raw = crate::completion::owned_recv_param(params);
+    ) -> Result<crate::Completion<D, crate::OwningRequest<'_, D>>, crate::am::AmRecvDataError> {
+        let raw = match crate::completion::owned_recv_data_param(params, &buffer, self) {
+            Ok(raw) => raw,
+            Err(status) => {
+                return Err(crate::am::AmRecvDataError {
+                    status,
+                    data_desc: Some(data_desc),
+                })
+            }
+        };
         // SAFETY: the request (if any) writes only into `buffer`'s stable
         // storage, which the returned value owns until UCX is done.
         unsafe {
@@ -445,7 +466,12 @@ impl Worker {
                 buffer.len(),
                 &raw,
             );
-            crate::completion::status_ptr_with_data(ptr, buffer, self)
+            crate::completion::status_ptr_with_data(ptr, buffer, self).map_err(|status| {
+                crate::am::AmRecvDataError {
+                    status,
+                    data_desc: None,
+                }
+            })
         }
     }
 
