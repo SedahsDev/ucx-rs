@@ -196,7 +196,10 @@ pub unsafe fn rkey_ptr(rkey: &RemoteKey, raddr: u64) -> Result<*mut std::os::raw
 /// Destroy a remote key.
 ///
 /// # Safety
-/// Caller must ensure `rkey` is a valid, non-duplicate remote key handle.
+/// Caller must ensure `rkey` is a valid, non-duplicate remote key handle whose
+/// worker is still alive, and must then `std::mem::forget` the `RemoteKey`:
+/// its `Drop` would destroy the same handle again (double free). Prefer
+/// dropping the `RemoteKey`.
 pub unsafe fn rkey_destroy(rkey: &RemoteKey) {
     ucp_rkey_destroy(rkey.handle);
 }

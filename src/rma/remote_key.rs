@@ -104,7 +104,13 @@ impl<'ep> RemoteKey<'ep> {
     /// UCX RMA/AMO while the slice is borrowed are outside Rust's aliasing model;
     /// synchronize externally and do not hold overlapping `&mut` references
     /// across such operations.
+    ///
+    /// Fails with `UCS_ERR_INVALID_PARAM` once the worker is destroyed: the
+    /// key's UCX state was released with it.
     pub fn rkey_ptr(&mut self, remote_addr: u64, len: usize) -> Result<&mut [u8], Status> {
+        if !self.worker_alive.load(Ordering::Acquire) {
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
+        }
         let mut addr = std::ptr::null_mut();
         status_to_result(unsafe { ucp_rkey_ptr(self.handle, remote_addr, &mut addr) })?;
         if addr.is_null() {
@@ -192,9 +198,14 @@ mod tests {
             let memh = MemHandle::map_slice(&context, &mut target, 0).expect("map");
             RemoteKey::pack(&context, memh.mem_handle()).expect("pack")
         };
-        let key = RemoteKey::unpack(&ep, &packed).expect("unpack");
+        let mut key = RemoteKey::unpack(&ep, &packed).expect("unpack");
         drop(worker);
         assert!(!key.worker_alive.load(Ordering::Acquire));
+        // The safe accessor must not reach ucp_rkey_ptr on released state.
+        assert_eq!(
+            key.rkey_ptr(0, 0).err(),
+            Some(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
+        );
         drop(key); // must skip ucp_rkey_destroy
         drop(ep); // skips UCX too (worker dead)
     }
