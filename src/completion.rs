@@ -169,7 +169,15 @@ pub unsafe trait OwnedBuf {
     }
     /// A UCX registration covering the storage, passed to UCX with every
     /// operation (`UCP_OP_ATTR_FIELD_MEMH`) so it skips registering the
-    /// buffer itself. Checked before each operation; the default is none.
+    /// buffer itself. The default is none.
+    ///
+    /// Checked before each operation: the handle must have been mapped on the
+    /// context of the worker the operation runs on, cover all
+    /// [`OwnedBuf::len`] bytes from [`OwnedBuf::as_ptr`], and have the same
+    /// memory type as [`OwnedBuf::memory_type`] (unless that is
+    /// [`MemoryType::Unknown`]). Otherwise the operation fails with
+    /// `UCS_ERR_INVALID_PARAM` before anything is posted. An empty buffer is
+    /// posted without the handle.
     fn memh(&self) -> Option<&MemHandle> {
         None
     }
