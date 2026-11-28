@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Added
+
+- **Fire-and-forget AMO family (#234).** `Ep` gains `amo_add64_post`,
+  `amo_xor64_post`, `amo_and64_post`, `amo_or64_post` (and the 32-bit
+  `amo_*32_post` twins): safe wrappers for `ucp_atomic_post`, the API the
+  request-based family does not cover. The existing `amo_add64` /
+  `amo_xor64` / ... wrap `ucp_atomic_op_nbx` and return a request whose
+  completion must be driven, which forces consumers that don't need the
+  completion (OSHMEM-style atomic updates) to spin on every operation —
+  openshmem-rs's `rma::atomic_xor` currently does exactly that. The post
+  family returns `Result<(), Status>`: UCX accepts the operation and moves
+  on; **completion is NOT tracked, `Ok(())` means *posted*, not *landed***;
+  the update becomes remotely visible at the next `Ep::flush` /
+  `Worker::flush` (the OSHMEM post-then-quiet model). There is no
+  `RequestParam` and no request handle. `worker` is kept for the same
+  endpoint/worker affinity check as the request-based AMOs. SWAP and CSWAP
+  are fetch-family operations and have no post flavor (UCX's
+  `ucp_atomic_post_op_t` covers only ADD/AND/OR/XOR, 32 and 64 bit).
+  - Loopback tests (UCX_TLS=self): each op/width posts many AMOs and one
+    flush lands them all, plus a mixed post/request test on one target
+    (`rma::ep_ops::tests::amo_post_*`).
+  - `tests/amo_post_dvm.rs`: cross-PE ring under a PMIx DVM
+    (`prterun -np 2 -x PMIX_SIZE=2 cargo test --test amo_post_dvm`); each
+    rank posts 256+7+32+32 AMOs to its neighbor's UCX-allocated memory,
+    flushes once, and the receiver verifies. Skips itself without a DVM.
+  - Error path: signature tests assert status-only returns, and a
+    wrong-worker post panics on the affinity check before any FFI call.
+
 ### Migration: owned-data completion (#211)
 
 Every non-blocking operation now takes ownership of its data and returns
