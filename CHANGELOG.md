@@ -14,16 +14,20 @@
   `UCS_ERR_INVALID_PARAM` (and a refused worker is dropped, running its
   usual flush-and-destroy `Drop`). `StWorker::with` runs a closure
   against a plain `&Worker` with no lock, and `StWorker::worker()`
-  lends the reference directly. The `unsafe impl Send/Sync` are
-  **contract-justified, the inverse of `MtWorker`'s lock-justified
-  impls**: a Single-mode worker has no internal locking, so soundness
-  rests on the caller externally serializing ALL access (any clone, any
-  thread); concurrent access is UB. The impls exist so a handle can be
-  moved between threads, not so it can be shared freely. `MtWorker` is
-  untouched. Tests: a Single worker wraps (and is still refused by
-  `MtWorker`), a Serialized worker is refused, progress through both
-  accessors, and the threading-assert matrix pins `StWorker: Send +
-  Sync`.
+  lends the reference directly. `StWorker` is deliberately **`!Send +
+  !Sync`**: UCX grants `Single` mode for single-threaded,
+  **master-thread-only** use (the worker is valid only on its creating
+  thread, with no internal locking), so safe `Send`/`Sync` impls would
+  let the single-thread contract be violated through safe code — they
+  are the promises this type cannot keep. Every clone must be created,
+  used, and dropped on the worker's creating thread, and the last clone
+  must be dropped before the UCX context is cleaned up. The inverse of
+  `MtWorker`'s lock-justified impls; a consumer that wants a
+  multi-threaded surface makes its own audited assertion at its own
+  boundary. `MtWorker` is untouched. Tests: a Single worker wraps (and
+  is still refused by `MtWorker`), a Serialized worker is refused,
+  progress through both accessors, and the threading-assert matrix pins
+  `StWorker: !Send + !Sync`.
 
 - **Post-semantics AMO family (#234).** `Ep` gains `amo_add64_post`,
   `amo_xor64_post`, `amo_and64_post`, `amo_or64_post` (and the 32-bit

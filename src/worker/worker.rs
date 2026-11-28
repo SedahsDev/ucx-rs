@@ -329,19 +329,21 @@ impl MtWorker {
 /// Single-mode workers. Cloning this value clones the handle, not the
 /// underlying UCX worker; all clones access the same worker.
 ///
-/// # The single-thread contract (read this before using `Send`/`Sync`)
+/// # Master-thread-only (`!Send + !Sync`)
 ///
-/// `StWorker` is `Send + Sync`, but that is **not** a thread-safety
-/// guarantee the way [`MtWorker`]'s impls are. It is the inverse: UCX
-/// granted `Single` mode, so the worker has no internal locking of any
-/// kind, and the **caller** must externally serialize *all* access to
-/// this worker — every operation issued through any clone, on any
-/// thread. Concurrent access to a Single-mode worker (including a
-/// `progress()` racing any other call) is undefined behavior. The
-/// `Send`/`Sync` impls exist so a handle can be *moved* between threads
-/// (for example into a dedicated progress thread); they do not license
-/// concurrent use. If you cannot guarantee external serialization,
-/// use [`MtWorker`] with a `Serialized`/`Multi` worker instead.
+/// `StWorker` is **not** `Send` and **not** `Sync` — deliberately. UCX
+/// grants `Single` mode for single-threaded, **master-thread-only** use:
+/// the worker is valid only on the thread that created it, and it has no
+/// internal locking of any kind. A safe `Send` would let a clone be
+/// *used* on another thread, and a safe `Sync` (plus [`Clone`]) would
+/// let two threads race the same worker through entirely safe method
+/// calls — `Send`/`Sync` are promises this type cannot keep, so it does
+/// not make them. Every clone must be created, used, and dropped on
+/// the worker's creating thread, and the **last** clone must be dropped
+/// before the UCX context is cleaned up (its `Drop` runs the worker's
+/// flush-and-destroy, which Single mode requires on the master thread).
+/// If you need to touch the worker from more than one thread, use
+/// [`MtWorker`] with a `Serialized`/`Multi` worker instead.
 ///
 /// Endpoints returned by [`StWorker::create_ep`] remain `!Send` and
 /// `!Sync`, exactly as with [`MtWorker::create_ep`]. Owned-data
@@ -445,11 +447,12 @@ impl StWorker {
     /// Run `operation` against the underlying worker — **no lock**.
     ///
     /// Unlike [`MtWorker::with_worker`] this takes no mutex; it hands out a
-    /// plain `&Worker` reference. That is sound only under the single-thread
-    /// contract on the type: the caller externally serializes every access.
-    /// Inside the closure the usual single-thread rules apply — post, own,
-    /// progress and complete borrowed requests there (`w.progress()`, not a
-    /// re-entrant call that another thread might be racing).
+    /// plain `&Worker` reference. That is sound because the type is
+    /// master-thread-only: the handle cannot even reach another thread
+    /// through safe code (`!Send + !Sync`), so every `with` call runs on
+    /// the worker's creating thread. Inside the closure post, own,
+    /// progress and complete borrowed requests (`w.progress()` is fine —
+    /// no other thread can be racing).
     ///
     /// Because there is no lock to re-enter, a callback re-entry deadlock of
     /// the `MtWorker::with_worker` kind cannot happen here; instead, calling
