@@ -112,6 +112,60 @@ mod tests {
         ));
     }
 
+    fn setup_single_worker() -> (Context, Worker) {
+        let context_params = ContextParamsBuilder::new()
+            .features(Flags::Tag)
+            .mt_workers_shared(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config read"), &context_params)
+                .expect("context create");
+        let mut worker_params = ParamsBuilder::new();
+        worker_params.thread_mode(crate::ThreadMode::Single);
+        let worker_params = worker_params.build();
+        let worker = context
+            .worker_create(&worker_params)
+            .expect("worker create");
+        (context, worker)
+    }
+
+    #[test]
+    fn single_mode_worker_wraps_in_stworker() {
+        let (_context, worker) = setup_single_worker();
+        // UCX granted Single for this worker, so StWorker accepts it — the
+        // same worker was refused by MtWorker above.
+        let granted = worker
+            .query(WorkerAttrFields::THREAD_MODE)
+            .expect("query")
+            .thread_mode
+            .expect("thread mode present");
+        assert_eq!(granted, crate::ThreadMode::Single);
+        let st = StWorker::new(worker).expect("UCX granted Single");
+        // Clones share the same underlying worker (no worker is duplicated).
+        let _clone = st.clone();
+    }
+
+    #[test]
+    fn serialized_mode_worker_is_refused_by_stworker() {
+        let (_context, worker) = setup_worker();
+        assert!(matches!(
+            StWorker::new(worker),
+            Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM))
+        ));
+    }
+
+    #[test]
+    fn stworker_progresses_the_underlying_worker() {
+        let (_context, worker) = setup_single_worker();
+        let st = StWorker::new(worker).expect("UCX granted Single");
+        // Both accessors reach the same worker without any lock.
+        let _ = st.progress();
+        st.with(|w| {
+            let _ = w.progress();
+        });
+        let _ = st.worker().progress();
+    }
+
     #[test]
     fn serialized_mode_worker_can_progress_through_wrapper() {
         let (_context, worker) = setup_worker();
@@ -262,6 +316,195 @@ impl MtWorker {
 
     pub fn pack_address(&self) -> Result<Vec<u8>, Status> {
         self.lock().pack_address().map(|address| address.to_vec())
+    }
+}
+
+/// A cloneable handle to a worker UCX granted `ThreadMode::Single`.
+///
+/// This is the single-thread counterpart of [`MtWorker`]: it holds the
+/// [`Worker`] directly, with **no mutex and no locking anywhere**.
+/// Construction queries the mode UCX actually granted and accepts only
+/// [`crate::ThreadMode::Single`]; every other mode is refused
+/// (`UCS_ERR_INVALID_PARAM`), mirroring how [`MtWorker::new`] refuses
+/// Single-mode workers. Cloning this value clones the handle, not the
+/// underlying UCX worker; all clones access the same worker.
+///
+/// # Master-thread-only (`!Send + !Sync`)
+///
+/// `StWorker` is **not** `Send` and **not** `Sync` — deliberately. UCX
+/// grants `Single` mode for single-threaded, **master-thread-only** use:
+/// the worker is valid only on the thread that created it, and it has no
+/// internal locking of any kind. A safe `Send` would let a clone be
+/// *used* on another thread, and a safe `Sync` (plus [`Clone`]) would
+/// let two threads race the same worker through entirely safe method
+/// calls — `Send`/`Sync` are promises this type cannot keep, so it does
+/// not make them. Every clone must be created, used, and dropped on
+/// the worker's creating thread, and the **last** clone must be dropped
+/// before the UCX context is cleaned up (its `Drop` runs the worker's
+/// flush-and-destroy, which Single mode requires on the master thread).
+/// If you need to touch the worker from more than one thread, use
+/// [`MtWorker`] with a `Serialized`/`Multi` worker instead.
+///
+/// Endpoints returned by [`StWorker::create_ep`] remain `!Send` and
+/// `!Sync`, exactly as with [`MtWorker::create_ep`]. Owned-data
+/// requests (`OwningRequest`, `FetchAmoRequest`, ...) borrow a plain
+/// `&Worker`, so they are created and completed inside [`StWorker::with`]
+/// — on the worker's creating thread, exactly like the closure body
+/// itself: no other thread can even hold this handle, so nothing can
+/// race them.
+///
+/// # Example
+///
+/// ```no_run
+/// # use ucx_sys::{
+/// #     context::{Config, Context, Flags, ParamsBuilder as ContextParamsBuilder},
+/// #     worker::{ParamsBuilder, StWorker},
+/// # };
+/// # fn demo() -> Result<(), ucx_sys::Status> {
+/// let context_params = ContextParamsBuilder::new()
+///     .features(Flags::Tag)
+///     .mt_workers_shared(1)
+///     .build();
+/// let mut context =
+///     Context::new(&Config::read("", "").expect("config read"), &context_params)
+///         .expect("context create");
+/// let mut worker_params = ParamsBuilder::new();
+/// worker_params.thread_mode(ucx_sys::ThreadMode::Single);
+/// let worker = context.worker_create(&worker_params.build())?;
+/// let st = StWorker::new(worker)?; // refuses non-Single workers
+/// st.with(|w| w.progress()); // no lock, just a reference
+/// # Ok(())
+/// # }
+/// ```
+pub struct StWorker {
+    inner: Arc<StWorkerInner>,
+}
+
+struct StWorkerInner {
+    worker: Worker,
+}
+
+impl Clone for StWorker {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl std::fmt::Debug for StWorker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("StWorker").finish_non_exhaustive()
+    }
+}
+
+// Deliberately NOT `unsafe impl Send/Sync`: UCX grants Single mode for
+// single-threaded, MASTER-THREAD-ONLY use — the worker is only valid on the
+// thread that created it, and it has no internal locking whatsoever. Safe
+// `Send` would let a clone be USED on another thread (undefined behavior
+// reachable through safe code), and safe `Sync` plus `Clone` lets two
+// threads hold handles and race the same worker through entirely safe
+// method calls. A "caller must serialize" contract cannot be expressed by
+// these impls, because `Send`/`Sync` are PROMISES this type cannot keep.
+// StWorker is therefore `!Send + !Sync`, the honest inverse of MtWorker's
+// lock-justified impls. The single-thread contract lives with the CONSUMER
+// (e.g. openshmem-rs's SHMEM_THREAD_SINGLE surface), which must make its
+// own audited assertion at its own boundary.
+//
+// Lifetime rule (also documented on `StWorker::new`): the LAST `StWorker`
+// clone must be dropped on the worker's creating thread, BEFORE the UCX
+// context is cleaned up — `StWorkerInner`'s `Drop` runs `Worker`'s usual
+// flush-and-destroy, and under Single mode UCX requires that teardown on
+// the master thread.
+
+impl StWorker {
+    /// Wrap a worker only when UCX reports it runs in `ThreadMode::Single`.
+    ///
+    /// The requested mode is not trusted: the worker's *granted* mode is
+    /// queried (the same [`Worker::query`] with
+    /// [`WorkerAttrFields::THREAD_MODE`] that [`MtWorker::new`] uses), and
+    /// anything other than [`crate::ThreadMode::Single`] is refused with
+    /// `UCS_ERR_INVALID_PARAM` (the worker is then dropped, running its
+    /// usual flush-and-destroy `Drop`).
+    ///
+    /// Single-mode workers are MASTER-THREAD-ONLY: this handle (and every
+    /// clone) must be created, used, and dropped on the worker's creating
+    /// thread, and the last clone must be dropped before the UCX context
+    /// is cleaned up.
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn new(worker: Worker) -> Result<Self, Status> {
+        let mode = worker
+            .query(WorkerAttrFields::THREAD_MODE)?
+            .thread_mode
+            .ok_or(ucs_status_t::UCS_ERR_INVALID_PARAM)?;
+        if !matches!(mode, crate::ThreadMode::Single) {
+            return Err(Status(ucs_status_t::UCS_ERR_INVALID_PARAM));
+        }
+        Ok(Self {
+            inner: Arc::new(StWorkerInner { worker }),
+        })
+    }
+
+    /// Run `operation` against the underlying worker — **no lock**.
+    ///
+    /// Unlike [`MtWorker::with_worker`] this takes no mutex; it hands out a
+    /// plain `&Worker` reference. That is sound because the type is
+    /// master-thread-only: the handle cannot even reach another thread
+    /// through safe code (`!Send + !Sync`), so every `with` call runs on
+    /// the worker's creating thread. Inside the closure post, own,
+    /// progress and complete borrowed requests (`w.progress()` is fine —
+    /// no other thread can be racing).
+    ///
+    /// Because there is no lock to re-enter, a callback re-entry deadlock of
+    /// the `MtWorker::with_worker` kind cannot happen here; instead, calling
+    /// `with` from a UCX callback still runs on the same worker the callback
+    /// is progressing, so the ordinary callback rules
+    /// (see the crate-level threading docs) apply unchanged.
+    pub fn with<F, T>(&self, operation: F) -> T
+    where
+        F: FnOnce(&Worker) -> T,
+    {
+        operation(&self.inner.worker)
+    }
+
+    /// Borrow the underlying worker directly, with no lock.
+    ///
+    /// The same single-thread contract as [`StWorker::with`] applies to every
+    /// method call on the returned reference.
+    pub fn worker(&self) -> &Worker {
+        &self.inner.worker
+    }
+
+    pub fn progress(&self) -> bool {
+        self.inner.worker.progress()
+    }
+
+    /// Apply worker-wide UCX ordering to operations issued before this call.
+    pub fn fence(&self) -> Result<(), Status> {
+        self.inner.worker.fence()
+    }
+
+    pub fn wait(&self) -> Result<(), Status> {
+        self.inner.worker.wait()
+    }
+    pub fn arm(&self) -> Result<(), Status> {
+        self.inner.worker.arm()
+    }
+    pub fn signal(&self) -> Result<(), Status> {
+        self.inner.worker.signal()
+    }
+    pub fn get_efd(&self) -> Result<i32, Status> {
+        self.inner.worker.get_efd()
+    }
+    pub fn create_ep(&self, ep_params: ep::Params<'_>) -> Result<Ep, Status> {
+        self.inner.worker.create_ep(ep_params)
+    }
+
+    pub fn pack_address(&self) -> Result<Vec<u8>, Status> {
+        self.inner
+            .worker
+            .pack_address()
+            .map(|address| address.to_vec())
     }
 }
 

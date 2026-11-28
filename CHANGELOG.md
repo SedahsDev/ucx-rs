@@ -4,6 +4,31 @@
 
 ### Added
 
+- **`worker::StWorker` — single-thread handle.** The lock-free
+  counterpart of `MtWorker` for workers UCX granted
+  `ThreadMode::Single`: holds the `Worker` directly (an `Arc`, so clones
+  share one worker) with **no mutex and no locking on any call**.
+  `StWorker::new` mirrors `MtWorker::new` — it queries the *granted*
+  thread mode (`Worker::query` + `WorkerAttrFields::THREAD_MODE`) and
+  accepts ONLY `Single`; anything else is refused with
+  `UCS_ERR_INVALID_PARAM` (and a refused worker is dropped, running its
+  usual flush-and-destroy `Drop`). `StWorker::with` runs a closure
+  against a plain `&Worker` with no lock, and `StWorker::worker()`
+  lends the reference directly. `StWorker` is deliberately **`!Send +
+  !Sync`**: UCX grants `Single` mode for single-threaded,
+  **master-thread-only** use (the worker is valid only on its creating
+  thread, with no internal locking), so safe `Send`/`Sync` impls would
+  let the single-thread contract be violated through safe code — they
+  are the promises this type cannot keep. Every clone must be created,
+  used, and dropped on the worker's creating thread, and the last clone
+  must be dropped before the UCX context is cleaned up. The inverse of
+  `MtWorker`'s lock-justified impls; a consumer that wants a
+  multi-threaded surface makes its own audited assertion at its own
+  boundary. `MtWorker` is untouched. Tests: a Single worker wraps (and
+  is still refused by `MtWorker`), a Serialized worker is refused,
+  progress through both accessors, and the threading-assert matrix pins
+  `StWorker: !Send + !Sync`.
+
 - **Post-semantics AMO family (#234).** `Ep` gains `amo_add64_post`,
   `amo_xor64_post`, `amo_and64_post`, `amo_or64_post` (and the 32-bit
   `amo_*32_post` twins): safe wrappers for `ucp_atomic_post`, the API the
