@@ -349,8 +349,9 @@ impl MtWorker {
 /// `!Sync`, exactly as with [`MtWorker::create_ep`]. Owned-data
 /// requests (`OwningRequest`, `FetchAmoRequest`, ...) borrow a plain
 /// `&Worker`, so they are created and completed inside [`StWorker::with`]
-/// — since `with` does not lock, that is the same thread-safety story as
-/// the closure body itself: single-threaded unless you serialize it.
+/// — on the worker's creating thread, exactly like the closure body
+/// itself: no other thread can even hold this handle, so nothing can
+/// race them.
 ///
 /// # Example
 ///
