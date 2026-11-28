@@ -1,11 +1,13 @@
-//! Cross-PE fire-and-forget AMO (`ucp_atomic_post`) test for the PMIx DVM.
+//! Cross-PE post-semantics AMO (`ucp_atomic_post`) test for the PMIx DVM.
 //!
-//! Launch with prterun and at least 2 ranks, exporting the size so every
-//! rank can discover it (same convention as the openshmem-rs examples):
+//! Launch with prterun and at least 2 ranks (3+ actually exercises the
+//! ring: at 2 ranks the successor and predecessor coincide), exporting the
+//! size so every rank can discover it (same convention as the
+//! openshmem-rs examples):
 //!
 //! ```text
 //! LD_LIBRARY_PATH="$HOME/.local/ucx/lib:$HOME/.local/ucc/lib" \
-//! prterun -np 2 -x PMIX_SIZE=2 \
+//! prterun -np 3 -x PMIX_SIZE=3 \
 //!     cargo test --test amo_post_dvm -- --nocapture
 //! ```
 //!
@@ -225,9 +227,14 @@ fn amo_post_cross_pe() {
         .unwrap_or_else(|status: Status| panic!("post ep flush: {status}"));
     wait_op(&worker, flush, "endpoint flush");
 
-    // File barrier: only verify once the sender has flushed.
+    // File barrier: our targets are written by the ring predecessor
+    // PE (rank - 1) % size, so only ITS done marker guards our verify.
+    // (Waiting for target_pe's marker is wrong at size > 2: that PE
+    // writes its own memory, which we never read. At size == 2 the two
+    // coincide, which is why the bug was invisible there.)
     write_file(&done_path(rank), &[1]);
-    wait_for_file(&worker, &done_path(target_pe), "peer done marker");
+    let predecessor = (rank + size - 1) % size;
+    wait_for_file(&worker, &done_path(predecessor), "predecessor done marker");
 
     // ── Verify phase: read OUR targets, written by PE (rank - 1) % size. ──
     unsafe {

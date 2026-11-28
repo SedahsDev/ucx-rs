@@ -4,29 +4,36 @@
 
 ### Added
 
-- **Fire-and-forget AMO family (#234).** `Ep` gains `amo_add64_post`,
+- **Post-semantics AMO family (#234).** `Ep` gains `amo_add64_post`,
   `amo_xor64_post`, `amo_and64_post`, `amo_or64_post` (and the 32-bit
   `amo_*32_post` twins): safe wrappers for `ucp_atomic_post`, the API the
   request-based family does not cover. The existing `amo_add64` /
   `amo_xor64` / ... wrap `ucp_atomic_op_nbx` and return a request whose
-  completion must be driven, which forces consumers that don't need the
-  completion (OSHMEM-style atomic updates) to spin on every operation —
-  openshmem-rs's `rma::atomic_xor` currently does exactly that. The post
-  family returns `Result<(), Status>`: UCX accepts the operation and moves
-  on; **completion is NOT tracked, `Ok(())` means *posted*, not *landed***;
-  the update becomes remotely visible at the next `Ep::flush` /
-  `Worker::flush` (the OSHMEM post-then-quiet model). There is no
-  `RequestParam` and no request handle. `worker` is kept for the same
-  endpoint/worker affinity check as the request-based AMOs. SWAP and CSWAP
-  are fetch-family operations and have no post flavor (UCX's
+  completion must be driven. The post family returns `Result<(), Status>`
+  with no `RequestParam` and no request handle; `worker` is kept for the
+  same endpoint/worker affinity check as the request-based AMOs. SWAP and
+  CSWAP are fetch-family operations and have no post flavor (UCX's
   `ucp_atomic_post_op_t` covers only ADD/AND/OR/XOR, 32 and 64 bit).
+  Semantics (verified against the UCX 1.20 libucp): the call returns after
+  the operation reaches LOCAL completion (libucp runs a `ucp_rma_wait`
+  progress loop on its internal request, so `Ok(())` is *locally
+  complete*, not *remotely landed*), and because it progresses the worker
+  internally it must not be called from a UCX callback. The target becomes
+  remotely visible at the next `Ep::flush` / `Worker::flush` — the OSHMEM
+  post-then-quiet model, minus per-op handle bookkeeping.
   - Loopback tests (UCX_TLS=self): each op/width posts many AMOs and one
     flush lands them all, plus a mixed post/request test on one target
     (`rma::ep_ops::tests::amo_post_*`).
   - `tests/amo_post_dvm.rs`: cross-PE ring under a PMIx DVM
-    (`prterun -np 2 -x PMIX_SIZE=2 cargo test --test amo_post_dvm`); each
-    rank posts 256+7+32+32 AMOs to its neighbor's UCX-allocated memory,
-    flushes once, and the receiver verifies. Skips itself without a DVM.
+    (`prterun -np 3 cargo test --test amo_post_dvm`); each rank posts
+    256+7+32+32 AMOs to its successor's UCX-allocated memory, flushes once,
+    then waits for its *predecessor's* done marker (the PE that writes
+    this rank's targets — at size > 2 the successor and predecessor are
+    different ranks) before verifying its own targets. Info files are
+    removed after the exchange; done markers are intentionally retained
+    (the writer cannot know when the reader has observed them, and the
+    exchange dir is keyed by PMIX_NAMESPACE so a stale marker can never
+    satisfy a future run's wait). Skips itself without a DVM.
   - Error path: signature tests assert status-only returns, and a
     wrong-worker post panics on the affinity check before any FFI call.
 

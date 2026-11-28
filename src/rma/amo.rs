@@ -732,14 +732,22 @@ impl Ep {
     //
     // The methods above wrap `ucp_atomic_op_nbx` and hand back a request whose
     // completion must be driven. The `*_post` family below wraps
-    // `ucp_atomic_post`: UCX accepts the operation and returns only a status —
-    // no request handle exists, per-operation completion is NOT tracked, and
-    // the update becomes remotely visible at the next ep/worker flush. This
-    // is the OSHMEM "post + quiet" model, and the right primitive for
-    // pipelining many AMOs that only need to be ordered at a flush.
+    // `ucp_atomic_post`. IMPORTANT: the name says what the CALLER does, not
+    // what libucp does — since UCX 1.13, `ucp_atomic_post` internally issues
+    // `ucp_atomic_op_nbx` and runs a `ucp_rma_wait` progress loop on that
+    // request, so the call returns only after the operation reaches LOCAL
+    // completion (verified in the disassembly of UCX 1.20's libucp). What it
+    // does NOT do is return a request handle or expose that completion: the
+    // caller holds nothing to drive, and the update becomes remotely visible
+    // at the next ep/worker flush. It therefore still pipelines better than
+    // the request family (no handle bookkeeping, no completion dispatch),
+    // and it matches the OSHMEM post-then-`quiet` model — but it is NOT
+    // zero-cost: each call can progress (and re-enter) the worker, so it
+    // must not be used from a UCX callback.
 
-    /// Shared body of the `amo_*_post` family: fire-and-forget via
-    /// `ucp_atomic_post`.
+    /// Shared body of the `amo_*_post` family: `ucp_atomic_post` — no
+    /// request handle, local completion inside the call, remote visibility
+    /// at flush.
     fn fire_forget_amo(
         &self,
         worker: &Worker,
@@ -763,17 +771,19 @@ impl Ep {
         })
     }
 
-    /// Atomic ADD 64-bit on remote memory — **fire-and-forget**.
+    /// Atomic ADD 64-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked.** This wraps `ucp_atomic_post`: UCX
-    /// accepts the operation and returns immediately — there is no request
-    /// handle and no per-operation completion to drive. `Ok(())` means
-    /// *posted*, not *landed*: the update becomes remotely visible at the
-    /// next [`Ep::flush`] or [`crate::worker::Worker::flush`], and until then
-    /// the remote value must be assumed unmodified. **This is the UCX post
-    /// semantic, not a bug** — it is the same model as OSHMEM's
-    /// post-then-`quiet` atomics, where many AMOs are pipelined and ordered
-    /// by one flush instead of each spinning on its own completion (the
+    /// This wraps `ucp_atomic_post`: no request handle is returned and the
+    /// caller drives no completion. Since UCX 1.13 the call internally waits
+    /// for the operation's LOCAL completion (a `ucp_rma_wait` progress loop
+    /// inside libucp), so `Ok(())` means the operation is locally complete —
+    /// *not* that the target reflects it. The update becomes remotely
+    /// visible at the next [`Ep::flush`] or
+    /// [`crate::worker::Worker::flush`]; until then the remote value must be
+    /// assumed unmodified. Because the call progresses the worker
+    /// internally, it **must not be used from a UCX callback**. This is the
+    /// same model as OSHMEM's post-then-`quiet` atomics, where many AMOs are
+    /// ordered by one flush instead of each exposing its own completion (the
     /// per-request [`Ep::amo_add64`] equivalent).
     ///
     /// `worker` is used for the same endpoint/worker affinity check as the
@@ -797,11 +807,11 @@ impl Ep {
         )
     }
 
-    /// Atomic XOR 64-bit on remote memory — **fire-and-forget**.
+    /// Atomic XOR 64-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility.
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
     pub fn amo_xor64_post(
         &self,
         worker: &Worker,
@@ -819,11 +829,11 @@ impl Ep {
         )
     }
 
-    /// Atomic AND 64-bit on remote memory — **fire-and-forget**.
+    /// Atomic AND 64-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility.
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
     pub fn amo_and64_post(
         &self,
         worker: &Worker,
@@ -841,11 +851,11 @@ impl Ep {
         )
     }
 
-    /// Atomic OR 64-bit on remote memory — **fire-and-forget**.
+    /// Atomic OR 64-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility.
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
     pub fn amo_or64_post(
         &self,
         worker: &Worker,
@@ -863,11 +873,11 @@ impl Ep {
         )
     }
 
-    /// Atomic ADD 32-bit on remote memory — **fire-and-forget**.
+    /// Atomic ADD 32-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility. UCX reads the operand from the
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
     /// low 32 bits of the posted value.
     pub fn amo_add32_post(
         &self,
@@ -886,11 +896,11 @@ impl Ep {
         )
     }
 
-    /// Atomic XOR 32-bit on remote memory — **fire-and-forget**.
+    /// Atomic XOR 32-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility. UCX reads the operand from the
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
     /// low 32 bits of the posted value.
     pub fn amo_xor32_post(
         &self,
@@ -909,11 +919,11 @@ impl Ep {
         )
     }
 
-    /// Atomic AND 32-bit on remote memory — **fire-and-forget**.
+    /// Atomic AND 32-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility. UCX reads the operand from the
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
     /// low 32 bits of the posted value.
     pub fn amo_and32_post(
         &self,
@@ -932,11 +942,11 @@ impl Ep {
         )
     }
 
-    /// Atomic OR 32-bit on remote memory — **fire-and-forget**.
+    /// Atomic OR 32-bit on remote memory — *post* semantics.
     ///
-    /// **Completion is NOT tracked** — see [`Ep::amo_add64_post`] for the
-    /// post semantic: `Ok(())` means posted, not landed; flush the endpoint
-    /// before relying on remote visibility. UCX reads the operand from the
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
     /// low 32 bits of the posted value.
     pub fn amo_or32_post(
         &self,
