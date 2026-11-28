@@ -395,19 +395,24 @@ impl std::fmt::Debug for StWorker {
     }
 }
 
-// SAFETY (contract, not locks — the inverse of MtWorker): `new` admits only
-// workers whose UCX-granted mode is SINGLE, and a Single-mode worker has no
-// internal locking. Nothing here makes concurrent access safe; instead the
-// CONTRACT does: the caller must externally serialize ALL access to this
-// worker across every clone and every thread. Moving the handle between
-// threads is fine (that is why Send exists); using it from two threads at
-// once is undefined behavior.
-unsafe impl Send for StWorker {}
-// SAFETY: See the `Send` implementation. `&StWorker` only hands out the same
-// unlocked worker; sharing it is sound only under the same external
-// serialization contract. `create_ep` returns an `Ep` that remains `!Send`
-// and `!Sync`, so this impl does not make endpoints thread-safe either.
-unsafe impl Sync for StWorker {}
+// Deliberately NOT `unsafe impl Send/Sync`: UCX grants Single mode for
+// single-threaded, MASTER-THREAD-ONLY use — the worker is only valid on the
+// thread that created it, and it has no internal locking whatsoever. Safe
+// `Send` would let a clone be USED on another thread (undefined behavior
+// reachable through safe code), and safe `Sync` plus `Clone` lets two
+// threads hold handles and race the same worker through entirely safe
+// method calls. A "caller must serialize" contract cannot be expressed by
+// these impls, because `Send`/`Sync` are PROMISES this type cannot keep.
+// StWorker is therefore `!Send + !Sync`, the honest inverse of MtWorker's
+// lock-justified impls. The single-thread contract lives with the CONSUMER
+// (e.g. openshmem-rs's SHMEM_THREAD_SINGLE surface), which must make its
+// own audited assertion at its own boundary.
+//
+// Lifetime rule (also documented on `StWorker::new`): the LAST `StWorker`
+// clone must be dropped on the worker's creating thread, BEFORE the UCX
+// context is cleaned up — `StWorkerInner`'s `Drop` runs `Worker`'s usual
+// flush-and-destroy, and under Single mode UCX requires that teardown on
+// the master thread.
 
 impl StWorker {
     /// Wrap a worker only when UCX reports it runs in `ThreadMode::Single`.
@@ -418,6 +423,11 @@ impl StWorker {
     /// anything other than [`crate::ThreadMode::Single`] is refused with
     /// `UCS_ERR_INVALID_PARAM` (the worker is then dropped, running its
     /// usual flush-and-destroy `Drop`).
+    ///
+    /// Single-mode workers are MASTER-THREAD-ONLY: this handle (and every
+    /// clone) must be created, used, and dropped on the worker's creating
+    /// thread, and the last clone must be dropped before the UCX context
+    /// is cleaned up.
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(worker: Worker) -> Result<Self, Status> {
         let mode = worker
