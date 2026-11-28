@@ -10,6 +10,9 @@ mod asserts {
     // These wrappers are tied to the UCX object/progress context that owns them.
     assert_not_impl_any!(crate::worker::Worker: Send, Sync);
     assert_impl_all!(crate::worker::MtWorker: Send, Sync);
+    // StWorker is Send+Sync by CONTRACT (externally serialized single-thread
+    // access), not by internal locking — see its type-level safety docs.
+    assert_impl_all!(crate::worker::StWorker: Send, Sync);
     assert_not_impl_any!(crate::ep::Ep: Send, Sync);
     assert_not_impl_any!(crate::Request: Send, Sync);
     assert_not_impl_any!(crate::rma::RemoteKey: Send, Sync);
