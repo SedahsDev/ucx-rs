@@ -727,4 +727,316 @@ impl Ep {
             rkey,
         )
     }
+
+    // ── Fire-and-forget family: `ucp_atomic_post` ──
+    //
+    // The methods above wrap `ucp_atomic_op_nbx` and hand back a request whose
+    // completion must be driven. The `*_post` family below wraps
+    // `ucp_atomic_post`. IMPORTANT: the name says what the CALLER does, not
+    // what libucp does — since UCX 1.13, `ucp_atomic_post` internally issues
+    // `ucp_atomic_op_nbx` and runs a `ucp_rma_wait` progress loop on that
+    // request, so the call returns only after the operation reaches LOCAL
+    // completion (verified in the disassembly of UCX 1.20's libucp). What it
+    // does NOT do is return a request handle or expose that completion: the
+    // caller holds nothing to drive, and the update becomes remotely visible
+    // at the next ep/worker flush. It therefore still pipelines better than
+    // the request family (no handle bookkeeping, no completion dispatch),
+    // and it matches the OSHMEM post-then-`quiet` model — but it is NOT
+    // zero-cost: each call can progress (and re-enter) the worker, so it
+    // must not be used from a UCX callback.
+
+    /// Shared body of the `amo_*_post` family: `ucp_atomic_post` — no
+    /// request handle, local completion inside the call, remote visibility
+    /// at flush.
+    fn fire_forget_amo(
+        &self,
+        worker: &Worker,
+        op: ucp_atomic_post_op_t,
+        operand: u64,
+        op_size: usize,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        debug_assert!(
+            std::sync::Arc::ptr_eq(&self.worker_alive, &worker.alive),
+            "AMO: the passed worker is not the endpoint's worker"
+        );
+        // SAFETY: `ucp_atomic_post` copies `operand` by value before
+        // returning and creates no request handle, so it retains no pointer
+        // into this frame; `self.handle` (live endpoint) and `rkey.handle`
+        // (borrowed for the call) are valid; `op_size` is 4 or 8 for the
+        // u32/u64 flavors and matches the caller's operand width.
+        crate::status::status_to_result(unsafe {
+            ucp_atomic_post(self.handle, op, operand, op_size, remote_addr, rkey.handle)
+        })
+    }
+
+    /// Atomic ADD 64-bit on remote memory — *post* semantics.
+    ///
+    /// This wraps `ucp_atomic_post`: no request handle is returned and the
+    /// caller drives no completion. Since UCX 1.13 the call internally waits
+    /// for the operation's LOCAL completion (a `ucp_rma_wait` progress loop
+    /// inside libucp), so `Ok(())` means the operation is locally complete —
+    /// *not* that the target reflects it. The update becomes remotely
+    /// visible at the next [`Ep::flush`] or
+    /// [`crate::worker::Worker::flush`]; until then the remote value must be
+    /// assumed unmodified. Because the call progresses the worker
+    /// internally, it **must not be used from a UCX callback**. This is the
+    /// same model as OSHMEM's post-then-`quiet` atomics, where many AMOs are
+    /// ordered by one flush instead of each exposing its own completion (the
+    /// per-request [`Ep::amo_add64`] equivalent).
+    ///
+    /// `worker` is used for the same endpoint/worker affinity check as the
+    /// request-based AMOs; the post itself needs no progress handle. `Err`
+    /// reports immediate rejection (unsupported operation, invalid key,
+    /// ...), not a completion failure.
+    pub fn amo_add64_post(
+        &self,
+        worker: &Worker,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_ADD,
+            operand,
+            std::mem::size_of::<u64>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic XOR 64-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
+    pub fn amo_xor64_post(
+        &self,
+        worker: &Worker,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_XOR,
+            operand,
+            std::mem::size_of::<u64>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic AND 64-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
+    pub fn amo_and64_post(
+        &self,
+        worker: &Worker,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_AND,
+            operand,
+            std::mem::size_of::<u64>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic OR 64-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush.
+    pub fn amo_or64_post(
+        &self,
+        worker: &Worker,
+        operand: u64,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_OR,
+            operand,
+            std::mem::size_of::<u64>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic ADD 32-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
+    /// low 32 bits of the posted value.
+    pub fn amo_add32_post(
+        &self,
+        worker: &Worker,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_ADD,
+            u64::from(operand),
+            std::mem::size_of::<u32>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic XOR 32-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
+    /// low 32 bits of the posted value.
+    pub fn amo_xor32_post(
+        &self,
+        worker: &Worker,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_XOR,
+            u64::from(operand),
+            std::mem::size_of::<u32>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic AND 32-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
+    /// low 32 bits of the posted value.
+    pub fn amo_and32_post(
+        &self,
+        worker: &Worker,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_AND,
+            u64::from(operand),
+            std::mem::size_of::<u32>(),
+            remote_addr,
+            rkey,
+        )
+    }
+
+    /// Atomic OR 32-bit on remote memory — *post* semantics.
+    ///
+    /// See [`Ep::amo_add64_post`] for the post semantic: `Ok(())` means the
+    /// operation is locally complete (waited inside libucp); remote
+    /// visibility still requires an endpoint/worker flush. UCX reads the operand from the
+    /// low 32 bits of the posted value.
+    pub fn amo_or32_post(
+        &self,
+        worker: &Worker,
+        operand: u32,
+        remote_addr: u64,
+        rkey: &RemoteKey,
+    ) -> Result<(), Status> {
+        self.fire_forget_amo(
+            worker,
+            ucp_atomic_post_op_t::UCP_ATOMIC_POST_OP_OR,
+            u64::from(operand),
+            std::mem::size_of::<u32>(),
+            remote_addr,
+            rkey,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{Config, Context, Flags, ParamsBuilder};
+    use crate::ep::ParamsBuilder as EpParamsBuilder;
+    use crate::memh::MemHandle;
+    use crate::worker::{ParamsBuilder as WorkerParamsBuilder, RemoteWorkerAddress};
+    use crate::RequestParamBuilder;
+
+    /// The post family is fire-and-forget: `Result<(), Status>`, no request
+    /// handle, no `RequestParam`. Compile-time check via fn-pointer
+    /// assignment, mirroring `atomic::fetch_amo_signatures_require_reply_output`.
+    #[test]
+    fn post_amo_signatures_return_status_only() {
+        let add64: fn(&Ep, &Worker, u64, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_add64_post;
+        let xor64: fn(&Ep, &Worker, u64, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_xor64_post;
+        let and64: fn(&Ep, &Worker, u64, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_and64_post;
+        let or64: fn(&Ep, &Worker, u64, u64, &RemoteKey) -> Result<(), Status> = Ep::amo_or64_post;
+        let add32: fn(&Ep, &Worker, u32, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_add32_post;
+        let xor32: fn(&Ep, &Worker, u32, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_xor32_post;
+        let and32: fn(&Ep, &Worker, u32, u64, &RemoteKey) -> Result<(), Status> =
+            Ep::amo_and32_post;
+        let or32: fn(&Ep, &Worker, u32, u64, &RemoteKey) -> Result<(), Status> = Ep::amo_or32_post;
+        let _ = (add64, xor64, and64, or64, add32, xor32, and32, or32);
+    }
+
+    /// The post family rejects a worker that is not the endpoint's worker,
+    /// like the request-based AMOs: the affinity `debug_assert!` fires before
+    /// any FFI call.
+    #[test]
+    #[should_panic(expected = "not the endpoint's worker")]
+    fn amo_post_wrong_worker_panics() {
+        let params = ParamsBuilder::new()
+            .features(Flags::Rma | Flags::Amo64)
+            .mt_workers_shared(1)
+            .estimated_num_eps(1)
+            .build();
+        let mut context =
+            Context::new(&Config::read("", "").expect("config"), &params).expect("context");
+        let worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("worker");
+        let address = worker.pack_address().expect("pack address");
+        let remote = RemoteWorkerAddress::new(address.to_vec());
+        let ep = worker
+            .create_ep(EpParamsBuilder::new().address(&remote).build())
+            .expect("endpoint");
+        drop(address);
+
+        let mut target = 0u64;
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut target as *mut u64 as *mut u8,
+                std::mem::size_of::<u64>(),
+            )
+        };
+        let memh = MemHandle::map_slice(&context, bytes, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let remote_addr = &target as *const u64 as u64;
+
+        // A second worker on the same context is not the endpoint's worker.
+        let wrong_worker = context
+            .worker_create(&WorkerParamsBuilder::new().build())
+            .expect("second worker");
+        // Must panic before reaching ucp_atomic_post.
+        let _ = ep.amo_add64_post(&wrong_worker, 1, remote_addr, &rkey);
+    }
 }

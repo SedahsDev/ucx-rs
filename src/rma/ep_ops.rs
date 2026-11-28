@@ -948,4 +948,209 @@ mod tests {
         );
         close(&worker, ep);
     }
+
+    /// Fire-and-forget AMO harness: run `count` posts (the closure decides
+    /// what iteration `i` posts), flush once, then verify the target. This is
+    /// the `ucp_atomic_post` semantic under test: many posts, no per-operation
+    /// completion, one flush makes them all remotely visible.
+    fn run_amo_post_test<T>(
+        initial: T,
+        expected: T,
+        count: usize,
+        what: &str,
+        post: impl Fn(&Ep, &Worker, u64, &RemoteKey, usize) -> Result<(), crate::Status>,
+    ) where
+        T: Copy + PartialEq + std::fmt::Debug,
+    {
+        if std::env::var("UCX_TLS").as_deref() != Ok("self") {
+            eprintln!("skipping {what}: run with UCX_TLS=self");
+            return;
+        }
+        let mut target = initial;
+        let (context, worker, ep) = setup_amo_test();
+        // The caller owns the aligned target until after the mapping is dropped.
+        let remote_addr = &mut target as *mut T as u64;
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut target as *mut T as *mut u8,
+                std::mem::size_of::<T>(),
+            )
+        };
+        let memh = MemHandle::map_slice(&context, bytes, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().build();
+
+        for i in 0..count {
+            post(&ep, &worker, remote_addr, &rkey, i)
+                .unwrap_or_else(|status| panic!("post {what}[{i}]: {status} ({})", transport()));
+        }
+        // The posts track no completion; a single flush lands and orders them.
+        let flush = ep
+            .flush(&worker, &param)
+            .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
+        wait(&worker, flush, "endpoint flush");
+
+        let result = unsafe { *(remote_addr as *const T) };
+        assert_eq!(result, expected, "{what} result mismatch ({})", transport());
+
+        drop(rkey);
+        drop(memh);
+        close(&worker, ep);
+    }
+
+    #[test]
+    fn amo_post_add64_pipelines_to_one_flush() {
+        run_amo_post_test(
+            0u64,
+            500u64,
+            100,
+            "amo_add64_post",
+            |ep, worker, addr, rkey, _| ep.amo_add64_post(worker, 5, addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_add32_pipelines_to_one_flush() {
+        run_amo_post_test(
+            10u32,
+            160u32,
+            50,
+            "amo_add32_post",
+            |ep, worker, addr, rkey, _| ep.amo_add32_post(worker, 3, addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_xor64_pipelines_to_one_flush() {
+        run_amo_post_test(
+            0u64,
+            0x0F0F_0F0F_0F0F_0F0Fu64,
+            7,
+            "amo_xor64_post",
+            |ep, worker, addr, rkey, _| {
+                ep.amo_xor64_post(worker, 0x0F0F_0F0F_0F0F_0F0F, addr, rkey)
+            },
+        );
+    }
+
+    #[test]
+    fn amo_post_xor32_pipelines_to_one_flush() {
+        run_amo_post_test(
+            0u32,
+            0xAAAA_5555u32,
+            3,
+            "amo_xor32_post",
+            |ep, worker, addr, rkey, _| ep.amo_xor32_post(worker, 0xAAAA_5555, addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_and64_pipelines_to_one_flush() {
+        // AND of !(1 << i) over i in 0..64 clears every bit exactly once.
+        let expected = 0u64;
+        run_amo_post_test(
+            u64::MAX,
+            expected,
+            64,
+            "amo_and64_post",
+            |ep, worker, addr, rkey, i| ep.amo_and64_post(worker, !(1u64 << i), addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_or64_pipelines_to_one_flush() {
+        // OR of 1 << i over i in 0..64 sets every bit exactly once.
+        run_amo_post_test(
+            0u64,
+            u64::MAX,
+            64,
+            "amo_or64_post",
+            |ep, worker, addr, rkey, i| ep.amo_or64_post(worker, 1u64 << i, addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_and32_pipelines_to_one_flush() {
+        run_amo_post_test(
+            u32::MAX,
+            0u32,
+            32,
+            "amo_and32_post",
+            |ep, worker, addr, rkey, i| ep.amo_and32_post(worker, !(1u32 << i), addr, rkey),
+        );
+    }
+
+    #[test]
+    fn amo_post_or32_pipelines_to_one_flush() {
+        run_amo_post_test(
+            0u32,
+            u32::MAX,
+            32,
+            "amo_or32_post",
+            |ep, worker, addr, rkey, i| ep.amo_or32_post(worker, 1u32 << i, addr, rkey),
+        );
+    }
+
+    /// A post family mixed with the request family on the same target: the
+    /// posts must land no later than the flush that also completes the
+    /// request-based AMO.
+    #[test]
+    fn amo_post_and_request_amo_share_a_flush() {
+        if std::env::var("UCX_TLS").as_deref() != Ok("self") {
+            eprintln!("skipping mixed post/request AMO test: run with UCX_TLS=self");
+            return;
+        }
+        let mut target = 0u64;
+        let (context, worker, ep) = setup_amo_test();
+        let remote_addr = &mut target as *mut u64 as u64;
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(&mut target as *mut u64 as *mut u8, 8) };
+        let memh = MemHandle::map_slice(&context, bytes, 0).expect("map target");
+        let packed = RemoteKey::pack(&context, memh.mem_handle()).expect("pack rkey");
+        let rkey = RemoteKey::unpack(&ep, &packed).expect("unpack rkey");
+        let param = RequestParamBuilder::new().build();
+
+        // 10 fire-and-forget adds...
+        for _ in 0..10 {
+            ep.amo_add64_post(&worker, 1, remote_addr, &rkey)
+                .unwrap_or_else(|status| panic!("post amo_add64_post: {status} ({})", transport()));
+        }
+        // ...plus one request-based add, completed before the flush...
+        let request = ep
+            .amo_add64(&worker, 1000, remote_addr, &rkey, &param)
+            .unwrap_or_else(|status| panic!("post amo_add64: {status} ({})", transport()));
+        if let crate::Completion::Pending(mut request) = request {
+            let mut completed = false;
+            for _ in 0..1_000_000 {
+                worker.progress();
+                match request.try_complete() {
+                    Ok(result) => {
+                        result.unwrap_or_else(|status| {
+                            panic!("amo_add64: {status} ({})", transport())
+                        });
+                        completed = true;
+                        break;
+                    }
+                    Err(still) => request = still,
+                }
+            }
+            assert!(completed, "amo_add64 did not complete ({})", transport());
+        }
+        // ...and one flush lands the posts.
+        let flush = ep
+            .flush(&worker, &param)
+            .unwrap_or_else(|status| panic!("post endpoint flush: {status} ({})", transport()));
+        wait(&worker, flush, "endpoint flush");
+
+        assert_eq!(
+            unsafe { *(remote_addr as *const u64) },
+            1010,
+            "mixed post/request AMO result mismatch ({})",
+            transport()
+        );
+        drop(rkey);
+        drop(memh);
+        close(&worker, ep);
+    }
 }
